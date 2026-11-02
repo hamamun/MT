@@ -59,6 +59,9 @@ void MakeRect(string,int,int,int w,int h,color,color){boxW=w;boxH=h;}
 void MakeLabel(string name,int x,int y,string text,color,int size,bool){labels[name]={x,y,size,text};}
 void ObjectDelete(int,string name){labels.erase(name.substr(3));}
 void ChartRedraw(){}
+void P2Update(){}
+string P2Line(int i){return i==0 ? "M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT" : (i==1 ? "M15 | GT: UP | CT: UP | ST: UP | RG: STEADY | PT: ~3b | SC: +2/3 (50%L)" : "M30 | GT: DOWN | CT: DOWN | ST: DOWN | RG: CHOPPY | PT: 0b+ | SC: -3/3 (past est.)");}
+string IntegerToString(int i){return to_string(i);}
 '''
 functions='\n'.join(function(x) for x in ['Measure','ChartSupported','UpdatePanel'])
 main=r'''
@@ -67,15 +70,17 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(labels["state"].text=="OPEN","open header");
  check(labels["suffix"].text.find("2026.11.02")!=string::npos,"open clock");
  check(labels.find("detail")==labels.end(),"empty detail cleared");
+ check(labels["lane0"].text.find("M5 | GT") == 0 && labels["lane2"].text.find("M30 | GT") == 0,"three lanes shown");
+ for(int i=0;i<3;i++) { auto row=labels["lane"+to_string(i)]; check(row.x+int(row.text.size())*10 < 12+boxW,"lane fits width"); check(row.y+row.size+4 < 24+boxH,"lane fits height"); }
  g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open Mon 2026.11.02 12:00:00 server (in 2h 0m)";
  UpdatePanel();check(labels["state"].text=="close","closed header");
  check(labels["suffix"].text.find("Open at")!=string::npos,"closed opening");
- check(boxW>openW,"width grows for longer detail");check(boxH==openH,"reserved height preserved");
+ check(boxW>=openW,"width covers longer detail or lane");check(boxH>openH,"closed detail adds a row");
  check(labels["detail"].x+int(labels["detail"].text.size())*10 < 12+boxW,"detail fits");
  _Period=60;UpdatePanel();check(labels["detail"].text=="Incompatible chart. Switch to M5/M15/M30.","unsupported notice");
  check(labels["prefix"].text.find("H1")!=string::npos,"unsupported timeframe");
  check(labels["state"].text.empty() && labels["suffix"].text.empty(),"unsupported suppresses market fields");
- check(boxH<openH,"unsupported notice height shrinks");
+ check(boxH<openH,"unsupported notice height shrinks"); check(labels.find("lane0")==labels.end() && labels.find("lane2")==labels.end(),"unsupported removes lanes");
  _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();
  check(labels.find("detail")==labels.end(),"notice removed after supported chart");
  check(boxW==openW && boxH==openH,"panel resizes back");
