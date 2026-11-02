@@ -115,6 +115,11 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  vector<int> incomplete(1,0);
  for(int j=0;j<20;j++){incomplete.push_back(3);incomplete.push_back(P2_WAIT);incomplete.push_back(0);} incomplete.push_back(3);
  check(!P2Remaining(incomplete,0,(int)incomplete.size()-1,age,rem),"runs ending in WAIT are not completed");
+ vector<int> medianRuns(1,0);
+ for(int j=0;j<20;j++){for(int k=0;k<(j<10?2:6);k++)medianRuns.push_back(3);medianRuns.push_back(0);} medianRuns.push_back(3);
+ check(P2Remaining(medianRuns,0,(int)medianRuns.size()-1,age,rem) && rem==3,"even sample median averages middle values");
+ medianRuns.pop_back();for(int k=0;k<6;k++)medianRuns.push_back(3);medianRuns.push_back(0);medianRuns.push_back(3);
+ check(P2Remaining(medianRuns,0,(int)medianRuns.size()-1,age,rem) && rem==5,"odd sample median takes middle value");
  mt19937 random(98173);vector<int> randomLabels(6000);
  for(int &v:randomLabels){unsigned x=random()%8;v=x==7?P2_WAIT:(int)(x%3)-1;}
  for(int end=100;end<(int)randomLabels.size();end+=13){int aa=0,rr=0,ab=0,rb=0;

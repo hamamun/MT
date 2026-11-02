@@ -85,9 +85,9 @@ Timeframe priorities for future use: M5 gives current trend priority, M15 gives 
 
 Use standard internal defaults without user inputs, adapting to the symbol's own recent movement where the chosen mechanisms support it. A future diary may record observations and inform bounded automatic configuration; it is not required for Phase 2 trend readings and must not be treated as already validated or implemented.
 
-### Compact display layout (agreed)
+### Compact display layout (final)
 
-Each timeframe row uses **GT** = Global Trend, **CT** = Current Trend, **ST** = Status, **RG** = Regime, **PT** = Prediction Trend and **SC** = Score. ST remains the combined trend status. RG will use SimpleEA's regime mechanism. Show `WAIT` for RG when its required history is unavailable or invalid, and `--` for PT when its estimate is unavailable; do not invent a reading.
+Each timeframe row uses **GT** = Global Trend, **CT** = Current Trend, **ST** = Status, **RG** = Regime, **PT** = Prediction Trend and **SC** = Score. ST remains the combined trend status. RG uses SimpleEA's regime mechanism. Show `WAIT` for RG when its required history is unavailable or invalid, and `--` for PT when its estimate is unavailable; do not invent a reading.
 
 Illustrative layout, not validated output:
 
@@ -142,4 +142,6 @@ The countdown is an estimate, not a guaranteed deadline or prediction of the nex
 
 Retain dynamic panel sizing and the Phase 1 market-state details; the final layout must accommodate closed or abnormal states without hiding their information.
 
-**Phase 2 status: Implemented; MT5 compilation and runtime validation pending.** Trend detection, compact layout, ST rules, per-timeframe SimpleEA RG, SimpleEA SC, PT and the separate score-life percentage and reset rules are agreed. MT must request required history; insufficient or invalid readings are WAIT, unavailable duration estimates are `--`, and no fallback regime is permitted. Phase 2 is informational and does not authorize trading. Automated source-level regression tests have been run, but they do not replace MetaEditor compilation or MT5 testing.
+**Phase 2 status: Complete.** Trend detection, compact layout, ST rules, per-timeframe SimpleEA RG, SimpleEA SC, PT and the separate score-life percentage and reset rules are implemented. MT requests required history; insufficient or invalid readings are WAIT, unavailable duration estimates are `--`, and no fallback regime is permitted. Phase 2 is informational and does not authorize trading.
+
+**Verification note:** Automated source-level regression tests passed. The user reported a MetaEditor build with zero errors and one warning; the warning has been addressed in the source, but a subsequent MetaEditor compilation has not been confirmed. Live MT5/broker runtime validation has not been confirmed. Completion does not imply that the duration estimates or trading outcomes are validated.

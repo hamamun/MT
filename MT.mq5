@@ -1043,7 +1043,7 @@ bool P2Remaining(const int &labels[], int first, int last, int &age, int &remain
    if(count < P2_MIN_RUNS) return(false);
    ArrayResize(samples, count);
    ArraySort(samples);
-   remaining = (count % 2) ? samples[count / 2]
+   remaining = (count % 2 != 0) ? samples[count / 2]
                : (int)MathRound((samples[count / 2 - 1] + samples[count / 2]) / 2.0);
    return(true);
 }
