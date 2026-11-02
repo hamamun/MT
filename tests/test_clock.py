@@ -59,14 +59,14 @@ int main(){
  tradeMode=1; g_hasSessions=false; tickAvailable=false; UpdateState(now);
  check(g_marketState==MARKET_UNKNOWN && g_marketDetail.find("Open at --")!=string::npos,"no table and quote");
  tickAvailable=true; quoteTime=now-10; UpdateState(now);
- check(g_marketState==MARKET_OPEN && g_marketDetail.find("no session table")!=string::npos,"no table fresh quote");
+ check(g_marketState==MARKET_OPEN && g_marketDetail.empty(),"no table fresh quote leaves row 2 empty");
  g_hasSessions=true; g_sessionCount[1]=1; g_sessions[1][0]={12*3600,18*3600};
  UpdateState(now); check(g_marketState==MARKET_CLOSED && g_nextOpen==now+2*3600,"closed next opening");
  check(g_marketDetail.find("MARKET CLOSED - next open Mon")!=string::npos,"closed detail");
  g_sessions[1][0]={0,18*3600}; quoteTime=now-1801; UpdateState(now);
  check(g_marketState==MARKET_STALE,"stale during session");
  quoteTime=now+5; UpdateState(now); check(g_marketState==MARKET_STALE,"future quote not fresh");
- quoteTime=now-5; UpdateState(now); check(g_marketState==MARKET_OPEN,"open fresh quote");
+ quoteTime=now-5; UpdateState(now); check(g_marketState==MARKET_OPEN && g_marketDetail.empty(),"open fresh quote clears prior status detail");
  if(failures)return 1;
  cout<<"Broker clock and market-state regression checks passed.\n";
 }

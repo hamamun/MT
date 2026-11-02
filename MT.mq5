@@ -490,9 +490,8 @@ void UpdateState(datetime now)
                                          (int)(age / 60));
       return;
    }
+   // Row 2 is reserved for future content during normal market hours.
    g_marketState = MARKET_OPEN;
-   if(!g_hasSessions) g_marketDetail = "no session table published - quote is live; server clock estimated between quotes";
-   else g_marketDetail = "server clock estimated between broker quotes";
 }
 
 // TextGetSize uses the same logical point size as chart labels. The
