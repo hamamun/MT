@@ -1,16 +1,16 @@
 //+------------------------------------------------------------------+
 //| MT.mq5 - Master Trade                                            |
 //|                                                                  |
-//| Phase 1: appearance.                                             |
+//| Phase 2: informational trend and score panel.                    |
 //|                                                                  |
-//| A single-line market-state panel drawn with chart objects.       |
+//| A market-state and timeframe panel drawn with chart objects.     |
 //| The panel shows the chart symbol, its broker-published type,     |
 //| whether the market is open, and either the server clock (open)   |
 //| or the next opening time from the broker's session table         |
 //| (closed).                                                        |
 //|                                                                  |
-//| The panel measures the visible lines and reserves four rows on   |
-//| supported charts. Unsupported charts show a two-line notice.     |
+//| The panel measures its header, three timeframe lanes and any     |
+//| market detail. Unsupported charts show a two-line notice.        |
 //|                                                                  |
 //| Appearance follows SimpleEA/SimpleAdvisor.mq5: Consolas 10 pt,   |
 //| background C'48,48,48', title 11 pt in clrWhite.                  |
@@ -19,7 +19,7 @@
 //+------------------------------------------------------------------+
 #property copyright "MT"
 #property version   "1.00"
-#property description "MT - Master Trade. Phase 1: market state panel."
+#property description "MT - Master Trade. Informational trend and score panel."
 
 //---
 //  Prefix for every object this EA creates. Keeping it in one place
@@ -74,6 +74,35 @@ enum MARKET_STATE { MARKET_OPEN, MARKET_CLOSED, MARKET_STALE,
                     MARKET_UNKNOWN, MARKET_OFFLINE, MARKET_UNAVAILABLE };
 MARKET_STATE g_marketState = MARKET_UNKNOWN;
 string g_marketDetail = "";
+
+
+// Phase 2: three independent closed-bar lanes; no trading functions.
+#define P2_WARMUP 700
+#define P2_START_HISTORY 12000
+#define P2_MIN_RUNS 20
+#define P2_WAIT 99
+struct P2Countdown
+{
+   bool loaded;
+   bool valid;
+   int label;
+   int age;
+   int remaining;
+   datetime anchor;
+};
+struct P2Lane
+{
+   string line;
+   datetime lastBar;
+   datetime attemptedBar;
+   ulong lastAttempt;
+   int requested;
+   int lastGoodRequest;
+   bool retry;
+   P2Countdown pt;
+   P2Countdown score;
+};
+P2Lane g_p2[3];
 
 //+------------------------------------------------------------------+
 //| Expert initialization: build the panel and start the 1 s timer.  |
@@ -140,6 +169,7 @@ void Rebuild()
 
    g_symbol = _Symbol;
    g_type   = ClassifySymbol(g_symbol);
+   P2Reset();
 
    ScanSessions();
    BuildPanel();
@@ -528,6 +558,7 @@ void UpdatePanel()
    datetime now = ServerNow();
    UpdateState(now);
    bool supported = ChartSupported();
+   if(supported) P2Update();
    string state = "";
    string last = "";
    color stateColor = clrWhite;
@@ -565,9 +596,18 @@ void UpdatePanel()
    int headerW = titleW + prefixW + stateW + suffixW;
    int width = (int)MathMax(headerW, detail == "" ? 0 : detailW) + 2 * pad + 4;
    int rowH = (int)MathMax(headerH, detailH) + 6;
-   // Keep the three future rows on supported charts; the SimpleEA-style
-   // incompatible notice collapses to a header and one notice line.
-   int height = 2 * pad + (supported ? 4 : 2) * rowH;
+   if(supported)
+   {
+      for(int i = 0; i < 3; i++)
+      {
+         int rw, rh;
+         Measure(P2Line(i), PANEL_FONT_SIZE, rw, rh);
+         width = (int)MathMax(width, rw + 2 * pad + 4);
+         rowH = (int)MathMax(rowH, rh + 6);
+      }
+   }
+   // Detail is an extra row only when needed; all three lanes remain visible.
+   int height = 2 * pad + (supported ? (4 + (detail != "" ? 1 : 0)) : 2) * rowH;
 
    MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
    int x = PANEL_X + pad;
@@ -585,6 +625,15 @@ void UpdatePanel()
                 supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, false);
    else
       ObjectDelete(0, OBJ_PREFIX + "detail");
+   for(int i = 0; i < 3; i++)
+   {
+      string name = "lane" + IntegerToString(i);
+      if(supported)
+         MakeLabel(name, PANEL_X + pad, y + rowH * (1 + (detail != "" ? 1 : 0) + i),
+                   P2Line(i), clrSilver, PANEL_FONT_SIZE, false);
+      else
+         ObjectDelete(0, OBJ_PREFIX + name);
+   }
    ChartRedraw();
 }
 
@@ -747,3 +796,587 @@ string ClassifySymbol(const string &symbol)
    return("Other");
 }
 //+------------------------------------------------------------------+
+
+
+// Phase 2 numerical kernels adapted from SimpleEA commit 3e909f7384c179d5241228f40f40e09ab6ebf4ba.
+// Automate normalized regression trend follows commit 4810fcd72098f8cd312880f178f33aa04dac673d.
+void P2HighPass3(const double &price[], int period, double &hp[])
+{
+   int n = ArraySize(price);
+   if(ArrayResize(hp, n) != n) return;
+   ArrayInitialize(hp, 0.0);
+   if(n < 3 || period < 2) return;
+
+   double f  = 1.414 * M_PI / (double)period;
+   double a1 = MathExp(-f);
+   double c2 = 2.0 * a1 * MathCos(f);
+   double c3 = -a1 * a1;
+   double c1 = (1.0 + c2 - c3) / 4.0;
+
+   for(int i = 2; i < n; i++)
+      hp[i] = c1 * (price[i] - 2.0 * price[i - 1] + price[i - 2])
+            + c2 * hp[i - 1]
+            + c3 * hp[i - 2];
+}
+
+int P2ObservationCycleAt(const double &hp[], int last)
+{
+   if(last + 1 < 40) return(24);
+   int first = (int)MathMax(2, last + 1 - 120);
+   int cross[];
+   int n = 0;
+   for(int k = first + 1; k <= last; k++)
+   {
+      if((hp[k - 1] <= 0.0 && hp[k] > 0.0) ||
+         (hp[k - 1] >= 0.0 && hp[k] < 0.0))
+      {
+         ArrayResize(cross, n + 1);
+         cross[n++] = k;
+      }
+   }
+   if(n < 3) return(24);
+   int diffs[];
+   ArrayResize(diffs, n - 1);
+   for(int j = 0; j < n - 1; j++) diffs[j] = cross[j + 1] - cross[j];
+   ArraySort(diffs);
+   return((int)MathMax(14, MathMin(36, diffs[(n - 1) / 2] * 2)));
+}
+
+int P2StructureVote(const double &close[], const double &high[], const double &low[], int i, int period, double atr)
+{
+   if(period < 1 || i < period) return(0);
+
+   double move = close[i] - close[i - period];
+   double dead = (atr > 0.0) ? 0.25 * atr : 0.0;
+
+   if(MathAbs(move) <= dead) return(0);
+
+   int start = MathMax(1, i - period + 1);
+   double lastSwLow = 0.0, prevSwLow = 0.0;
+   double lastSwHigh = 0.0, prevSwHigh = 0.0;
+   int numSwLows = 0, numSwHighs = 0;
+
+   for(int k = start; k < i; k++)
+   {
+      if(high[k] >= high[k - 1] && high[k] >= high[k + 1])
+      {
+         prevSwHigh = lastSwHigh;
+         lastSwHigh = high[k];
+         numSwHighs++;
+      }
+      if(low[k] <= low[k - 1] && low[k] <= low[k + 1])
+      {
+         prevSwLow = lastSwLow;
+         lastSwLow = low[k];
+         numSwLows++;
+      }
+   }
+
+   if(move > dead)
+   {
+      if(numSwLows >= 2 && lastSwLow < prevSwLow)
+         return(0); // Lower low invalidates bullish structure
+      return(1);
+   }
+   else if(move < -dead)
+   {
+      if(numSwHighs >= 2 && lastSwHigh > prevSwHigh)
+         return(0); // Higher high invalidates bearish structure
+      return(-1);
+   }
+
+   return(0);
+}
+
+double P2Hurst(const double &close[], int i, int window)
+{
+   //  The guard used to be "i + 1 < window", which let i == window - 1
+   //  through.  That makes start == 0, and the innermost read
+   //  p0 = close[start - 1] then reaches close[-1].  With the shipped
+   //  numbers (i = last bar of a 700+ pull, window = 256) start is far
+   //  from 0 so it never fired, but raising HURST_* or shrinking the
+   //  pull turns this into an out-of-bounds read.  Requiring i >= window
+   //  keeps start >= 1, so the smallest index ever touched is 0.
+   if(i < window || window < 32) return(EMPTY_VALUE);
+
+   int    scales[5] = {1, 2, 4, 8, 16};
+   double lx[5], ly[5];
+   int    m = 0;
+   int    start = i - window + 1;
+
+   for(int s = 0; s < 5; s++)
+   {
+      int scale = scales[s];
+      int k     = window / scale;          // non-overlapping blocks
+      if(k < 4) continue;
+
+      double sums[];
+      if(ArrayResize(sums, k) != k) return(EMPTY_VALUE);
+
+      for(int b = 0; b < k; b++)
+      {
+         double sum = 0.0;
+         for(int j = 0; j < scale; j++)
+         {
+            int    idx = start + b * scale + j;
+            double p1  = close[idx];
+            double p0  = close[idx - 1];
+            if(p0 <= 0.0 || p1 <= 0.0) return(EMPTY_VALUE);
+            sum += MathLog(p1 / p0);
+         }
+         sums[b] = sum;
+      }
+
+      double mean = 0.0;
+      for(int b = 0; b < k; b++) mean += sums[b];
+      mean /= (double)k;
+
+      double var = 0.0;
+      for(int b = 0; b < k; b++) var += (sums[b] - mean) * (sums[b] - mean);
+      var /= (double)(k - 1);
+
+      double sd = MathSqrt(var);
+      if(sd <= 0.0) continue;
+
+      lx[m] = MathLog((double)scale);
+      ly[m] = MathLog(sd);
+      m++;
+   }
+
+   if(m < 3) return(EMPTY_VALUE);
+
+   double mx = 0.0, my = 0.0;
+   for(int j = 0; j < m; j++) { mx += lx[j]; my += ly[j]; }
+   mx /= (double)m;
+   my /= (double)m;
+
+   double sxy = 0.0, sxx = 0.0;
+   for(int j = 0; j < m; j++)
+   {
+      sxy += (lx[j] - mx) * (ly[j] - my);
+      sxx += (lx[j] - mx) * (lx[j] - mx);
+   }
+   if(sxx <= 0.0) return(EMPTY_VALUE);
+
+   return(sxy / sxx);
+}
+
+// Same zero-crossing median as SimpleEA, updated incrementally for replay.
+// The 120-bar window has at most 120 crossings, so a small histogram avoids
+// allocating and sorting a new array for every historical bar.
+bool P2Cycles(const double &hp[], int &cycles[])
+{
+   int n = ArraySize(hp);
+   int crosses[];
+   int counts[121];
+   if(ArrayResize(crosses, n) != n) return(false);
+   ArrayInitialize(counts, 0);
+   int left = 0, right = 0;
+   for(int i = 0; i < n; i++)
+   {
+      if(i > 0 && ((hp[i-1] <= 0.0 && hp[i] > 0.0) || (hp[i-1] >= 0.0 && hp[i] < 0.0)))
+      {
+         if(right > left) counts[i - crosses[right-1]]++;
+         crosses[right++] = i;
+      }
+      int first = (int)MathMax(2, i + 1 - 120);
+      while(left < right && crosses[left] <= first)
+      {
+         if(left + 1 < right) counts[crosses[left+1] - crosses[left]]--;
+         left++;
+      }
+      cycles[i] = 24;
+      int diffs = right - left - 1;
+      if(i + 1 < 40 || diffs < 2) continue;
+      int target = diffs / 2, sum = 0;
+      for(int d = 1; d <= 120; d++)
+      {
+         sum += counts[d];
+         if(sum > target) { cycles[i] = (int)MathMax(14, MathMin(36, d * 2)); break; }
+      }
+   }
+   return(true);
+}
+
+int P2Status(int gt, int ct)
+{
+   if(gt == P2_WAIT || ct == P2_WAIT) return(P2_WAIT);
+   if(gt == ct) return(gt);
+   if(gt == 0 || ct == 0) return(3); // MIXED
+   return(2);                         // CONFLICT
+}
+
+string P2StateText(int state)
+{
+   if(state == 1) return("UP");
+   if(state == -1) return("DOWN");
+   if(state == 0) return("FLAT");
+   if(state == 2) return("CONFLICT");
+   if(state == 3) return("MIXED");
+   return("WAIT");
+}
+
+// The first observed segment is left-censored and must not count as a run.
+// The current segment is right-censored, and is excluded from samples.
+bool P2Remaining(const int &labels[], int first, int last, int &age, int &remaining)
+{
+   if(last <= first || labels[last] == P2_WAIT) return(false);
+   int current = labels[last];
+   int begin = last;
+   while(begin > first && labels[begin - 1] == current) begin--;
+   if(begin == first || labels[begin - 1] == P2_WAIT) return(false);
+   age = last - begin + 1;
+   int samples[];
+   if(ArrayResize(samples, last - first + 1) != last - first + 1) return(false);
+   int count = 0, start = first;
+   for(int i = first + 1; i <= begin; i++)
+   {
+      if(labels[i] == labels[start] && i < begin) continue;
+      int len = i - start;
+      if(start > first && labels[start] == current && labels[start - 1] != P2_WAIT &&
+         labels[i] != P2_WAIT && len >= age)
+      {
+         samples[count++] = len - age; // includes zero
+      }
+      start = i;
+   }
+   if(count < P2_MIN_RUNS) return(false);
+   ArrayResize(samples, count);
+   ArraySort(samples);
+   remaining = (count % 2) ? samples[count / 2]
+               : (int)MathRound((samples[count / 2 - 1] + samples[count / 2]) / 2.0);
+   return(true);
+}
+
+// Terminal globals preserve anchors across restarts. Include account/server/symbol;
+// verify every intervening closed bar before using a stored countdown.
+string P2Key(int lane, bool score, string field)
+{
+   string text = AccountInfoString(ACCOUNT_SERVER) + ":" + _Symbol;
+   uint hash = 2166136261;
+   for(int i = 0; i < StringLen(text); i++)
+      hash = (hash ^ (uint)StringGetCharacter(text, i)) * 16777619;
+   return(StringFormat("MT2.%I64d.%u.%d.%s.%s", AccountInfoInteger(ACCOUNT_LOGIN),
+                       hash, lane, score ? "S" : "P", field));
+}
+
+void P2Save(int lane, bool score, P2Countdown &c)
+{
+   // Publish the timestamp last; interrupted writes must not create a
+   // seemingly complete anchor containing a mixture of two states.
+   string stamp = P2Key(lane, score, "t");
+   GlobalVariableDel(stamp);
+   if(GlobalVariableSet(P2Key(lane, score, "v"), (double)c.label) == 0) return;
+   if(GlobalVariableSet(P2Key(lane, score, "a"), (double)c.age) == 0) return;
+   if(GlobalVariableSet(P2Key(lane, score, "r"), (double)c.remaining) == 0) return;
+   GlobalVariableSet(stamp, (double)c.anchor);
+}
+
+void P2Load(int lane, bool score, P2Countdown &c)
+{
+   if(c.loaded) return;
+   c.loaded = true;
+   string t = P2Key(lane, score, "t"), v = P2Key(lane, score, "v");
+   string a = P2Key(lane, score, "a"), r = P2Key(lane, score, "r");
+   if(!GlobalVariableCheck(t) || !GlobalVariableCheck(v) ||
+      !GlobalVariableCheck(a) || !GlobalVariableCheck(r)) return;
+   c.anchor = (datetime)GlobalVariableGet(t);
+   c.label = (int)GlobalVariableGet(v);
+   c.age = (int)GlobalVariableGet(a);
+   c.remaining = (int)GlobalVariableGet(r);
+   c.valid = (c.anchor > 0 && c.age > 0 && c.remaining >= 0);
+}
+
+void P2Forget(int lane, bool score, P2Countdown &c)
+{
+   c.valid = false;
+   GlobalVariableDel(P2Key(lane, score, "t"));
+   GlobalVariableDel(P2Key(lane, score, "v"));
+   GlobalVariableDel(P2Key(lane, score, "a"));
+   GlobalVariableDel(P2Key(lane, score, "r"));
+}
+
+string P2CountdownText(int lane, bool score, P2Countdown &c, const int &labels[],
+                       const MqlRates &rates[], int first, int last)
+{
+   P2Load(lane, score, c);
+   int anchorIndex = -1;
+   if(c.valid)
+   {
+      for(int i = first; i <= last; i++)
+         if(rates[i].time == c.anchor) { anchorIndex = i; break; }
+      if(anchorIndex >= 0)
+      {
+         int start = anchorIndex - c.age + 1;
+         if(start <= first || labels[start-1] == c.label || labels[start-1] == P2_WAIT)
+            anchorIndex = -1;
+         else
+            for(int i = start; i <= last; i++)
+               if(labels[i] != c.label) { anchorIndex = -1; break; }
+      }
+      if(anchorIndex < 0) P2Forget(lane, score, c);
+   }
+   if(!c.valid)
+   {
+      int age = 0, remaining = 0;
+      if(!P2Remaining(labels, first, last, age, remaining)) return(score ? "--%L" : "--");
+      c.valid = true;
+      c.label = labels[last];
+      c.age = age;
+      c.remaining = remaining;
+      c.anchor = rates[last].time;
+      anchorIndex = last;
+      P2Save(lane, score, c);
+   }
+   int left = c.remaining - (last - anchorIndex);
+   if(score)
+   {
+      if(left < 0) return("past est.");
+      if(left == 0) return("~0%L");
+      int percent = (int)MathRound(100.0 * left / (c.age + c.remaining));
+      if(percent == 0) return("<1%L");
+      return(IntegerToString(percent) + "%L");
+   }
+   if(left < 0) return("0b+");
+   return("~" + IntegerToString(left) + "b");
+}
+
+// Automate's 30-bar regression divided by median absolute change over 20.
+int P2Global(const double &close[], int i, double tick)
+{
+   if(i < 29) return(P2_WAIT);
+   double changes[20];
+   for(int j = 0; j < 20; j++) changes[j] = MathAbs(close[i - j] - close[i - j - 1]);
+   ArraySort(changes);
+   double med = (changes[9] + changes[10]) * 0.5;
+   if(med <= 0.0) med = tick; // Automate's zero-change safeguard
+   if(med <= 0.0 || !MathIsValidNumber(med)) return(P2_WAIT);
+   double mean = 0.0, num = 0.0, den = 0.0;
+   for(int j = 0; j < 30; j++) mean += close[i - 29 + j];
+   mean /= 30.0;
+   for(int j = 0; j < 30; j++)
+   {
+      double dx = j - 14.5;
+      num += dx * (close[i - 29 + j] - mean);
+      den += dx * dx;
+   }
+   double ratio = num / den / med;
+   if(!MathIsValidNumber(ratio)) return(P2_WAIT);
+   if(ratio > 0.20) return(1);
+   if(ratio < -0.20) return(-1);
+   return(0);
+}
+
+double P2ATR(const MqlRates &rates[], int i)
+{
+   double sum = 0.0;
+   for(int k = i - 13; k <= i; k++)
+   {
+      double tr = rates[k].high - rates[k].low;
+      tr = MathMax(tr, MathAbs(rates[k].high - rates[k-1].close));
+      tr = MathMax(tr, MathAbs(rates[k].low - rates[k-1].close));
+      sum += tr;
+   }
+   return(sum / 14.0);
+}
+
+// CopyRates counts shift 0 against the terminal's chart-bar limit. Keep
+// the closed-bar request within that limit, but do not impose a smaller
+// arbitrary cap when the user has configured deeper terminal history.
+int P2HistoryLimit()
+{
+   long bars = TerminalInfoInteger(TERMINAL_MAXBARS);
+   if(bars <= 1) return(1);
+   return((int)MathMin(2147483646.0, (double)(bars - 1)));
+}
+
+int P2NextHistoryRequest(int current, int limit)
+{
+   return((int)MathMin((double)limit, (double)current * 2.0));
+}
+
+void P2Reset()
+{
+   for(int i = 0; i < 3; i++)
+   {
+      g_p2[i].line = "";
+      g_p2[i].lastBar = 0;
+      g_p2[i].attemptedBar = 0;
+      g_p2[i].lastAttempt = 0;
+      g_p2[i].requested = (int)MathMin(P2_START_HISTORY, P2HistoryLimit());
+      g_p2[i].lastGoodRequest = 0;
+      g_p2[i].retry = true;
+      g_p2[i].pt.loaded = false; g_p2[i].pt.valid = false;
+      g_p2[i].score.loaded = false; g_p2[i].score.valid = false;
+   }
+}
+
+string P2Line(int lane)
+{
+   if(g_p2[lane].line != "") return(g_p2[lane].line);
+   string tf = lane == 0 ? "M5" : (lane == 1 ? "M15" : "M30");
+   return(tf + " | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT");
+}
+
+void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
+{
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int limit = P2HistoryLimit();
+   int baseline = (int)MathMin(P2_START_HISTORY, limit);
+   if(g_p2[lane].requested > limit) g_p2[lane].requested = limit;
+   if(g_p2[lane].requested < baseline) g_p2[lane].requested = baseline;
+   int n = CopyRates(_Symbol, tf, 1, g_p2[lane].requested, rates);
+   // If a deeper request is still downloading or fails, keep independently
+   // available readings by retrying a smaller previously available range.
+   // The deeper request remains pending; this never substitutes an RG value.
+   if(n < 2)
+   {
+      int smaller = g_p2[lane].lastGoodRequest;
+      if(smaller < 2) smaller = (int)MathMin(2048, g_p2[lane].requested);
+      if(smaller >= 2 && smaller < g_p2[lane].requested)
+         n = CopyRates(_Symbol, tf, 1, smaller, rates);
+   }
+   g_p2[lane].retry = true;
+   if(n < 2 || latest <= 0 || rates[n-1].time != latest)
+   {
+      g_p2[lane].line = "";
+      return;
+   }
+   g_p2[lane].lastGoodRequest = n;
+   // Invalid history is never interpreted as a real reading. Retain only the
+   // valid suffix so one corrupt old bar does not poison all recent history.
+   int firstValid = 0;
+   for(int i = 0; i < n; i++)
+   {
+      if(!MathIsValidNumber(rates[i].close) || !MathIsValidNumber(rates[i].high) ||
+         !MathIsValidNumber(rates[i].low) || rates[i].close == EMPTY_VALUE ||
+         rates[i].high == EMPTY_VALUE || rates[i].low == EMPTY_VALUE || rates[i].high < rates[i].low ||
+         rates[i].close < rates[i].low || rates[i].close > rates[i].high ||
+         rates[i].time <= 0 || (i > 0 && rates[i].time <= rates[i-1].time)) firstValid = i + 1;
+   }
+   if(firstValid > 0)
+   {
+      int size = n - firstValid;
+      if(size < 2) { g_p2[lane].line = ""; return; }
+      for(int i = 0; i < size; i++) rates[i] = rates[i + firstValid];
+      n = size;
+      ArrayResize(rates, n);
+   }
+   if(n <= P2_WARMUP + 1)
+   {
+      double partialClose[];
+      int partialGT[];
+      if(ArrayResize(partialClose, n) != n || ArrayResize(partialGT, n) != n)
+      { g_p2[lane].line = ""; return; }
+      for(int i = 0; i < n; i++) partialClose[i] = rates[i].close;
+      double tick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(tick <= 0.0) tick = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      for(int i = 0; i < n; i++) partialGT[i] = P2Global(partialClose, i, tick);
+      int window = lane == 0 ? 1536 : (lane == 1 ? 512 : 256);
+      string rg = "WAIT", ptext = "--";
+      if(n - 1 >= window)
+      {
+         double h = P2Hurst(partialClose, n - 1, window);
+         if(h != EMPTY_VALUE && MathIsValidNumber(h))
+            rg = h > 0.55 ? "STEADY" : (h < 0.45 ? "CHOPPY" : "MIXED");
+      }
+      if(lane == 2 && n > 30 && partialGT[n-1] != P2_WAIT)
+         ptext = P2CountdownText(lane, false, g_p2[lane].pt, partialGT, rates, 29, n-1);
+      string tfname = lane == 0 ? "M5" : (lane == 1 ? "M15" : "M30");
+      g_p2[lane].line = tfname + " | GT: " + P2StateText(partialGT[n-1]) +
+                        " | CT: WAIT | ST: WAIT | RG: " + rg + " | PT: " + ptext + " | SC: WAIT";
+      g_p2[lane].lastBar = latest;
+      return; // keep retrying for the remaining required history
+   }
+   double close[], high[], low[], hp40[], trends[], rocs[];
+   int cycles[], gt[], ct[], status[], score[], pt[];
+   if(ArrayResize(close,n)!=n || ArrayResize(high,n)!=n || ArrayResize(low,n)!=n ||
+      ArrayResize(cycles,n)!=n || ArrayResize(trends,n)!=n || ArrayResize(rocs,n)!=n ||
+      ArrayResize(gt,n)!=n || ArrayResize(ct,n)!=n || ArrayResize(status,n)!=n ||
+      ArrayResize(score,n)!=n || ArrayResize(pt,n)!=n)
+   { g_p2[lane].line = ""; return; }
+   for(int i = 0; i < n; i++) { close[i] = rates[i].close; high[i] = rates[i].high; low[i] = rates[i].low; }
+   P2HighPass3(close, 40, hp40);
+   if(ArraySize(hp40) != n || !P2Cycles(hp40, cycles))
+   { g_p2[lane].line = ""; return; }
+   // A separate pair of causal filters for each possible adaptive period.
+   for(int cycle = 14; cycle <= 36; cycle++)
+   {
+      int l1 = (int)MathRound(cycle * 6.25);
+      l1 = (int)MathMax(90, MathMin(225, l1));
+      double hp1[], hp2[];
+      P2HighPass3(close, l1, hp1);
+      P2HighPass3(close, cycle, hp2);
+      if(ArraySize(hp1) != n || ArraySize(hp2) != n)
+      { g_p2[lane].line = ""; return; }
+      for(int i = 1; i < n; i++)
+      {
+         if(cycles[i] != cycle) continue;
+         trends[i] = hp1[i] - hp2[i];
+         rocs[i] = cycle / 6.28 * (trends[i] - (hp1[i-1] - hp2[i-1]));
+      }
+   }
+   double tick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tick <= 0.0) tick = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   for(int i = 0; i < n; i++) gt[i] = P2Global(close, i, tick);
+   for(int i = P2_WARMUP; i < n; i++)
+   {
+      ct[i] = MathIsValidNumber(trends[i]) ?
+              (trends[i] > 0.0 ? 1 : (trends[i] < 0.0 ? -1 : 0)) : P2_WAIT;
+      status[i] = P2Status(gt[i], ct[i]);
+      double atr = P2ATR(rates, i);
+      score[i] = P2_WAIT;
+      if(ct[i] != P2_WAIT && MathIsValidNumber(atr) && MathIsValidNumber(rocs[i]))
+      {
+         int v2 = rocs[i] > 0.02 * atr ? 1 : (rocs[i] < -0.02 * atr ? -1 : 0);
+         score[i] = ct[i] + v2 + P2StructureVote(close, high, low, i, 20, atr);
+      }
+      pt[i] = lane == 0 ? ct[i] : (lane == 1 ? status[i] : gt[i]);
+   }
+   if(lane == 2)
+      for(int i = 29; i < P2_WARMUP; i++) pt[i] = gt[i];
+   int last = n - 1;
+   int window = lane == 0 ? 1536 : (lane == 1 ? 512 : 256);
+   string rg = "WAIT";
+   if(last >= window)
+   {
+      double h = P2Hurst(close, last, window);
+      if(h != EMPTY_VALUE && MathIsValidNumber(h))
+         rg = h > 0.55 ? "STEADY" : (h < 0.45 ? "CHOPPY" : "MIXED");
+   }
+   string ptext = pt[last] == P2_WAIT ? "--" : P2CountdownText(lane, false, g_p2[lane].pt, pt, rates, lane == 2 ? 29 : P2_WARMUP, last);
+   string stext = score[last] == P2_WAIT ? "--%L" : P2CountdownText(lane, true, g_p2[lane].score, score, rates, P2_WARMUP, last);
+   string tfname = lane == 0 ? "M5" : (lane == 1 ? "M15" : "M30");
+   string scoreText = "WAIT";
+   if(score[last] != P2_WAIT)
+      scoreText = (score[last] > 0 ? "+" : "") + IntegerToString(score[last]) + "/3 (" + stext + ")";
+   g_p2[lane].line = tfname + " | GT: " + P2StateText(gt[last]) + " | CT: " + P2StateText(ct[last]) +
+                     " | ST: " + P2StateText(status[last]) + " | RG: " + rg + " | PT: " + ptext +
+                     " | SC: " + scoreText;
+   g_p2[lane].lastBar = latest;
+   // Request deeper history if needed, up to the terminal's own limit.
+   // A partial download or failed larger request is retried on later events.
+   g_p2[lane].retry = (gt[last] == P2_WAIT || ct[last] == P2_WAIT ||
+                       rg == "WAIT" || ptext == "--" || stext == "--%L");
+   if(g_p2[lane].retry && n >= g_p2[lane].requested && g_p2[lane].requested < limit)
+      g_p2[lane].requested = P2NextHistoryRequest(g_p2[lane].requested, limit);
+}
+
+void P2Update()
+{
+   ENUM_TIMEFRAMES tfs[3] = {PERIOD_M5, PERIOD_M15, PERIOD_M30};
+   ulong now = GetTickCount64();
+   for(int i = 0; i < 3; i++)
+   {
+      datetime latest = iTime(_Symbol, tfs[i], 1);
+      bool newBar = latest != g_p2[i].lastBar;
+      if(!newBar && !g_p2[i].retry) continue;
+      ulong retryDelay = g_p2[i].lastBar == 0 ? 10000 :
+                         (g_p2[i].requested >= P2HistoryLimit() ? 60000 : 30000);
+      if(latest == g_p2[i].attemptedBar && now - g_p2[i].lastAttempt < retryDelay) continue;
+      g_p2[i].attemptedBar = latest;
+      g_p2[i].lastAttempt = now;
+      P2Evaluate(i, tfs[i], latest);
+   }
+}
