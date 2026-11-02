@@ -66,3 +66,5 @@ These corrections override the fixed-size and closed-state descriptions above:
 - Follow Automate's market-state information: show the next scheduled opening and time remaining when closed; distinguish unavailable, disconnected, stale, and unknown states. Do not invent a next opening without a session table.
 - On charts other than M5/M15/M30, show SimpleEA's `Incompatible chart. Switch to M5/M15/M30.` notice.
 - Use broker-stamped quote time for the chart's symbol when available and describe extrapolated time honestly; MT5 cannot guarantee a perfectly synchronized clock between ticks.
+
+**Phase 1 status: Done.** On an open market, row 2 remains empty for future items; clock guidance is not displayed there.
