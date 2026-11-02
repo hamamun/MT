@@ -98,12 +98,12 @@
     line-height: 1.5;
   }
 
-  /* The panel: 528 x 84 px at 10 pt / 96 DPI. */
+  /* The panel: 536 x 84 px at 10 pt / 96 DPI. */
   .panel {
     position: absolute;
     left: 12px;
     top: 24px;
-    width: 528px;
+    width: 536px;
     height: 84px;
     background: var(--panel);
     border: 1px solid var(--border);
@@ -118,33 +118,33 @@
     white-space: pre;
     font-family: Consolas, "Courier New", monospace;
     line-height: 13px;
-    font-size: 10px;
+    font-size: 10pt;
   }
 
   .title {
-    left: 0;
-    font-size: 11px;
+    left: 8px;
+    font-size: 11pt;
     line-height: 14px;
     color: var(--white);
   }
 
   .symbol {
-    left: 96px;
+    left: 104px;
     color: var(--white);
   }
 
   .type {
-    left: 176px;
+    left: 184px;
     color: var(--silver);
   }
 
   .state {
-    left: 240px;
+    left: 248px;
     color: var(--lime);
   }
 
   .last {
-    left: 296px;
+    left: 304px;
     color: var(--white);
   }
 
@@ -294,13 +294,17 @@
 
     <div class="panel" id="panel" role="img" aria-label="MT market-state panel">
       <div class="cell title" id="title">MT V1.00</div>
+      <div class="cell" style="left:80px;color:var(--silver)"> | </div>
       <div class="cell symbol" id="symbol">XAUUSDm</div>
+      <div class="cell" style="left:160px;color:var(--silver)"> | </div>
       <div class="cell type" id="type">Metal</div>
+      <div class="cell" id="sep3" style="left:224px;color:var(--silver)"> | </div>
       <div class="cell state" id="state">OPEN</div>
+      <div class="cell" id="sep4" style="left:280px;color:var(--silver)"> | </div>
       <div class="cell last" id="last">2026.11.01 11:57:34</div>
     </div>
 
-    <div class="chart-tag">Rows 2–4 reserved · box 528 × 84 px at 96 DPI</div>
+    <div class="chart-tag" id="chartTag">Rows 2–4 reserved · box 536 × 84 px at 96 DPI</div>
   </div>
 
   <div class="controls">
@@ -328,23 +332,23 @@
         <tr id="row-open" class="active">
           <td>Open</td>
           <td><code>MT V1.00 | XAUUSDm | Metal | OPEN | 2026.11.01 11:57:34</code></td>
-          <td class="num">56</td>
+          <td class="num">55</td>
           <td class="num">448 px</td>
-          <td class="num">528 px</td>
+          <td class="num">536 px</td>
         </tr>
         <tr id="row-closed">
           <td>Closed</td>
           <td><code>MT V1.00 | XAUUSDm | Metal | close | Open at 2026.11.01 11:57:34</code></td>
-          <td class="num">65</td>
+          <td class="num">64</td>
           <td class="num">520 px</td>
-          <td class="num">528 px</td>
+          <td class="num">536 px</td>
         </tr>
         <tr id="row-noTable">
           <td>No table</td>
           <td><code>MT V1.00 | BTCUSDm | Crypto | close | Open at --</code></td>
           <td class="num">48</td>
           <td class="num">392 px</td>
-          <td class="num">528 px</td>
+          <td class="num">544 px</td>
         </tr>
       </tbody>
     </table>
@@ -366,7 +370,7 @@
   </div>
 
   <footer>
-    At 10 pt on a 96 DPI display the monospaced advance is 8 px; the 11 pt title is 9 px. The box is the wider state (520 px) plus one trailing character (8 px) = 528 px. The open state leaves the extra space empty on the right; the closed state fills it.
+    At 10 pt on a 96 DPI display the monospaced advance is 8 px; the 11 pt title is 9 px. The box is the wider state (520 px) plus one character of padding on each side (16 px) = 536 px. The open state leaves the extra space empty on the right; the closed state fills it.
   </footer>
 </div>
 
@@ -428,10 +432,17 @@
     elState.style.color = isOpen ? "var(--lime)" : "var(--tomato)";
     elLast.textContent = lastText;
     elChartSymbol.innerHTML = symbol + " · M5<br>MT5 chart (mockup)";
+    document.getElementById("panel").style.width = (isNoTable ? 544 : 536) + "px";
+    document.getElementById("chartTag").textContent = "Rows 2–4 reserved · box " + (isNoTable ? 544 : 536) + " × 84 px at 96 DPI";
 
     // OPEN is 4 chars, close is 5. The last cell shifts by one 8 px
     // character at 10 pt; the box itself never resizes.
-    elLast.style.left = (isOpen ? 296 : 304) + "px";
+    var typeOffset = isNoTable ? 8 : 0;
+    elState.style.left = (248 + typeOffset) + "px";
+    document.getElementById("sep3").style.left = (224 + typeOffset) + "px";
+    var lastX = (isOpen ? 304 : 312) + typeOffset;
+    document.getElementById("sep4").style.left = (lastX - 24) + "px";
+    elLast.style.left = lastX + "px";
 
     if (isOpen) {
       elHint.textContent = "OPEN · server clock ticking every second";

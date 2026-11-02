@@ -72,7 +72,7 @@ The rest of the line uses `clrWhite` for the symbol and clock, `clrSilver` for t
 
 ### Size
 
-At 10 pt on a 96 DPI display, the open text is about 448 px and the closed text about 520 px. The box is sized to the wider state plus one trailing character, so it does not move when the market shuts. The height is fixed at four rows of `InpFontSize + 11` pixels (84 px at 10 pt).
+At 10 pt on a 96 DPI display, the open text is about 448 px and the closed text about 520 px. The box is sized to the wider state plus one character of padding on each side, so it does not move when the market shuts. The height is fixed at four rows of `InpFontSize + 11` pixels (84 px at 10 pt).
 
 The date and time are fixed-width (`yyyy.mm.dd hh:mm:ss`), so the seconds ticking do not shift anything. The state cell is not padded to a fixed width, so the last cell moves by one character (8 px at 10 pt) at the open/close transition; the box itself does not resize.
 
@@ -85,14 +85,14 @@ The date and time are fixed-width (`yyyy.mm.dd hh:mm:ss`), so the seconds tickin
 - A `00:00-00:00` session is treated as a full-day session, because some brokers use that pair for a 24-hour market. A zero-length session with any other equal pair is ignored.
 - If the broker publishes no table, the state is `close` and the last cell is `Open at --`. The EA does not invent an opening time.
 - The clock uses `TimeTradeServer()` and is refreshed by a one-second timer, so it keeps ticking when no ticks arrive. `OnTick` also refreshes it immediately.
-- The session table is cached and rescanned when the server day changes or the chart symbol changes.
+- The session table is cached and rescanned when the server day changes or the chart symbol changes; if no table is available it retries every minute.
 
 ## Symbol type
 
 The type is a best-effort label, not a trading gate. The classifier tries, in order:
 
 1. Broker metadata: `SYMBOL_SECTOR_NAME`, `SYMBOL_INDUSTRY_NAME`, `SYMBOL_CATEGORY`, `SYMBOL_PATH`, `SYMBOL_DESCRIPTION`.
-2. The symbol name, with common broker suffixes (`m`, `.raw`, `.ecn`, `.pro`, `.std`, `.cash`, `.spot`, `.f`, `.z`, `.j`) removed.
+2. The symbol name, with a lowercase `m` on six-character pairs or common dotted broker suffixes (`.raw`, `.ecn`, `.pro`, `.std`, `.cash`, `.spot`, `.f`, `.z`, `.j`) removed.
 3. The symbol calculation mode (`SYMBOL_TRADE_CALC_MODE`) as a fallback.
 
 Examples:
@@ -123,7 +123,7 @@ If the broker's metadata is sparse or misleading, the label can be wrong. It is 
 ## Behavior on chart changes
 
 - A symbol change rebuilds the panel for the new symbol, including the type and the session table.
-- A timeframe change does not rebuild the panel; the panel does not depend on the timeframe.
+- Changing the chart timeframe or symbol reinitializes the EA in MT5; the panel does not otherwise depend on timeframe.
 - `OnDeinit` removes the panel objects and stops the timer.
 
 ## Limitations
@@ -148,3 +148,7 @@ If the broker's metadata is sparse or misleading, the label can be wrong. It is 
 ## Visual mockup
 
 Open `preview.html` in a browser to see the panel in its open, closed, and no-table states. It is a static mockup for design review; it is not the EA and does not connect to MetaTrader.
+
+## Regression checks
+
+Run `python3 tests/test_logic.py` with Python 3 and `g++` installed. The test extracts the actual session/calendar and classification functions from `MT.mq5`, compiles them with C++ stubs, and exercises boundaries, overnight sessions, next openings, classifications, and header separators. It is not an MQL5 compiler or an MT5/broker integration test.

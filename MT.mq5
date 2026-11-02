@@ -61,7 +61,8 @@ struct SessionSlot
 //---
 SessionSlot g_sessions[7][MAX_SESSIONS];
 int         g_sessionCount[7];
-int         g_sessionsDay = -1;
+datetime    g_sessionsDay = 0;
+datetime    g_lastSessionScan = 0;
 bool        g_hasSessions = false;
 
 //---
@@ -89,7 +90,17 @@ bool     g_built     = false;
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   if(InpFontSize < 6 || InpFontSize > 72 || InpPanelX < 0 || InpPanelY < 0)
+   {
+      Print("MT: font size must be 6..72 and panel offsets must be non-negative.");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
    Rebuild();
+   if(!EventSetTimer(1))
+   {
+      Print("MT: could not start timer: ", GetLastError());
+      return(INIT_FAILED);
+   }
    return(INIT_SUCCEEDED);
 }
 
@@ -126,7 +137,7 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
-   if(id == CHARTEVENT_SYMBOL_CHANGED || id == CHARTEVENT_CHART_CHANGE)
+   if(id == CHARTEVENT_CHART_CHANGE)
    {
       if(_Symbol != g_symbol)
          Rebuild();
@@ -138,7 +149,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 //+------------------------------------------------------------------+
 void Rebuild()
 {
-   EventKillTimer();
    ObjectsDeleteAll(0, OBJ_PREFIX);
    g_built = false;
 
@@ -149,12 +159,11 @@ void Rebuild()
    UpdateState();
    BuildPanel();
 
-   EventSetTimer(1);
 }
 
 //+------------------------------------------------------------------+
-//| Current server time, with a local-clock fallback for a terminal  |
-//| that has not yet received a server time.                         |
+//| Current estimated server time, with last quote time as fallback |
+//| if the server clock has not yet been established.                         |
 //+------------------------------------------------------------------+
 datetime ServerNow()
 {
@@ -279,9 +288,9 @@ void ScanSessions()
       }
    }
 
-   MqlDateTime now;
-   TimeToStruct(ServerNow(), now);
-   g_sessionsDay = now.day_of_week;
+   datetime now = ServerNow();
+   g_sessionsDay = now - (now % 86400);
+   g_lastSessionScan = now;
 }
 
 //+------------------------------------------------------------------+
@@ -312,7 +321,7 @@ bool IsMarketOpen(datetime now)
       }
       else if(f > t)
       {
-         if(sec >= f || sec < t)
+         if(sec >= f)
             return(true);
       }
    }
@@ -422,10 +431,14 @@ datetime NextOpening(datetime now)
 void UpdateState()
 {
    datetime now = ServerNow();
-   MqlDateTime dt;
-   TimeToStruct(now, dt);
-
-   if(dt.day_of_week != g_sessionsDay)
+   if(now <= 0)
+   {
+      g_isOpen = false;
+      g_nextOpen = 0;
+      return;
+   }
+   datetime todayStart = now - (now % 86400);
+   if(todayStart != g_sessionsDay || (!g_hasSessions && now - g_lastSessionScan >= 60))
       ScanSessions();
 
    g_isOpen   = IsMarketOpen(now);
@@ -448,6 +461,7 @@ void BuildPanel()
    int cw      = CharW(InpFontSize);
    int titleCw = CharW(InpFontSize + 1);
    int sep     = 3 * cw;
+   int left    = x + cw;
 
    string clock      = FormatClock(ServerNow());
    string openRest   = " | " + g_symbol + " | " + g_type + " | OPEN | " + clock;
@@ -456,16 +470,16 @@ void BuildPanel()
    int openW   = StringLen(PANEL_TITLE) * titleCw + StringLen(openRest) * cw;
    int closedW = StringLen(PANEL_TITLE) * titleCw + StringLen(closedRest) * cw;
 
-   // One trailing character of breathing room on the right. The box is
+   // One character of padding on each side. The box is
    // sized to the wider of the two states, so it does not move when the
    // market closes.
-   g_panelW = (int)MathMax(openW, closedW) + cw;
+   g_panelW = (int)MathMax(openW, closedW) + 2 * cw;
    g_panelH = 4 * rowH;
 
    MakeRect("bg", x, y, g_panelW, g_panelH, InpBgColor, clrDimGray);
 
    g_titleW  = StringLen(PANEL_TITLE) * titleCw;
-   g_symbolX = x + g_titleW + sep;
+   g_symbolX = left + g_titleW + sep;
    g_typeX   = g_symbolX + StringLen(g_symbol) * cw + sep;
    g_stateX  = g_typeX + StringLen(g_type) * cw + sep;
 
@@ -477,11 +491,15 @@ void BuildPanel()
                      : (g_nextOpen > 0 ? "Open at " + FormatClock(g_nextOpen)
                                        : "Open at --");
 
-   MakeLabel("title",  x,         textY, PANEL_TITLE, InpTitleColor, InpFontSize + 1, false);
+   MakeLabel("title",  left,      textY, PANEL_TITLE, InpTitleColor, InpFontSize + 1, false);
+   MakeLabel("sep1", left + g_titleW, textY, " | ", clrSilver, InpFontSize, false);
    MakeLabel("symbol", g_symbolX, textY, g_symbol,    clrWhite,       InpFontSize,     false);
+   MakeLabel("sep2", g_symbolX + StringLen(g_symbol) * cw, textY, " | ", clrSilver, InpFontSize, false);
    MakeLabel("type",   g_typeX,   textY, g_type,      clrSilver,      InpFontSize,     false);
+   MakeLabel("sep3", g_typeX + StringLen(g_type) * cw, textY, " | ", clrSilver, InpFontSize, false);
    MakeLabel("state",  g_stateX,  textY, stateText,   g_isOpen ? clrLime : clrTomato,
                                                        InpFontSize,     false);
+   MakeLabel("sep4", g_lastX - sep, textY, " | ", clrSilver, InpFontSize, false);
    MakeLabel("last",   g_lastX,   textY, lastText,    clrWhite,       InpFontSize,     false);
 
    g_lastState = g_isOpen ? 1 : 0;
@@ -522,6 +540,7 @@ void UpdatePanel()
       int sep = 3 * cw;
       g_lastX = g_stateX + StringLen(stateText) * cw + sep;
       ObjectSetInteger(0, OBJ_PREFIX + "last", OBJPROP_XDISTANCE, g_lastX);
+      ObjectSetInteger(0, OBJ_PREFIX + "sep4", OBJPROP_XDISTANCE, g_lastX - sep);
 
       g_lastState = g_isOpen ? 1 : 0;
       changed = true;
@@ -585,25 +604,17 @@ string NormalizeSymbol(const string &symbol)
 {
    string s = Upper(symbol);
    string suffixes[] = {".CASH", ".SPOT", ".RAW", ".ECN", ".PRO", ".STD",
-                        ".M", ".F", ".Z", ".J",
-                        "CASH", "SPOT", "RAW", "ECN", "PRO", "STD",
-                        "M", "F", "Z", "J"};
-   bool changed = true;
-   while(changed)
+                        ".M", ".F", ".Z", ".J"};
+   for(int i = 0; i < ArraySize(suffixes); i++)
    {
-      changed = false;
-      for(int i = 0; i < ArraySize(suffixes); i++)
-      {
-         int sl = StringLen(suffixes[i]);
-         if(StringLen(s) > sl &&
-            StringFind(s, suffixes[i]) == StringLen(s) - sl)
-         {
-            s = StringSubstr(s, 0, StringLen(s) - sl);
-            changed = true;
-            break;
-         }
-      }
+      int sl = StringLen(suffixes[i]);
+      if(StringLen(s) > sl && StringSubstr(s, StringLen(s) - sl) == suffixes[i])
+         return(StringSubstr(s, 0, StringLen(s) - sl));
    }
+   // Preserve ordinary tickers ending in M/F/Z/J; only strip the common
+   // lowercase m suffix from a six-character instrument pair.
+   if(StringLen(symbol) == 7 && StringSubstr(symbol, 6, 1) == "m")
+      return(StringSubstr(s, 0, 6));
    return(s);
 }
 
@@ -638,15 +649,19 @@ string ClassifySymbol(const string &symbol)
                               "CRV", "SUSHI", "1INCH", "ENJ", "MANA", "SAND",
                               "GALA", "THETA", "FTM", "HBAR", "ICP", "ETC",
                               "USDT", "USDC", "DAI", "BUSD", "TUSD", "FDUSD"};
-   if(InList(meta, cryptoKeywords) || StartsWithAny(sym, cryptoPrefixes))
+   if(InList(meta, cryptoKeywords) || EqualsAny(sym, cryptoPrefixes) ||
+      (StartsWithAny(sym, cryptoPrefixes) &&
+       (StringFind(sym, "USD") > 0 || StringFind(sym, "EUR") > 0 || StringFind(sym, "BTC") > 0)))
       return("Crypto");
 
    // Energy before metal: "Commodities" covers both, and the
    // description or industry separates them.
    string energyKeywords[] = {"ENERGY", "CRUDE", "BRENT", "NATURAL GAS", "OIL", "GAS"};
    string energyTokens[]   = {"OIL", "CRUDE", "BRENT", "WTI", "NATGAS", "NATURALGAS",
-                              "XTI", "XBR", "XNG", "NG", "CL", "HO", "RB"};
-   if(InList(meta, energyKeywords) || InList(sym, energyTokens))
+                              "XTI", "XBR", "XNG", "USOIL", "UKOIL", "NG", "CL", "HO", "RB"};
+   if(InList(meta, energyKeywords) || EqualsAny(sym, energyTokens) ||
+      (StartsWithAny(sym, energyTokens) && StringLen(sym) > 3 &&
+       (StringFind(sym, "USD") >= 0 || StringFind(sym, "EUR") >= 0)))
       return("Energy");
 
    string metalKeywords[] = {"PRECIOUS METAL", "METAL", "GOLD", "SILVER", "PLATINUM",
@@ -691,11 +706,9 @@ string ClassifySymbol(const string &symbol)
       calcMode == (int)SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE)
       return("Forex");
 
-   string base3  = StringSubstr(sym, 0, 3);
-   string quote3 = StringSubstr(sym, 3, 3);
    if(StringLen(sym) == 6 &&
-      InList(base3, fiatTokens) &&
-      InList(quote3, fiatTokens))
+      EqualsAny(StringSubstr(sym, 0, 3), fiatTokens) &&
+      EqualsAny(StringSubstr(sym, 3, 3), fiatTokens))
       return("Forex");
    if(InList(meta, forexKeywords))
       return("Forex");
