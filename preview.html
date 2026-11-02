@@ -8,7 +8,7 @@ button {padding:8px; margin-right:8px} small {display:block;max-width:720px;line
 </style></head><body>
 <h1>MT panel mockup</h1><small>Illustrative values only; actual sizing and broker data are provided by MT5. PT and %L are estimates, not trade probabilities. The EA has no inputs.</small>
 <p><button data-mode="open">Open</button><button data-mode="closed">Closed</button><button data-mode="unknown">No table</button><button data-mode="unsupported">Unsupported timeframe</button></p>
-<div class="panel"><div class="row"><span class="title">MT V1.00</span><span id="prefix"></span><span id="state"></span><span id="suffix"></span></div><div class="row" id="detail" hidden></div><div class="row lane" id="m5"></div><div class="row lane" id="m15"></div><div class="row lane" id="m30"></div></div>
+<div class="panel"><div class="row"><span class="title">MT V1.00</span><span id="prefix"></span><span id="state"></span><span id="suffix"></span></div><div class="row" id="detail"></div><div class="row" id="header-reserved"></div><div class="row lane" id="m5"></div><div class="row lane" id="m15"></div><div class="row lane" id="m30"></div></div>
 <script>
 const samples = {
  open:{prefix:' | XAUUSDm | Metal | ', state:'OPEN', suffix:' | 2026.11.02 11:57:34', detail:''},
@@ -17,6 +17,6 @@ const samples = {
  unsupported:{prefix:' | XAUUSDm | H1', state:'', suffix:'', detail:'Incompatible chart. Switch to M5/M15/M30.'}
 };
 const lanes = {m5:'M5 | GT: UP | CT: DOWN | ST: CONFLICT | RG: CHOPPY | PT: -- | SC: -1/3 (--%L)',m15:'M15 | GT: UP | CT: UP | ST: UP | RG: STEADY | PT: ~3b | SC: +2/3 (50%L)',m30:'M30 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: 0b+ | SC: -3/3 (past est.)'};
-function render(mode) {const s=samples[mode];for(const k of ['prefix','state','suffix','detail']) document.getElementById(k).textContent=s[k];for(const k of Object.keys(lanes))document.getElementById(k).textContent=lanes[k];const detail=document.getElementById('detail');detail.hidden=!s.detail;document.getElementById('state').className=mode==='open'?'open':'closed';detail.className=mode==='unsupported'?'row notice':'row';document.querySelectorAll('.lane').forEach(e=>e.hidden=mode==='unsupported');}
+function render(mode) {const s=samples[mode];for(const k of ['prefix','state','suffix','detail']) document.getElementById(k).textContent=s[k];for(const k of Object.keys(lanes))document.getElementById(k).textContent=lanes[k];const detail=document.getElementById('detail');detail.hidden=false;document.getElementById('header-reserved').hidden=mode==='unsupported';document.getElementById('state').className=mode==='open'?'open':'closed';detail.className=mode==='unsupported'?'row notice':'row';document.querySelectorAll('.lane').forEach(e=>e.hidden=mode==='unsupported');}
 document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>render(b.dataset.mode)));render('open');
 </script></body></html>

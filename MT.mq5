@@ -35,6 +35,9 @@
 #define PANEL_FONT_SIZE 10
 #define PANEL_X 12
 #define PANEL_Y 24
+// Keep each chart label below the observed 63-character text limit.
+#define LABEL_CHUNK 48
+#define HEADER_ROWS 3
 #define PANEL_BG C'48,48,48'
 #define PANEL_TITLE_COLOR clrWhite
 #define STALE_SECONDS 1800
@@ -541,6 +544,53 @@ void Measure(const string text, const int size, int &width, int &height)
    width = StringLen(text) * height;
 }
 
+// Measure and draw using the same short segments. A single long OBJ_LABEL
+// can be truncated by MetaTrader even if the background is wide enough.
+void MeasureLine(const string text, const int size, int &width, int &height)
+{
+   width = 0;
+   height = 0;
+   int len = StringLen(text);
+   for(int offset = 0; offset < len; offset += LABEL_CHUNK)
+   {
+      string part = StringSubstr(text, offset, LABEL_CHUNK);
+      int w, h;
+      Measure(part, size, w, h);
+      width += w;
+      height = (int)MathMax(height, h);
+   }
+   if(height == 0)
+   {
+      int unused;
+      Measure(" ", size, unused, height);
+   }
+}
+
+// An empty string removes all prior segments. Removing surplus segments
+// also prevents stale characters after a long value becomes shorter.
+void MakeTextLine(string name, int x, int y, string text, color clr, int size)
+{
+   int len = StringLen(text);
+   int segment = 0;
+   for(int offset = 0; offset < len; offset += LABEL_CHUNK)
+   {
+      string part = StringSubstr(text, offset, LABEL_CHUNK);
+      string segmentName = name + "_" + IntegerToString(segment);
+      MakeLabel(segmentName, x, y, part, clr, size, false);
+      int w, h;
+      Measure(part, size, w, h);
+      x += w;
+      segment++;
+   }
+   while(true)
+   {
+      string full = OBJ_PREFIX + name + "_" + IntegerToString(segment);
+      if(ObjectFind(0, full) < 0) break;
+      ObjectDelete(0, full);
+      segment++;
+   }
+}
+
 bool ChartSupported()
 {
    return(_Period == PERIOD_M5 || _Period == PERIOD_M15 || _Period == PERIOD_M30);
@@ -586,11 +636,11 @@ void UpdatePanel()
    }
    string detail = supported ? g_marketDetail : "Incompatible chart. Switch to M5/M15/M30.";
    int titleW, titleH, prefixW, prefixH, stateW, stateH, suffixW, suffixH, detailW, detailH;
-   Measure(PANEL_TITLE, PANEL_FONT_SIZE + 1, titleW, titleH);
-   Measure(prefix, PANEL_FONT_SIZE, prefixW, prefixH);
-   Measure(state, PANEL_FONT_SIZE, stateW, stateH);
-   Measure(suffix, PANEL_FONT_SIZE, suffixW, suffixH);
-   Measure(detail == "" ? " " : detail, supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, detailW, detailH);
+   MeasureLine(PANEL_TITLE, PANEL_FONT_SIZE + 1, titleW, titleH);
+   MeasureLine(prefix, PANEL_FONT_SIZE, prefixW, prefixH);
+   MeasureLine(state, PANEL_FONT_SIZE, stateW, stateH);
+   MeasureLine(suffix, PANEL_FONT_SIZE, suffixW, suffixH);
+   MeasureLine(detail, supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, detailW, detailH);
    int pad = 10;
    int headerH = (int)MathMax(MathMax(titleH, prefixH), MathMax(stateH, suffixH));
    int headerW = titleW + prefixW + stateW + suffixW;
@@ -601,38 +651,33 @@ void UpdatePanel()
       for(int i = 0; i < 3; i++)
       {
          int rw, rh;
-         Measure(P2Line(i), PANEL_FONT_SIZE, rw, rh);
+         MeasureLine(P2Line(i), PANEL_FONT_SIZE, rw, rh);
          width = (int)MathMax(width, rw + 2 * pad + 4);
          rowH = (int)MathMax(rowH, rh + 6);
       }
    }
-   // Detail is an extra row only when needed; all three lanes remain visible.
-   int height = 2 * pad + (supported ? (4 + (detail != "" ? 1 : 0)) : 2) * rowH;
+   // Supported charts reserve three header rows, then the three lanes.
+   // On a closed or abnormal market row 2 carries the market detail.
+   int height = 2 * pad + (supported ? (HEADER_ROWS + 3) : 2) * rowH;
 
    MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
    int x = PANEL_X + pad;
    int y = PANEL_Y + pad;
-   MakeLabel("title", x, y, PANEL_TITLE, PANEL_TITLE_COLOR, PANEL_FONT_SIZE + 1, false);
+   MakeTextLine("title", x, y, PANEL_TITLE, PANEL_TITLE_COLOR, PANEL_FONT_SIZE + 1);
    x += titleW;
-   MakeLabel("prefix", x, y, prefix, clrSilver, PANEL_FONT_SIZE, false);
+   MakeTextLine("prefix", x, y, prefix, clrSilver, PANEL_FONT_SIZE);
    x += prefixW;
-   MakeLabel("state", x, y, state, stateColor, PANEL_FONT_SIZE, false);
+   MakeTextLine("state", x, y, state, stateColor, PANEL_FONT_SIZE);
    x += stateW;
-   MakeLabel("suffix", x, y, suffix, clrWhite, PANEL_FONT_SIZE, false);
-   if(detail != "")
-      MakeLabel("detail", PANEL_X + pad, y + rowH, detail,
+   MakeTextLine("suffix", x, y, suffix, clrWhite, PANEL_FONT_SIZE);
+   MakeTextLine("detail", PANEL_X + pad, y + rowH, detail,
                 supported ? clrSilver : clrTomato,
-                supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, false);
-   else
-      ObjectDelete(0, OBJ_PREFIX + "detail");
+                supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1);
    for(int i = 0; i < 3; i++)
    {
       string name = "lane" + IntegerToString(i);
-      if(supported)
-         MakeLabel(name, PANEL_X + pad, y + rowH * (1 + (detail != "" ? 1 : 0) + i),
-                   P2Line(i), clrSilver, PANEL_FONT_SIZE, false);
-      else
-         ObjectDelete(0, OBJ_PREFIX + name);
+      MakeTextLine(name, PANEL_X + pad, y + rowH * (HEADER_ROWS + i),
+                   supported ? P2Line(i) : "", clrSilver, PANEL_FONT_SIZE);
    }
    ChartRedraw();
 }
