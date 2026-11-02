@@ -6,7 +6,7 @@ import pathlib, re, subprocess, tempfile
 source = (pathlib.Path(__file__).resolve().parents[1] / 'MT.mq5').read_text()
 
 def function(name):
-    match = re.search(r'\b(?:bool|int|datetime|string)\s+' + name + r'\s*\([^)]*\)\s*\{', source)
+    match = re.search(r'\b(?:void|bool|int|datetime|string)\s+' + name + r'\s*\([^)]*\)\s*\{', source)
     if not match:
         raise RuntimeError('function not found: ' + name)
     depth = 1
@@ -92,11 +92,10 @@ int main() {
   check(ClassifySymbol("GM")=="Stock","stock ending M");
   check(ClassifySymbol("SOLAR")=="Other","crypto prefix collision");
   check(ClassifySymbol("SHOP")=="Other","energy substring collision");
-  check(source_separator_count_placeholder==4,"four separators");
   if(failures) return 1;
   cout << "Session, calendar, classifier and header regression checks passed.\n";
 }
-'''.replace('source_separator_count_placeholder', str(len(re.findall(r'MakeLabel\("sep[1-4]"', source))))
+'''
 with tempfile.TemporaryDirectory() as tmp:
     path = pathlib.Path(tmp)
     (path / 'test.cpp').write_text(prefix + funcs + main)

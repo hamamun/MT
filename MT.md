@@ -56,3 +56,13 @@ height is fixed at four rows so the panel never resizes as those rows come and g
  row 3   reserved
  row 4   reserved
 ```
+
+## Phase 1 corrections
+
+These corrections override the fixed-size and closed-state descriptions above:
+
+- No user inputs; retain the specified appearance internally.
+- Measure the displayed text and dynamically size the panel width and height. Reserve four rows on supported charts; use a two-line notice panel on unsupported charts.
+- Follow Automate's market-state information: show the next scheduled opening and time remaining when closed; distinguish unavailable, disconnected, stale, and unknown states. Do not invent a next opening without a session table.
+- On charts other than M5/M15/M30, show SimpleEA's `Incompatible chart. Switch to M5/M15/M30.` notice.
+- Use broker-stamped quote time for the chart's symbol when available and describe extrapolated time honestly; MT5 cannot guarantee a perfectly synchronized clock between ticks.
