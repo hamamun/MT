@@ -9,10 +9,8 @@
 //| or the next opening time from the broker's session table         |
 //| (closed).                                                        |
 //|                                                                  |
-//| The panel reserves four rows: row 1 is the header, rows 2-4 are   |
-//| reserved for later phases. The box is sized to the widest of the |
-//| open and closed states, so it never resizes when the market      |
-//| shuts.                                                           |
+//| The panel measures the visible lines and reserves four rows on   |
+//| supported charts. Unsupported charts show a two-line notice.     |
 //|                                                                  |
 //| Appearance follows SimpleEA/SimpleAdvisor.mq5: Consolas 10 pt,   |
 //| background C'48,48,48', title 11 pt in clrWhite.                  |
@@ -32,18 +30,15 @@
 #define PANEL_TITLE  "MT V1.00"
 #define MAX_SESSIONS 32
 
-//---
-//  Appearance. The three values from the specification are the
-//  defaults; they are inputs so the panel can be tuned without a
-//  source edit, but the shipped look is exactly the specified one.
-//---
-input group "=== Appearance ==="
-input string InpFont        = "Consolas";    // Font
-input int    InpFontSize    = 10;            // Font size (pt)
-input color  InpBgColor     = C'48,48,48';   // Background colour
-input color  InpTitleColor  = clrWhite;      // Title colour
-input int    InpPanelX      = 12;            // Panel X offset (px)
-input int    InpPanelY      = 24;            // Panel Y offset (px)
+// Fixed appearance: MT has no user inputs.
+#define PANEL_FONT "Consolas"
+#define PANEL_FONT_SIZE 10
+#define PANEL_X 12
+#define PANEL_Y 24
+#define PANEL_BG C'48,48,48'
+#define PANEL_TITLE_COLOR clrWhite
+#define STALE_SECONDS 1800
+#define SESSION_REFRESH_SECONDS 300
 
 //---
 //  One broker session. Times are seconds after server midnight; the
@@ -56,8 +51,8 @@ struct SessionSlot
 };
 
 //---
-//  The session table is scanned once per server day (and on a symbol
-//  change). 32 sessions per day is far above any real broker table.
+//  Refresh the weekly session table periodically and on date changes.
+//  The cap is 32 sessions per day.
 //---
 SessionSlot g_sessions[7][MAX_SESSIONS];
 int         g_sessionCount[7];
@@ -65,36 +60,26 @@ datetime    g_sessionsDay = 0;
 datetime    g_lastSessionScan = 0;
 bool        g_hasSessions = false;
 
-//---
-//  Panel geometry and last-drawn state. The geometry is computed from
-//  the actual strings, so a long symbol name widens the box instead of
-//  clipping the clock.
-//---
-int      g_panelW    = 0;
-int      g_panelH    = 0;
-int      g_titleW    = 0;
-int      g_symbolX   = 0;
-int      g_typeX     = 0;
-int      g_stateX    = 0;
-int      g_lastX     = 0;
-string   g_symbol    = "";
-string   g_type      = "";
-bool     g_isOpen    = false;
-datetime g_nextOpen  = 0;
-string   g_lastText  = "";
-int      g_lastState = -1;
-bool     g_built     = false;
+string g_symbol = "";
+string g_type = "";
+datetime g_nextOpen = 0;
+bool g_built = false;
+// TimeCurrent is broker-generated; elapsed monotonic time fills the gaps.
+datetime g_clockQuote = 0;
+datetime g_lastObservedQuote = 0;
+ulong g_clockMillis = 0;
+bool g_clockAnchored = false;
+
+enum MARKET_STATE { MARKET_OPEN, MARKET_CLOSED, MARKET_STALE,
+                    MARKET_UNKNOWN, MARKET_OFFLINE, MARKET_UNAVAILABLE };
+MARKET_STATE g_marketState = MARKET_UNKNOWN;
+string g_marketDetail = "";
 
 //+------------------------------------------------------------------+
 //| Expert initialization: build the panel and start the 1 s timer.  |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   if(InpFontSize < 6 || InpFontSize > 72 || InpPanelX < 0 || InpPanelY < 0)
-   {
-      Print("MT: font size must be 6..72 and panel offsets must be non-negative.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
    Rebuild();
    if(!EventSetTimer(1))
    {
@@ -120,6 +105,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   SyncClock(true);
    UpdatePanel();
 }
 
@@ -133,7 +119,7 @@ void OnTimer()
 
 //+------------------------------------------------------------------+
 //| A symbol change rebuilds the panel for the new chart symbol.     |
-//| A timeframe change does not: the panel does not depend on it.    |
+//| MT5 normally reinitializes the EA on symbol/timeframe changes.   |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
@@ -156,21 +142,39 @@ void Rebuild()
    g_type   = ClassifySymbol(g_symbol);
 
    ScanSessions();
-   UpdateState();
    BuildPanel();
 
 }
 
 //+------------------------------------------------------------------+
-//| Current estimated server time, with last quote time as fallback |
-//| if the server clock has not yet been established.                         |
+//| Broker-anchored clock; see limitations in README.md.               |
 //+------------------------------------------------------------------+
+// OnTick's TimeCurrent is the chart symbol's broker-stamped tick.
+// On a timer it is the last quote of any Market Watch symbol. Never
+// re-anchor to the same cached timestamp. In the tester, use simulated
+// time instead of elapsed real time.
+void SyncClock(bool chartTick)
+{
+   datetime quote = TimeCurrent();
+   if(quote <= 0) return;
+   if(chartTick || (g_lastObservedQuote > 0 && quote != g_lastObservedQuote))
+   {
+      g_clockQuote = quote;
+      g_clockMillis = GetTickCount64();
+      g_clockAnchored = true;
+   }
+   g_lastObservedQuote = quote;
+}
+
 datetime ServerNow()
 {
-   datetime t = TimeTradeServer();
-   if(t <= 0)
-      t = TimeCurrent();
-   return(t);
+   if(MQLInfoInteger(MQL_TESTER)) return(TimeCurrent());
+   SyncClock(false);
+   if(g_clockAnchored)
+      return(g_clockQuote + (datetime)((GetTickCount64() - g_clockMillis) / 1000));
+   // Before a fresh tick has been observed only MT5's PC-derived
+   // estimate is available; it is explicitly described as estimated.
+   return(TimeTradeServer());
 }
 
 //+------------------------------------------------------------------+
@@ -183,23 +187,6 @@ string FormatClock(datetime t)
    return(StringFormat("%04d.%02d.%02d %02d:%02d:%02d",
                        dt.year, dt.mon, dt.day,
                        dt.hour, dt.min, dt.sec));
-}
-
-//+------------------------------------------------------------------+
-//| Estimated rendered width of one character, in pixels.            |
-//| MetaTrader sizes fonts in points; the terminal reports the DPI,  |
-//| so the estimate uses the real value instead of assuming 96.      |
-//| A monospaced face needs about 0.55 em per character, rounded up. |
-//+------------------------------------------------------------------+
-int CharW(int size)
-{
-   if(size < 6)
-      size = 6;
-   int dpi = (int)TerminalInfoInteger(TERMINAL_SCREEN_DPI);
-   if(dpi < 72)
-      dpi = 96;
-   double em = (double)size * (double)dpi / 72.0;
-   return((int)MathCeil(em * 0.55));
 }
 
 //+------------------------------------------------------------------+
@@ -222,7 +209,7 @@ void MakeLabel(string name, int x, int y, string text, color clr,
    ObjectSetInteger(0, full, OBJPROP_YDISTANCE,  y);
    ObjectSetInteger(0, full, OBJPROP_COLOR,      (long)clr);
    ObjectSetInteger(0, full, OBJPROP_FONTSIZE,   size);
-   ObjectSetString (0, full, OBJPROP_FONT,       InpFont);
+   ObjectSetString (0, full, OBJPROP_FONT,       PANEL_FONT);
    ObjectSetInteger(0, full, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, full, OBJPROP_HIDDEN,     true);
    ObjectSetInteger(0, full, OBJPROP_BACK,       false);
@@ -297,8 +284,8 @@ void ScanSessions()
 //| True when the server clock is inside one of today's sessions,    |
 //| or inside an overnight session that began yesterday.             |
 //|                                                                  |
-//| With no published table the market is reported closed: the       |
-//| specification prefers "Open at --" to an invented opening time.  |
+//| With no published table this returns false; the caller handles   |
+//| that separately rather than claiming a scheduled closure.        |
 //+------------------------------------------------------------------+
 bool IsMarketOpen(datetime now)
 {
@@ -428,133 +415,178 @@ datetime NextOpening(datetime now)
 //+------------------------------------------------------------------+
 //| Refresh the cached state and the next opening time.              |
 //+------------------------------------------------------------------+
-void UpdateState()
+string WeekdayShort(datetime t)
 {
-   datetime now = ServerNow();
+   MqlDateTime dt;
+   if(!TimeToStruct(t, dt)) return("?");
+   string days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+   return(days[dt.day_of_week]);
+}
+
+string HumanDelta(datetime now, datetime next)
+{
+   long seconds = (long)(next - now);
+   if(seconds < 0) seconds = 0;
+   long days = seconds / 86400;
+   long hours = (seconds % 86400) / 3600;
+   long minutes = (seconds % 3600) / 60;
+   if(days > 0) return(StringFormat("%dd %dh %dm", (int)days, (int)hours, (int)minutes));
+   if(hours > 0) return(StringFormat("%dh %dm", (int)hours, (int)minutes));
+   return(StringFormat("%dm %ds", (int)minutes, (int)(seconds % 60)));
+}
+
+void UpdateState(datetime now)
+{
+   g_nextOpen = 0;
+   g_marketDetail = "";
+   if(!TerminalInfoInteger(TERMINAL_CONNECTED) && !MQLInfoInteger(MQL_TESTER))
+   {
+      g_marketState = MARKET_OFFLINE;
+      g_marketDetail = "terminal is not connected - no quotes";
+      return;
+   }
    if(now <= 0)
    {
-      g_isOpen = false;
-      g_nextOpen = 0;
+      g_marketState = MARKET_UNKNOWN;
+      g_marketDetail = "server time unavailable";
       return;
    }
    datetime todayStart = now - (now % 86400);
-   if(todayStart != g_sessionsDay || (!g_hasSessions && now - g_lastSessionScan >= 60))
+   if(todayStart != g_sessionsDay || now < g_lastSessionScan ||
+      now - g_lastSessionScan >= SESSION_REFRESH_SECONDS)
       ScanSessions();
 
-   g_isOpen   = IsMarketOpen(now);
-   g_nextOpen = 0;
-   if(!g_isOpen)
+   long tradeMode = 0;
+   if(SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE, tradeMode) &&
+      tradeMode == SYMBOL_TRADE_MODE_DISABLED)
+   {
+      g_marketState = MARKET_UNAVAILABLE;
+      g_marketDetail = "the broker has disabled this symbol";
+      return;
+   }
+
+   MqlTick tick;
+   bool hasQuote = SymbolInfoTick(_Symbol, tick) && tick.time > 0;
+   long age = hasQuote ? (long)(now - tick.time) : -1;
+   bool fresh = hasQuote && age >= 0 && age <= STALE_SECONDS;
+   if(g_hasSessions && !IsMarketOpen(now))
+   {
+      g_marketState = MARKET_CLOSED;
       g_nextOpen = NextOpening(now);
+      if(g_nextOpen > 0)
+         g_marketDetail = "MARKET CLOSED - next open " + WeekdayShort(g_nextOpen) + " " +
+                          FormatClock(g_nextOpen) + " server (in " + HumanDelta(now, g_nextOpen) + ")";
+      else
+         g_marketDetail = "MARKET CLOSED - no scheduled open found in the published table";
+      return;
+   }
+   if(!fresh)
+   {
+      g_marketState = g_hasSessions ? MARKET_STALE : MARKET_UNKNOWN;
+      if(!hasQuote) g_marketDetail = g_hasSessions ? "no quote available" : "no session table; Open at --; no quote available";
+      else if(age < 0) g_marketDetail = g_hasSessions ? "quote time is ahead of estimated server clock" : "no session table; Open at --; quote time ahead of server estimate";
+      else g_marketDetail = StringFormat("%s; last quote %d min old",
+                                         g_hasSessions ? "session open" : "no session table; Open at --",
+                                         (int)(age / 60));
+      return;
+   }
+   g_marketState = MARKET_OPEN;
+   if(!g_hasSessions) g_marketDetail = "no session table published - quote is live; server clock estimated between quotes";
+   else g_marketDetail = "server clock estimated between broker quotes";
 }
 
-//+------------------------------------------------------------------+
-//| Draw the panel. The width is measured from both states before    |
-//| the background is created, so the box never resizes when the     |
-//| market shuts. The height is fixed at four rows.                  |
-//+------------------------------------------------------------------+
+// TextGetSize uses the same logical point size as chart labels. The
+// fallback errs generously if MT5 cannot measure the requested font.
+void Measure(const string text, const int size, int &width, int &height)
+{
+   uint w = 0, h = 0;
+   if(TextSetFont(PANEL_FONT, -10 * size, 0) && TextGetSize(text, w, h) && h > 0)
+   {
+      width = (int)w;
+      height = (int)h;
+      return;
+   }
+   int dpi = (int)TerminalInfoInteger(TERMINAL_SCREEN_DPI);
+   if(dpi < 72) dpi = 96;
+   height = (int)MathCeil(size * (double)dpi / 72.0 * 1.5);
+   width = StringLen(text) * height;
+}
+
+bool ChartSupported()
+{
+   return(_Period == PERIOD_M5 || _Period == PERIOD_M15 || _Period == PERIOD_M30);
+}
+
 void BuildPanel()
 {
-   int x       = InpPanelX;
-   int y       = InpPanelY;
-   int rowH    = InpFontSize + 11;
-   int textY   = y + 7;
-   int cw      = CharW(InpFontSize);
-   int titleCw = CharW(InpFontSize + 1);
-   int sep     = 3 * cw;
-   int left    = x + cw;
-
-   string clock      = FormatClock(ServerNow());
-   string openRest   = " | " + g_symbol + " | " + g_type + " | OPEN | " + clock;
-   string closedRest = " | " + g_symbol + " | " + g_type + " | close | Open at " + FormatClock(0);
-
-   int openW   = StringLen(PANEL_TITLE) * titleCw + StringLen(openRest) * cw;
-   int closedW = StringLen(PANEL_TITLE) * titleCw + StringLen(closedRest) * cw;
-
-   // One character of padding on each side. The box is
-   // sized to the wider of the two states, so it does not move when the
-   // market closes.
-   g_panelW = (int)MathMax(openW, closedW) + 2 * cw;
-   g_panelH = 4 * rowH;
-
-   MakeRect("bg", x, y, g_panelW, g_panelH, InpBgColor, clrDimGray);
-
-   g_titleW  = StringLen(PANEL_TITLE) * titleCw;
-   g_symbolX = left + g_titleW + sep;
-   g_typeX   = g_symbolX + StringLen(g_symbol) * cw + sep;
-   g_stateX  = g_typeX + StringLen(g_type) * cw + sep;
-
-   string stateText = g_isOpen ? "OPEN" : "close";
-   g_lastX = g_stateX + StringLen(stateText) * cw + sep;
-
-   string lastText = g_isOpen
-                     ? clock
-                     : (g_nextOpen > 0 ? "Open at " + FormatClock(g_nextOpen)
-                                       : "Open at --");
-
-   MakeLabel("title",  left,      textY, PANEL_TITLE, InpTitleColor, InpFontSize + 1, false);
-   MakeLabel("sep1", left + g_titleW, textY, " | ", clrSilver, InpFontSize, false);
-   MakeLabel("symbol", g_symbolX, textY, g_symbol,    clrWhite,       InpFontSize,     false);
-   MakeLabel("sep2", g_symbolX + StringLen(g_symbol) * cw, textY, " | ", clrSilver, InpFontSize, false);
-   MakeLabel("type",   g_typeX,   textY, g_type,      clrSilver,      InpFontSize,     false);
-   MakeLabel("sep3", g_typeX + StringLen(g_type) * cw, textY, " | ", clrSilver, InpFontSize, false);
-   MakeLabel("state",  g_stateX,  textY, stateText,   g_isOpen ? clrLime : clrTomato,
-                                                       InpFontSize,     false);
-   MakeLabel("sep4", g_lastX - sep, textY, " | ", clrSilver, InpFontSize, false);
-   MakeLabel("last",   g_lastX,   textY, lastText,    clrWhite,       InpFontSize,     false);
-
-   g_lastState = g_isOpen ? 1 : 0;
-   g_lastText  = lastText;
-   g_built     = true;
-
-   ChartRedraw();
+   g_built = true;
+   UpdatePanel();
 }
 
-//+------------------------------------------------------------------+
-//| Update only what changed. The clock is rewritten once a second;  |
-//| the state cell and the last cell's x are rewritten only when the |
-//| market opens or closes.                                          |
-//+------------------------------------------------------------------+
 void UpdatePanel()
 {
-   if(!g_built)
-      return;
-
+   if(!g_built) return;
    datetime now = ServerNow();
-   UpdateState();
-
-   string stateText = g_isOpen ? "OPEN" : "close";
-   string lastText  = g_isOpen
-                      ? FormatClock(now)
-                      : (g_nextOpen > 0 ? "Open at " + FormatClock(g_nextOpen)
-                                        : "Open at --");
-
-   bool changed = false;
-
-   if((g_isOpen ? 1 : 0) != g_lastState)
+   UpdateState(now);
+   bool supported = ChartSupported();
+   string state = "";
+   string last = "";
+   color stateColor = clrWhite;
+   switch(g_marketState)
    {
-      ObjectSetString (0, OBJ_PREFIX + "state", OBJPROP_TEXT,  stateText);
-      ObjectSetInteger(0, OBJ_PREFIX + "state", OBJPROP_COLOR,
-                       (long)(g_isOpen ? clrLime : clrTomato));
-
-      int cw  = CharW(InpFontSize);
-      int sep = 3 * cw;
-      g_lastX = g_stateX + StringLen(stateText) * cw + sep;
-      ObjectSetInteger(0, OBJ_PREFIX + "last", OBJPROP_XDISTANCE, g_lastX);
-      ObjectSetInteger(0, OBJ_PREFIX + "sep4", OBJPROP_XDISTANCE, g_lastX - sep);
-
-      g_lastState = g_isOpen ? 1 : 0;
-      changed = true;
+      case MARKET_OPEN: state = "OPEN"; stateColor = clrLime;
+         last = now > 0 ? FormatClock(now) : "--"; break;
+      case MARKET_CLOSED: state = "close"; stateColor = clrTomato;
+         last = g_nextOpen > 0 ? "Open at " + FormatClock(g_nextOpen) : "Open at --"; break;
+      case MARKET_STALE: state = "OPEN - STALE QUOTE"; stateColor = clrOrange; break;
+      case MARKET_OFFLINE: state = "DISCONNECTED"; stateColor = clrTomato; break;
+      case MARKET_UNAVAILABLE: state = "TRADING UNAVAILABLE"; stateColor = clrOrange; break;
+      default: state = "MARKET STATUS UNKNOWN"; stateColor = clrOrange; break;
    }
 
-   if(lastText != g_lastText)
+   string prefix = " | " + g_symbol + " | " + g_type + " | ";
+   string suffix = last == "" ? "" : " | " + last;
+   if(!supported)
    {
-      ObjectSetString(0, OBJ_PREFIX + "last", OBJPROP_TEXT, lastText);
-      g_lastText = lastText;
-      changed = true;
+      string tf = EnumToString((ENUM_TIMEFRAMES)_Period);
+      if(StringFind(tf, "PERIOD_") == 0) tf = StringSubstr(tf, 7);
+      prefix = " | " + g_symbol + " | " + tf;
+      state = "";
+      suffix = "";
    }
+   string detail = supported ? g_marketDetail : "Incompatible chart. Switch to M5/M15/M30.";
+   int titleW, titleH, prefixW, prefixH, stateW, stateH, suffixW, suffixH, detailW, detailH;
+   Measure(PANEL_TITLE, PANEL_FONT_SIZE + 1, titleW, titleH);
+   Measure(prefix, PANEL_FONT_SIZE, prefixW, prefixH);
+   Measure(state, PANEL_FONT_SIZE, stateW, stateH);
+   Measure(suffix, PANEL_FONT_SIZE, suffixW, suffixH);
+   Measure(detail == "" ? " " : detail, supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, detailW, detailH);
+   int pad = 10;
+   int headerH = (int)MathMax(MathMax(titleH, prefixH), MathMax(stateH, suffixH));
+   int headerW = titleW + prefixW + stateW + suffixW;
+   int width = (int)MathMax(headerW, detail == "" ? 0 : detailW) + 2 * pad + 4;
+   int rowH = (int)MathMax(headerH, detailH) + 6;
+   // Keep the three future rows on supported charts; the SimpleEA-style
+   // incompatible notice collapses to a header and one notice line.
+   int height = 2 * pad + (supported ? 4 : 2) * rowH;
 
-   if(changed)
-      ChartRedraw();
+   MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
+   int x = PANEL_X + pad;
+   int y = PANEL_Y + pad;
+   MakeLabel("title", x, y, PANEL_TITLE, PANEL_TITLE_COLOR, PANEL_FONT_SIZE + 1, false);
+   x += titleW;
+   MakeLabel("prefix", x, y, prefix, clrSilver, PANEL_FONT_SIZE, false);
+   x += prefixW;
+   MakeLabel("state", x, y, state, stateColor, PANEL_FONT_SIZE, false);
+   x += stateW;
+   MakeLabel("suffix", x, y, suffix, clrWhite, PANEL_FONT_SIZE, false);
+   if(detail != "")
+      MakeLabel("detail", PANEL_X + pad, y + rowH, detail,
+                supported ? clrSilver : clrTomato,
+                supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, false);
+   else
+      ObjectDelete(0, OBJ_PREFIX + "detail");
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
