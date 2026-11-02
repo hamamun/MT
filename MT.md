@@ -62,12 +62,12 @@ height is fixed at four rows so the panel never resizes as those rows come and g
 These corrections override the fixed-size and closed-state descriptions above:
 
 - No user inputs; retain the specified appearance internally.
-- Measure the displayed text and dynamically size the panel width and height. Reserve four rows on supported charts; use a two-line notice panel on unsupported charts.
+- Measure the displayed text and dynamically size the panel width and height. On supported charts, reserve three header rows followed by the three timeframe rows; use a two-line notice panel on unsupported charts.
 - Follow Automate's market-state information: show the next scheduled opening and time remaining when closed; distinguish unavailable, disconnected, stale, and unknown states. Do not invent a next opening without a session table.
 - On charts other than M5/M15/M30, show SimpleEA's `Incompatible chart. Switch to M5/M15/M30.` notice.
 - Use broker-stamped quote time for the chart's symbol when available and describe extrapolated time honestly; MT5 cannot guarantee a perfectly synchronized clock between ticks.
 
-**Phase 1 status: Done.** Phase 1 reserved row 2 for future items. Phase 2 uses the space for timeframe readings; clock guidance is not displayed there.
+**Phase 1 status: Done.** On supported charts, preserve three header rows: row 1 is the header, row 2 is blank while open and carries closed/abnormal details when needed, and row 3 is reserved. The three Phase 2 timeframe rows follow these header rows; clock guidance is not displayed in row 2.
 
 
 ## Phase 2 — final specification
@@ -86,6 +86,8 @@ Timeframe priorities for future use: M5 gives current trend priority, M15 gives 
 Use standard internal defaults without user inputs, adapting to the symbol's own recent movement where the chosen mechanisms support it. A future diary may record observations and inform bounded automatic configuration; it is not required for Phase 2 trend readings and must not be treated as already validated or implemented.
 
 ### Compact display layout (final)
+
+On supported charts the three header rows remain above the M5, M15 and M30 rows. Size the panel to contain all content, and split long text into short chart labels so the score and market details are not truncated. Unsupported charts retain their two-line notice.
 
 Each timeframe row uses **GT** = Global Trend, **CT** = Current Trend, **ST** = Status, **RG** = Regime, **PT** = Prediction Trend and **SC** = Score. ST remains the combined trend status. RG uses SimpleEA's regime mechanism. Show `WAIT` for RG when its required history is unavailable or invalid, and `--` for PT when its estimate is unavailable; do not invent a reading.
 
