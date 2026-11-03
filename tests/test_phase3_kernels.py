@@ -9,7 +9,7 @@ import re
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'MT_Phase3.mqh').read_text()
-for path in [root/'MT.mq5', *root.glob('MT_*.mqh')]:
+for path in [root/'MT.mq5', *(root/name for name in ['MT_Phase3.mqh','MT_Plan.mqh','MT_PlanRuntime.mqh','MT_Diary.mqh','MT_DiaryRuntime.mqh'])]:
     assert not re.search(r'\b(?:OrderSend|OrderSendAsync|CTrade|PositionOpen|PositionClose)\s*(?:\(|\w+)', path.read_text()), f'{path.name} must not place or manage trades'
 stubs = r'''
 #include <algorithm>

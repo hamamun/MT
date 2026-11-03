@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //| MT.mq5 - Master Trade                                            |
 //|                                                                  |
-//| Phases 1-3: informational readings, plans and diary.             |
+//| Phases 1-4: readings, plans, diary and optional auto trading.    |
 //|                                                                  |
 //| A market-state and timeframe panel drawn with chart objects.     |
 //| The panel shows the chart symbol, its broker-published type,     |
@@ -15,11 +15,11 @@
 //| Appearance follows SimpleEA/SimpleAdvisor.mq5: Consolas 10 pt,   |
 //| background C'48,48,48', title 11 pt in clrWhite.                  |
 //|                                                                  |
-//| This EA does not trade. Diary outcomes use observed quotes.       |
+//| Auto Trading defaults off. Diary outcomes use observed quotes.    |
 //+------------------------------------------------------------------+
 #property copyright "MT"
 #property version   "1.00"
-#property description "MT - Master Trade. Informational plans and observed-price diary."
+#property description "MT - Master Trade. Plans, observed-price diary and optional auto trading."
 
 //---
 //  Prefix for every object this EA creates. Keeping it in one place
@@ -30,7 +30,7 @@
 #define PANEL_TITLE  "MT V1.00"
 #define MAX_SESSIONS 32
 
-// Fixed appearance; Phase 3 inputs are declared in MT_PlanRuntime.mqh.
+// Fixed appearance; plan and auto-trading inputs are declared in their runtime includes.
 #define PANEL_FONT "Consolas"
 #define PANEL_FONT_SIZE 10
 #define PANEL_X 12
@@ -109,6 +109,7 @@ P2Lane g_p2[3];
 
 #include "MT_PlanRuntime.mqh"
 #include "MT_DiaryRuntime.mqh"
+#include "MT_AutoRuntime.mqh"
 
 //+------------------------------------------------------------------+
 //| Expert initialization: build the panel and start the 1 s timer.  |
@@ -131,6 +132,7 @@ void OnDeinit(const int reason)
 {
    EventKillTimer();
    P3DiaryClose();
+   P4Close();
    ObjectsDeleteAll(0, OBJ_PREFIX);
    ChartRedraw();
 }
@@ -147,6 +149,8 @@ void OnTick()
       UpdateState(ServerNow());
       P2Update();
       P3DiaryTick();
+      UpdateState(ServerNow());
+      P4Process(true);
    }
    UpdatePanel();
 }
@@ -157,6 +161,7 @@ void OnTick()
 void OnTimer()
 {
    P3DiaryMonitor();
+   P4Process(false);
    UpdatePanel();
 }
 
@@ -185,8 +190,8 @@ void Rebuild()
    g_type   = ClassifySymbol(g_symbol);
    P2Reset();
    P3Reset();
-   if(ChartSupported()) P3DiaryInit();
-   else P3DiaryClose();
+   if(ChartSupported()) { P3DiaryInit(); P4Init(); }
+   else { P3DiaryClose(); P4Close(); }
 
    ScanSessions();
    BuildPanel();
@@ -623,13 +628,14 @@ void UpdatePanel()
    UpdateState(now);
    bool supported = ChartSupported();
    if(supported) P2Update();
-   string plans[3], diaryLines[3], diaryDetails[3];
+   string plans[3], autoLines[3], diaryLines[3], diaryDetails[3];
    string quoteLine = "";
    if(supported)
    {
       for(int i=0;i<3;i++)
       {
          plans[i]=P3PlanLine(i);
+         autoLines[i]=P4Line(i);
          diaryLines[i]=P3DiarySummary(i,now);
          diaryDetails[i]=InpShowDetails ? P3DiaryDetail(i) : "";
       }
@@ -689,6 +695,8 @@ void UpdatePanel()
          MeasureLine(plans[i], PANEL_FONT_SIZE, rw, rh);
          width = (int)MathMax(width, rw + 2 * pad + 4);
          rowH = (int)MathMax(rowH, rh + 6);
+         MeasureLine(autoLines[i],PANEL_FONT_SIZE,rw,rh);
+         width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
          MeasureLine(diaryLines[i],PANEL_FONT_SIZE,rw,rh);
          width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
          if(InpShowDetails)
@@ -702,7 +710,7 @@ void UpdatePanel()
    }
    // Supported charts reserve three header rows, then the three lanes.
    // On a closed or abnormal market row 2 carries the market detail.
-   int height = 2 * pad + (supported ? (HEADER_ROWS + 10 + (InpShowDetails ? 3 : 0)) : 2) * rowH;
+   int height = 2 * pad + (supported ? (HEADER_ROWS + 13 + (InpShowDetails ? 3 : 0)) : 2) * rowH;
 
    MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
    int x = PANEL_X + pad;
@@ -729,9 +737,11 @@ void UpdatePanel()
    MakeTextLine("quotes",PANEL_X+pad,y+rowH*(HEADER_ROWS+6),supported?quoteLine:"",clrSilver,PANEL_FONT_SIZE);
    for(int i=0;i<3;i++)
    {
-      MakeTextLine("diary"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+7+i),
+      MakeTextLine("auto"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+7+i),
+                   supported?autoLines[i]:"",clrSilver,PANEL_FONT_SIZE);
+      MakeTextLine("diary"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+10+i),
                    supported?diaryLines[i]:"",clrSilver,PANEL_FONT_SIZE);
-      MakeTextLine("history"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+10+i),
+      MakeTextLine("history"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+13+i),
                    supported && InpShowDetails?diaryDetails[i]:"",clrSilver,PANEL_FONT_SIZE);
    }
    ChartRedraw();
