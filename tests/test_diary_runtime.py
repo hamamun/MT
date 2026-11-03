@@ -81,12 +81,18 @@ int FileReadInteger(int h,int){return readVal<int>(h);} long FileReadLong(int h)
 #include "MT_Diary.mqh"
 struct P3Plan{int signal=99;bool valid=false,market=false;double entry=0,stop=0,target=0,lot=0;datetime bar=0; bool priced=true,barProxy=false;};
 struct Lane{int score=2,gt=1,ct=1,st=1;string regime="MIXED";}; Lane g_p3[3];
-P3Plan plans[3]; bool P3MakePlanAt(int i,const MqlTick&,P3Plan&p){p=plans[i];return p.valid;}
+P3Plan plans[3]; bool P3MakePlan(int i,P3Plan&p){p=plans[i];return p.valid;}
 P3_TREND_CHOICE P3Choice(int){return P3_AUTO;} bool P3Against(int){return true;}
 '''
 main=r'''
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
  long t=1700000000000L;
+ P3Observation observed{};P3Plan delayed{1,true,true,100.02,99,101,0.05,1};
+ MqlTick start{t,100.4,100.42};
+ check(P3DiaryStart(observed,delayed,start) && observed.entry==100.02 && observed.entryQuote==100.42,"delayed market records real start quote separately from plan");
+ start={t,101,101.02};check(!P3DiaryStart(observed,delayed,start),"market observation cannot start after target passed");
+ delayed={1,true,false,99.5,99,101,0.05,1};start={t,99.3,99.32};
+ check(P3DiaryStart(observed,delayed,start) && observed.state==P3_OPEN && observed.entryQuote==99.32,"limit start tick is observed");
  P3DiaryInit();check(g_diaryReady,"initialization");
  plans[0]={1,true,true,100.02,99,101,0.05,1};
  current={t,100,100.02};tickHistory.push_back(current);P3DiaryTick();

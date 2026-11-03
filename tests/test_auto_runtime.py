@@ -46,6 +46,8 @@ using datetime=long; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
 #define SYMBOL_TRADE_CALC_MODE 16
 #define SYMBOL_ORDER_MODE 17
 #define SYMBOL_ORDER_GTC_MODE 18
+#define SYMBOL_POINT 19
+#define SYMBOL_TRADE_STOPS_LEVEL 20
 #define SYMBOL_ORDER_MARKET 1
 #define SYMBOL_ORDER_LIMIT 2
 #define SYMBOL_ORDER_SL 16
@@ -126,7 +128,7 @@ long TerminalInfoInteger(int p){return p==TERMINAL_CONNECTED?connected:permissio
 long MQLInfoInteger(int p){return p==MQL_TESTER?tester:permission;}
 long AccountInfoInteger(int p){if(p==ACCOUNT_MARGIN_MODE)return hedging?ACCOUNT_MARGIN_MODE_RETAIL_HEDGING:0;return permission;}
 string accountCurrency="USD"; string AccountInfoString(int){return accountCurrency;}
-bool MathIsValidNumber(double x){return isfinite(x);} double MathMin(double a,double b){return min(a,b);} double MathFloor(double x){return floor(x);} double MathAbs(double x){return abs(x);}
+bool MathIsValidNumber(double x){return isfinite(x);} double MathMin(double a,double b){return min(a,b);} double MathMax(double a,double b){return max(a,b);} double MathFloor(double x){return floor(x);} double MathAbs(double x){return abs(x);}
 int StringLen(string s){return int(s.size());} unsigned short StringGetCharacter(string s,int i){return s[i];}
 int StringFind(string s,string part){auto n=s.find(part);return n==string::npos?-1:int(n);}
 string DoubleToString(double x,int n){ostringstream o;o<<fixed<<setprecision(n)<<x;return o.str();}
@@ -140,9 +142,11 @@ MqlTick current{}; vector<string> currencies; map<string,pair<string,string>> pa
 bool SymbolInfoTick(string name,MqlTick &q){if(name==_Symbol){q=current;return true;}if(!quotes.count(name))return false;q=quotes[name];return true;}
 int SymbolsTotal(bool){return currencies.size();}string SymbolName(int i,bool){return currencies[i];}
 string SymbolInfoString(string s,int p){if(!pairs.count(s))return "";return p==SYMBOL_CURRENCY_BASE?pairs[s].first:pairs[s].second;}
+long stopPoints=0; bool stopInfo=true;
 long symbolFill=SYMBOL_FILLING_FOK, symbolExec=SYMBOL_TRADE_EXECUTION_MARKET, expiration=SYMBOL_EXPIRATION_GTC, calcMode=SYMBOL_CALC_MODE_FOREX, orderMode=51, stopLifetime=SYMBOL_ORDERS_GTC;
 long SymbolInfoInteger(string,int p){return p==SYMBOL_DIGITS?2:0;}
-bool SymbolInfoInteger(string,int p,long &out){out=p==SYMBOL_FILLING_MODE?symbolFill:p==SYMBOL_TRADE_EXEMODE?symbolExec:p==SYMBOL_TRADE_CALC_MODE?calcMode:p==SYMBOL_ORDER_MODE?orderMode:p==SYMBOL_ORDER_GTC_MODE?stopLifetime:expiration;return true;}
+double SymbolInfoDouble(string,int){return 0.01;}
+bool SymbolInfoInteger(string,int p,long &out){if(p==SYMBOL_TRADE_STOPS_LEVEL){out=stopPoints;return stopInfo;}out=p==SYMBOL_FILLING_MODE?symbolFill:p==SYMBOL_TRADE_EXEMODE?symbolExec:p==SYMBOL_TRADE_CALC_MODE?calcMode:p==SYMBOL_ORDER_MODE?orderMode:p==SYMBOL_ORDER_GTC_MODE?stopLifetime:expiration;return true;}
 bool OrderCalcProfit(int dir,string,double lot,double entry,double exit,double &x){if(!calcOk)return false;x=(dir==ORDER_TYPE_BUY?1:-1)*lot*(exit-entry)*100;return true;}
 bool ChartSupported(){return true;}string P3DiaryKey(){return "MT-test";}
 struct Handle{string name;size_t pos;}; map<int,Handle> handles;map<string,vector<char>> files;int nextHandle=1;
@@ -213,6 +217,23 @@ void resetWorld(){
 }
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
  P4Init();check(g_p4Ready && !InpAutoTrading,"initialization and default off");
+ // An invalid frozen plan is not sent; the same plan may be used once the
+ // live quote returns to a valid range, without moving its levels.
+ InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;
+ current.bid=101.1;current.ask=101.12;P4Process(true);
+ check(sends==0 && P4Line(0).find("invalid at live quote")!=string::npos,"passed exit holds order");
+ current.bid=100;current.ask=100.02;InpAutoTrading=false;
+ // Frozen entry/exit levels are checked against the current executable quote.
+ P3Plan buyMarket{1,true,true,100.02,99,101,0.05};
+ P3Plan sellMarket{-1,true,true,100,101,99,0.05};
+ P3Plan buyLimit{1,true,false,99.5,99,101,0.05};
+ P3Plan sellLimit{-1,true,false,100.5,101,99,0.05};
+ check(P4LiveLevels(current,buyMarket) && P4LiveLevels(current,sellMarket) && P4LiveLevels(current,buyLimit) && P4LiveLevels(current,sellLimit),"live levels initially valid");
+ stopPoints=60;check(!P4LiveLevels(current,buyLimit),"broker distance checked");stopPoints=0;stopInfo=false;check(!P4LiveLevels(current,buyMarket),"missing stop distance held");stopInfo=true;
+ MqlTick moved=current;moved.bid=101.1;moved.ask=101.12;
+ check(!P4LiveLevels(moved,buyMarket) && !P4LiveLevels(moved,sellLimit),"passed market target or sell limit is held");
+ moved.bid=98.9;moved.ask=98.92;
+ check(!P4LiveLevels(moved,sellMarket) && !P4LiveLevels(moved,buyLimit),"passed sell target or buy limit is held");
  plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);check(sends==0,"off does not send");
  InpAutoTrading=true;hedging=false;P4Process(true);check(sends==0 && P4Line(0).find("Hedging")!=string::npos,"netting does not send");
  hedging=true;checkOk=false;P4Process(true);check(sends==0 && !g_p4[0].active,"rejected preflight does not journal or send");

@@ -83,6 +83,42 @@ struct P3Plan
    datetime bar;
 };
 
+// One observed post-close quote and one priced plan per lane/bar. Quotes are
+// captured only on chart ticks, not by timer/panel refreshes. On attachment or
+// after a data gap this is the first tick observed by this EA, not necessarily
+// the first tick in the broker's history.
+MqlTick g_p3Quote[3];
+datetime g_p3QuoteBar[3];
+P3Plan g_p3Plan[3];
+bool g_p3Frozen[3];
+
+void P3ResetSnapshots()
+{
+   for(int lane=0;lane<3;lane++) { g_p3QuoteBar[lane]=0; g_p3Frozen[lane]=false; }
+}
+
+ENUM_TIMEFRAMES P3Timeframe(int lane)
+{
+   return(lane==0?PERIOD_M5:(lane==1?PERIOD_M15:PERIOD_M30));
+}
+
+void P3CaptureQuotes()
+{
+   MqlTick q;
+   if(g_marketState!=MARKET_OPEN || !SymbolInfoTick(_Symbol,q) || q.time<=0 ||
+      !P3Positive(q.bid) || !P3Positive(q.ask) || q.ask<q.bid) return;
+   for(int lane=0;lane<3;lane++)
+   {
+      ENUM_TIMEFRAMES tf=P3Timeframe(lane);
+      datetime closed=iTime(_Symbol,tf,1), opened=iTime(_Symbol,tf,0);
+      if(closed<=0 || opened<=closed || q.time<opened) continue;
+      if(g_p3QuoteBar[lane]!=closed)
+      {
+         g_p3Quote[lane]=q; g_p3QuoteBar[lane]=closed; g_p3Frozen[lane]=false;
+      }
+   }
+}
+
 bool P3MakePlanAt(int lane, const MqlTick &q, P3Plan &plan)
 {
    plan.valid=false; plan.priced=false; plan.barProxy=!P3HasBidBars(); plan.entry=0; plan.stop=0; plan.target=0; plan.lot=0;
@@ -150,12 +186,38 @@ bool P3MakePlanAt(int lane, const MqlTick &q, P3Plan &plan)
    return(true);
 }
 
+// Build from the captured quote once price geometry is available. A transient
+// missing history/quote may be retried without replacing that quote. Once
+// priced, all values (including an unavailable sizing result) stay frozen.
+void P3FreezePlans()
+{
+   for(int lane=0;lane<3;lane++)
+   {
+      if(g_p3Frozen[lane] || g_p3QuoteBar[lane]<=0 ||
+         g_p3[lane].bar!=g_p3QuoteBar[lane] ||
+         iTime(_Symbol,P3Timeframe(lane),1)!=g_p3QuoteBar[lane]) continue;
+      P3Plan candidate;
+      P3MakePlanAt(lane,g_p3Quote[lane],candidate);
+      if(candidate.priced) { g_p3Plan[lane]=candidate; g_p3Frozen[lane]=true; }
+   }
+}
+
 bool P3MakePlan(int lane, P3Plan &plan)
 {
-   MqlTick q;
-   q.bid=0.0; q.ask=0.0;
-   SymbolInfoTick(_Symbol,q);
-   return(P3MakePlanAt(lane,q,plan));
+   // Do not use an old plan if bar history or current signal is unavailable.
+   plan.valid=false; plan.priced=false; plan.market=false; plan.barProxy=!P3HasBidBars();
+   plan.entry=0; plan.stop=0; plan.target=0; plan.lot=0; plan.slMoney=0; plan.tpMoney=0;
+   plan.bar=g_p3[lane].bar;
+   int selected=P3SelectedTrend(lane,P3Choice(lane),g_p3[lane].gt,g_p3[lane].ct,g_p3[lane].st);
+   plan.signal=P3Signal(g_p3[lane].score,selected,P3Against(lane));
+   if(g_p3[lane].bar<=0 || iTime(_Symbol,P3Timeframe(lane),1)!=g_p3[lane].bar)
+   { plan.signal=P3_WAIT; return(false); }
+   bool market=MathAbs(g_p3[lane].score)==3;
+   plan.market=market;
+   if(!g_p3Frozen[lane] || g_p3QuoteBar[lane]!=g_p3[lane].bar ||
+      g_p3Plan[lane].signal!=plan.signal || g_p3Plan[lane].market!=market) return(false);
+   plan=g_p3Plan[lane];
+   return(plan.valid);
 }
 
 string P3LotText(double lot)

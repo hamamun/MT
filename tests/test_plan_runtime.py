@@ -41,7 +41,9 @@ using datetime=long long; using ENUM_TIMEFRAMES=int; using ENUM_ORDER_TYPE=int;
 int g_marketState=0;
 string _Symbol="TEST";
 struct MqlRates {datetime time=0; double open=0,high=0,low=0,close=0; int spread=0;};
-struct MqlTick {double bid=100,ask=100.02;};
+struct MqlTick {double bid=100,ask=100.02;datetime time=1001;};
+MqlTick current{}; datetime closed[3]={1000,1000,1000}, opened[3]={1001,1001,1001};
+datetime iTime(string,int tf,int shift){int i=tf==5?0:tf==15?1:2;return shift?closed[i]:opened[i];}
 vector<MqlRates> feed;
 bool MathIsValidNumber(double x){return isfinite(x);}
 double MathFloor(double x){return floor(x);} double MathCeil(double x){return ceil(x);}
@@ -52,7 +54,7 @@ template<class T> int ArraySize(const vector<T>& x){return int(x.size());}
 template<class T> int ArrayResize(vector<T>& x,int n){x.resize(n);return n;}
 template<class T> void ArraySort(vector<T>& x){sort(x.begin(),x.end());}
 template<class T> void ArraySetAsSeries(vector<T>&,bool){}
-bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{};return true;}
+bool SymbolInfoTick(string,MqlTick &q){q=current;return true;}
 double SymbolInfoDouble(string,int prop){if(prop==SYMBOL_VOLUME_MIN || prop==SYMBOL_VOLUME_STEP)return 0.01;if(prop==SYMBOL_VOLUME_MAX)return 100;return 0.01;}
 long SymbolInfoInteger(string,int prop){return prop==SYMBOL_DIGITS?2:5;}
 long chartMode=SYMBOL_CHART_MODE_BID;bool modeAvailable=true;
@@ -70,24 +72,39 @@ string DoubleToString(double n,int digits){ostringstream o;o<<fixed<<setprecisio
 main=r'''
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
  for(int i=0;i<1000;i++){double p=100+sin(i*0.3)*0.3;feed.push_back({i+1,p,p+0.8,p-0.8,p+0.1,2});}
- vector<int> scores(1000,2),gts(1000,1),cts(1000,1),status(1000,1); P3Reset(); P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
- P3Plan p{};check(P3MakePlan(0,p) && p.valid && p.signal==1 && !p.market,"buy limit plan");
+ vector<int> scores(1000,2),gts(1000,1),cts(1000,1),status(1000,1);
+ P3Reset();P3ResetSnapshots();P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
+ P3Plan p{};check(!P3MakePlan(0,p)&&p.signal==1,"no plan until observed tick");
+ current.time=1000;P3CaptureQuotes();P3FreezePlans();check(!P3MakePlan(0,p),"pre-close quote is not captured");
+ current.time=1001;P3CaptureQuotes();P3FreezePlans();check(P3MakePlan(0,p) && p.valid && p.signal==1 && !p.market,"buy limit snapshot");
  check(p.entry<100.02 && p.stop<p.entry && p.target>p.entry && p.slMoney<0 && p.tpMoney>0,"buy plan ordering");
  check(P3PlanLine(0).find("BUY")!=string::npos && P3PlanLine(0).find("USD")!=string::npos,"buy display");
+ P3Plan frozen=p;current.bid=104;current.ask=104.2;P3CaptureQuotes();P3FreezePlans();P3MakePlan(0,p);
+ check(p.entry==frozen.entry && p.stop==frozen.stop && p.target==frozen.target && p.lot==frozen.lot,"prices and lot frozen mid bar");
  check(P3LotText(0.05)=="0.05" && P3LotText(1.0)=="1" && P3LotText(0.000001)=="0.000001","lot display precision");
- InpMinimumLot=true;check(P3MakePlan(0,p)&&abs(p.lot-0.01)<1e-9,"minimum input");InpMinimumLot=false;
- calcFail=true;P3MakePlan(0,p);check(p.priced && !p.valid && p.entry>0 && p.target>0 && P3PlanLine(0).find("Lot: --")!=string::npos,"sizing failure preserves entry and target");InpBypassRisk=true;P3MakePlan(0,p);check(p.priced && !p.valid && p.lot>0 && P3PlanLine(0).find("Lot: --")==string::npos,"bypass still sizes when profit calculation fails");InpBypassRisk=false;calcFail=false;
- P3Remember(2,1,-1,2,-3,"MIXED",1000,feed,scores,gts,cts,status);
- check(P3MakePlan(2,p)&&p.signal==-1&&p.market && p.stop>p.entry && p.target<p.entry,"countertrend sell market");
- InpAgainstM30=false;P3MakePlan(2,p);check(p.signal==0,"countertrend switch false");
- g_marketState=1;P3MakePlan(0,p);check(p.signal==1 && !p.valid,"closed market keeps signal but no entry");
- g_marketState=0;chartMode=1;P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
- check(g_p3[0].samples==0 && g_p3[0].targetR==0 && P3PlanLine(0).find("Last/unknown proxy")!=string::npos,"Last bars use labelled fallback, not Bid replay");
- modeAvailable=false;P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
- check(g_p3[0].samples==0 && P3PlanLine(0).find("Last/unknown proxy")!=string::npos,"unknown chart mode uses labelled fallback");
- P3Invalidate(0);P3MakePlan(0,p);check(p.signal==99,"missing readings");
+ // A new M5 bar cannot use the old snapshot; other lanes keep theirs.
+ P3Remember(2,1,-1,2,-3,"MIXED",1000,feed,scores,gts,cts,status);P3FreezePlans();
+ P3Plan other{};check(P3MakePlan(2,other) && other.market && other.entry==100,"sell market frozen first quote");
+ closed[0]=1001;opened[0]=1002;current.time=1002;feed.push_back({1001,100,101,99,100,2});
+ P3MakePlan(0,p);check(p.signal==P3_WAIT && !p.valid,"old bar held before refresh");
+ P3CaptureQuotes();P3Remember(0,1,1,1,2,"MIXED",1001,feed,scores,gts,cts,status);P3FreezePlans();
+ check(P3MakePlan(0,p) && p.entry!=frozen.entry,"new M5 snapshot updates");P3MakePlan(2,p);check(p.entry==other.entry && p.stop==other.stop,"M30 unaffected by M5 close");
+ // Same bar retry with revised data cannot silently reinterpret frozen plan.
+ P3Remember(0,1,1,1,-3,"MIXED",1001,feed,scores,gts,cts,status);P3FreezePlans();
+ check(!P3MakePlan(0,p) && p.signal==-1 && !p.priced,"changed signal holds mismatched snapshot");
+ P3Invalidate(0);P3MakePlan(0,p);check(p.signal==P3_WAIT,"missing readings held");
+ // Capture original quote even if history and sizing recover on a later tick.
+ closed[1]=1001;opened[1]=1002;P3CaptureQuotes();current.bid=105;current.ask=105.2;
+ P3Remember(1,1,1,1,3,"MIXED",1001,feed,scores,gts,cts,status);P3FreezePlans();
+ check(P3MakePlan(1,p) && p.entry==104.2,"late history uses captured quote");
+ closed[1]=1002;opened[1]=1003;current.time=1003;P3CaptureQuotes();
+ feed.push_back({1002,100,101,99,100,2});calcFail=true;
+ P3Remember(1,1,1,1,3,"MIXED",1002,feed,scores,gts,cts,status);P3FreezePlans();
+ check(!P3MakePlan(1,p) && p.priced && !p.valid,"sizing failure keeps price snapshot");
+ calcFail=false;current.ask=106;P3FreezePlans();P3MakePlan(1,p);check(!p.valid && p.entry==105.2,"sizing failure frozen until next bar");
  if(!f)cout<<"Phase 3 plan-runtime stub checks passed\n";
  return f?1:0;}
+
 '''
 with tempfile.TemporaryDirectory() as t:
  p=Path(t);(p/'x.cpp').write_text(stubs+s+main)

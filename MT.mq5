@@ -147,7 +147,9 @@ void OnTick()
    if(ChartSupported())
    {
       UpdateState(ServerNow());
+      P3CaptureQuotes();
       P2Update();
+      P3FreezePlans();
       P3DiaryTick();
       UpdateState(ServerNow());
       P4Process(true);
@@ -190,6 +192,7 @@ void Rebuild()
    g_type   = ClassifySymbol(g_symbol);
    P2Reset();
    P3Reset();
+   P3ResetSnapshots();
    if(ChartSupported()) { P3DiaryInit(); P4Init(); }
    else { P3DiaryClose(); P4Close(); }
 
