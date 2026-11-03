@@ -7,7 +7,7 @@ import pathlib, re, subprocess, tempfile
 from test_logic import function
 
 source = (pathlib.Path(__file__).resolve().parents[1] / 'MT.mq5').read_text()
-assert not re.search(r'^\s*input\b', source, re.M), 'EA must have no inputs'
+assert '#include "MT_PlanRuntime.mqh"' in source
 stubs = r'''
 #include <algorithm>
 #include <cmath>
@@ -39,6 +39,16 @@ using color=int;
 #define PERIOD_M15 15
 #define PERIOD_M30 30
 using ENUM_TIMEFRAMES=int;
+#define SYMBOL_DIGITS 90
+string _Symbol="XAUUSDm";
+struct MqlTick {double bid=100,ask=100.1;};
+bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{}; return true;}
+long SymbolInfoInteger(string,int){return 2;}
+string DoubleToString(double x,int){return to_string(x);}
+string P3PlanLine(int i){return string("plan ")+to_string(i)+string(80,'x');}
+bool InpShowDetails=false;
+string P3DiarySummary(int i,datetime){return "diary "+to_string(i);}
+string P3DiaryDetail(int i){return "detail "+to_string(i);}
 int _Period=5;
 enum MARKET_STATE {MARKET_OPEN, MARKET_CLOSED, MARKET_STALE, MARKET_UNKNOWN, MARKET_OFFLINE, MARKET_UNAVAILABLE};
 MARKET_STATE g_marketState=MARKET_OPEN;
@@ -80,6 +90,10 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("state")=="OPEN","open header");
  check(Combined("suffix").find("2026.11.02")!=string::npos,"open clock");
  check(Combined("detail").empty(),"open detail and second row blank");
+ check(Combined("plan0").find("plan 0")==0 && Combined("quotes").find("Bid:")==0,"phase 3 plan and quote rows");
+ check(Combined("diary0")=="diary 0" && Combined("history0").empty(),"diary summary and hidden details");
+ InpShowDetails=true;UpdatePanel();check(Combined("history0")=="detail 0" && boxH>openH,"details increase height");
+ InpShowDetails=false;UpdatePanel();check(Combined("history0").empty() && boxH==openH,"details removed");
  check(labels.count("lane0_0") && labels.count("lane1_0") && labels.count("lane2_0"),"three lanes shown");
  int rowH=labels["lane1_0"].y-labels["lane0_0"].y;
  check(rowH>0 && labels["lane0_0"].y==labels["title_0"].y+3*rowH,"three header rows precede lanes");
@@ -112,6 +126,7 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("state").empty() && Combined("suffix").empty(),"unsupported suppresses market fields");
  check(boxH<openH,"unsupported notice height shrinks");
  check(Combined("lane0").empty() && Combined("lane2").empty(),"unsupported removes all lane segments");
+ check(Combined("plan0").empty() && Combined("quotes").empty(),"unsupported removes plan and quote segments");
  _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();
  check(Combined("detail").empty(),"notice removed after supported chart");
  check(boxW==openW && boxH==openH,"panel resizes back");

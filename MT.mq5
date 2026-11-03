@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //| MT.mq5 - Master Trade                                            |
 //|                                                                  |
-//| Phase 2: informational trend and score panel.                    |
+//| Phases 1-3: informational readings, plans and diary.             |
 //|                                                                  |
 //| A market-state and timeframe panel drawn with chart objects.     |
 //| The panel shows the chart symbol, its broker-published type,     |
@@ -15,11 +15,11 @@
 //| Appearance follows SimpleEA/SimpleAdvisor.mq5: Consolas 10 pt,   |
 //| background C'48,48,48', title 11 pt in clrWhite.                  |
 //|                                                                  |
-//| This EA does not trade. It only draws the panel.                 |
+//| This EA does not trade. Diary outcomes use observed quotes.       |
 //+------------------------------------------------------------------+
 #property copyright "MT"
 #property version   "1.00"
-#property description "MT - Master Trade. Informational trend and score panel."
+#property description "MT - Master Trade. Informational plans and observed-price diary."
 
 //---
 //  Prefix for every object this EA creates. Keeping it in one place
@@ -30,7 +30,7 @@
 #define PANEL_TITLE  "MT V1.00"
 #define MAX_SESSIONS 32
 
-// Fixed appearance: MT has no user inputs.
+// Fixed appearance; Phase 3 inputs are declared in MT_PlanRuntime.mqh.
 #define PANEL_FONT "Consolas"
 #define PANEL_FONT_SIZE 10
 #define PANEL_X 12
@@ -107,6 +107,9 @@ struct P2Lane
 };
 P2Lane g_p2[3];
 
+#include "MT_PlanRuntime.mqh"
+#include "MT_DiaryRuntime.mqh"
+
 //+------------------------------------------------------------------+
 //| Expert initialization: build the panel and start the 1 s timer.  |
 //+------------------------------------------------------------------+
@@ -127,6 +130,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   P3DiaryClose();
    ObjectsDeleteAll(0, OBJ_PREFIX);
    ChartRedraw();
 }
@@ -138,6 +142,12 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    SyncClock(true);
+   if(ChartSupported())
+   {
+      UpdateState(ServerNow());
+      P2Update();
+      P3DiaryTick();
+   }
    UpdatePanel();
 }
 
@@ -146,6 +156,7 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   P3DiaryMonitor();
    UpdatePanel();
 }
 
@@ -173,6 +184,9 @@ void Rebuild()
    g_symbol = _Symbol;
    g_type   = ClassifySymbol(g_symbol);
    P2Reset();
+   P3Reset();
+   if(ChartSupported()) P3DiaryInit();
+   else P3DiaryClose();
 
    ScanSessions();
    BuildPanel();
@@ -609,6 +623,24 @@ void UpdatePanel()
    UpdateState(now);
    bool supported = ChartSupported();
    if(supported) P2Update();
+   string plans[3], diaryLines[3], diaryDetails[3];
+   string quoteLine = "";
+   if(supported)
+   {
+      for(int i=0;i<3;i++)
+      {
+         plans[i]=P3PlanLine(i);
+         diaryLines[i]=P3DiarySummary(i,now);
+         diaryDetails[i]=InpShowDetails ? P3DiaryDetail(i) : "";
+      }
+      MqlTick quote;
+      if(SymbolInfoTick(_Symbol,quote) && quote.bid>0 && quote.ask>=quote.bid)
+      {
+         int dg=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
+         quoteLine="Bid: "+DoubleToString(quote.bid,dg)+" | Ask: "+DoubleToString(quote.ask,dg);
+      }
+      else quoteLine="Bid: -- | Ask: --";
+   }
    string state = "";
    string last = "";
    color stateColor = clrWhite;
@@ -654,11 +686,23 @@ void UpdatePanel()
          MeasureLine(P2Line(i), PANEL_FONT_SIZE, rw, rh);
          width = (int)MathMax(width, rw + 2 * pad + 4);
          rowH = (int)MathMax(rowH, rh + 6);
+         MeasureLine(plans[i], PANEL_FONT_SIZE, rw, rh);
+         width = (int)MathMax(width, rw + 2 * pad + 4);
+         rowH = (int)MathMax(rowH, rh + 6);
+         MeasureLine(diaryLines[i],PANEL_FONT_SIZE,rw,rh);
+         width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
+         if(InpShowDetails)
+         {
+            MeasureLine(diaryDetails[i],PANEL_FONT_SIZE,rw,rh);
+            width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
+         }
       }
+      int qw,qh; MeasureLine(quoteLine,PANEL_FONT_SIZE,qw,qh);
+      width=(int)MathMax(width,qw+2*pad+4); rowH=(int)MathMax(rowH,qh+6);
    }
    // Supported charts reserve three header rows, then the three lanes.
    // On a closed or abnormal market row 2 carries the market detail.
-   int height = 2 * pad + (supported ? (HEADER_ROWS + 3) : 2) * rowH;
+   int height = 2 * pad + (supported ? (HEADER_ROWS + 10 + (InpShowDetails ? 3 : 0)) : 2) * rowH;
 
    MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
    int x = PANEL_X + pad;
@@ -678,6 +722,17 @@ void UpdatePanel()
       string name = "lane" + IntegerToString(i);
       MakeTextLine(name, PANEL_X + pad, y + rowH * (HEADER_ROWS + i),
                    supported ? P2Line(i) : "", clrSilver, PANEL_FONT_SIZE);
+   }
+   for(int i=0;i<3;i++)
+      MakeTextLine("plan"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+3+i),
+                   supported?plans[i]:"",clrSilver,PANEL_FONT_SIZE);
+   MakeTextLine("quotes",PANEL_X+pad,y+rowH*(HEADER_ROWS+6),supported?quoteLine:"",clrSilver,PANEL_FONT_SIZE);
+   for(int i=0;i<3;i++)
+   {
+      MakeTextLine("diary"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+7+i),
+                   supported?diaryLines[i]:"",clrSilver,PANEL_FONT_SIZE);
+      MakeTextLine("history"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+10+i),
+                   supported && InpShowDetails?diaryDetails[i]:"",clrSilver,PANEL_FONT_SIZE);
    }
    ChartRedraw();
 }
@@ -1265,6 +1320,7 @@ string P2Line(int lane)
 
 void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
 {
+   P3Invalidate(lane);
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
    int limit = P2HistoryLimit();
@@ -1400,6 +1456,7 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
                      " | ST: " + P2StateText(status[last]) + " | RG: " + rg + " | PT: " + ptext +
                      " | SC: " + scoreText;
    g_p2[lane].lastBar = latest;
+   P3Remember(lane,gt[last],ct[last],status[last],score[last],rg,latest,rates,score,gt,ct,status);
    // Request deeper history if needed, up to the terminal's own limit.
    // A partial download or failed larger request is retried on later events.
    g_p2[lane].retry = (gt[last] == P2_WAIT || ct[last] == P2_WAIT ||

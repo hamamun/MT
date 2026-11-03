@@ -147,3 +147,84 @@ Retain dynamic panel sizing and the Phase 1 market-state details; the final layo
 **Phase 2 status: Complete.** Trend detection, compact layout, ST rules, per-timeframe SimpleEA RG, SimpleEA SC, PT and the separate score-life percentage and reset rules are implemented. MT requests required history; insufficient or invalid readings are WAIT, unavailable duration estimates are `--`, and no fallback regime is permitted. Phase 2 is informational and does not authorize trading.
 
 **Verification note:** Automated source-level regression tests passed. The user reported a MetaEditor build with zero errors and one warning; the warning has been addressed in the source, but a subsequent MetaEditor compilation has not been confirmed. Live MT5/broker runtime validation has not been confirmed. Completion does not imply that the duration estimates or trading outcomes are validated.
+
+## Phase 3, Part 1 — agreed specification
+
+**Status: initial implementation integrated; verification pending.** Part 1 is an informational plan, not authorization to send orders. The user delegated the detailed entry, SL and single-TP formulas and fallbacks for research, design and testing; initial rules are implemented but are not yet out-of-sample validated. This specification does not change the completed Phase 1/2 implementation.
+
+### Display and signals
+
+Show three independent plans for the chart symbol, one each for M5, M15 and M30, while retaining the Phase 2 readings and dynamically sized panel. Each plan shows `Signal: BUY/SELL/NONE`, entry type and price, lot, SL price and estimated monetary loss, and **one** TP price and estimated monetary gain. Show current Bid and Ask on the panel for eventual autotrading use. The panel layout includes separate plan and diary rows.
+
+Each timeframe has a `Trend to follow` input with four choices: `Auto` (default), `Follow CT`, `Follow GT`, and `Follow ST`. In Auto, the selected reference is M5 CT, M15 ST and M30 GT. The originally agreed aligned BUY rules are:
+
+| Timeframe | Aligned Auto condition |
+|---|---|
+| M5 | CT UP and SC at least +2 |
+| M15 | ST UP and SC at least +2 |
+| M30 | GT UP, SC at least +2, and ST not CONFLICT |
+
+SELL reverses UP/DOWN and requires SC at most -2. The user subsequently requested a separate `Allow buy/sell against trend` Boolean for **each** timeframe, default **true**. When false, an opposing selected directional trend must not be accepted; the Auto conditions above describe the aligned case. When true, an opposing selected directional trend must not, by itself, prevent a score-qualified signal: for example, selected GT UP with SC -2 can indicate SELL. Thus the original aligned conditions cannot be treated as an unconditional default veto when the new switch is true. Preserve the score threshold and do not silently replace a SELL with a BUY, or vice versa.
+
+For a score-qualified M30 countertrend signal, the original Auto ST CONFLICT guard cannot be used to veto the signal when the new M30 switch is true; otherwise the switch would not allow that countertrend case. The guard was redundant only in the originally aligned M30 rule with the current score formula. For a valid non-directional selected reading (FLAT, MIXED or CONFLICT), use the score direction when `Allow buy/sell against trend` is true; when false, require a matching directional selected reading and otherwise show NONE. A required unavailable reading is not a valid neutral reading and must be handled as unavailable, not silently converted into FLAT. `NONE` means valid readings but no qualifying direction; missing required readings are not the same as NONE.
+
+### Entry
+
+For a directional signal, score +3/-3 selects market entry, with BUY referenced to current Ask and SELL to current Bid. Score +2/-2 selects a calculated BUY LIMIT/SELL LIMIT. The user requires an entry proposal when a signal exists; absence of a preferred swing alone must not cause plan WAIT or a switch to market. The initial implementation uses a structure-based level with a calculated fallback based on the same timeframe's recent movement; the method remains subject to validation. Entry must account for tick size and broker distance requirements. If essential quote or symbol information is truly unavailable, do not fabricate a usable price; retain the signal and indicate the missing data. Limit entries may not fill and quotes can change.
+
+### SL and single TP
+
+Part 1 uses **one TP only**, not SimpleEA's TP1/TP2/TP3 ladder. Research and define a structure-aware SL and a target based on achievable historical price movement for each timeframe. M5 is intended for comparatively short scalping opportunities; M15/M30 are intended to accommodate longer moves, but arbitrary distances and guaranteed ordering across timeframes are not approved. Avoid blindly copying ATR multipliers, SimpleEA thresholds, or a fixed reward/risk ratio. An initial historical-observation method uses already available closed bars, with no training or wait for live trade outcomes. It still requires out-of-sample tests including costs and limit non-fills; the rules and fallback behavior are not yet validated.
+
+### Lot and risk
+
+Normal sizing targets **0.5% of account equity per plan**, so three simultaneously active plans target approximately 1.5% combined, not 0.5% combined. Round down to a permitted broker volume; if the calculated size is below the symbol's minimum, still advise the broker minimum instead of blocking the signal. Do not show a separate risk-over-budget warning. Broker volume maximum and step also apply. Actual losses may exceed estimates, including through slippage, gaps, costs or the minimum-lot exception.
+
+The user requested `Bypass risk` as a Boolean input, default false, and delegated the necessary bypass sizing calculation to MT, suggesting SimpleEA as a reference. The selected initial internal bypass policy is SimpleEA's balance-based ladder: 0.01 lot per 1,000 account-balance units, multiplied by 1.5 at absolute score 3 before broker-volume normalization. This does not apply the 0.5% SL risk budget; verify symbol, currency and volume handling during development. The user also confirmed `Minimum lot use`, Boolean default false: when true, always advise the broker's symbol minimum, overriding normal or bypass sizing even when the calculated lot is larger. This forced-minimum input is separate from the automatic broker-minimum fallback, which applies in either mode. No separate risk or mode warning is requested; future header input visibility is a separate later task.
+
+### Monetary figures and verification
+
+Estimate entry-to-SL loss and entry-to-TP gain for the calculated lot in the account's actual currency (USD where applicable), using MT5 symbol/contract information, for example `OrderCalcProfit`. Label them estimates; costs, slippage, gaps, conversion changes and execution differences can affect actual outcomes. A plan is informational and does not guarantee broker acceptance or trading profitability.
+
+An initial signal, price-plan and sizing implementation is now connected to `MT.mq5`. The closed-bar target replay and fallback are initial research choices; independent out-of-sample validation and actual MetaEditor/MT5 verification are still outstanding.
+
+### Delegated entry and exit research
+
+The user delegated the design and testing of the entry, SL and single-TP calculations, including fallbacks, to MT, with SimpleEA as an important reference. Develop toward more achievable entries and TP while avoiding unnecessary blockers. Prefer a valid confirmed pullback level for score-2 limit entry and research a fallback from recent closed-bar pullbacks on the same timeframe. For SL, consider a confirmed invalidation level with a spread/tick buffer and a recent-price-movement fallback if structure is unavailable. For the single TP, study comparable historical favorable movement before SL, current opposing structure and costs. These are research directions, not finished formulas: define sparse-history behavior and feasibility safeguards and test out of sample. No training or live outcome accumulation should be required.
+
+### Relationship between trend readings and score
+
+The current score is CT sign plus two separate -1/0/+1 components. Thus CT FLAT allows at most an absolute score of 2; GT FLAT can coexist with an absolute score of 2 or 3. ST FLAT (both GT and CT FLAT) can coexist with an absolute score of 2, not 3. ST MIXED can coexist with 2 or 3 when CT is directional and GT FLAT; if CT is FLAT, the maximum is 2. ST CONFLICT can coexist with 2 or 3, but a qualifying score must have the same direction as CT and therefore oppose GT. These are properties of the current formula, not independent evidence or guaranteed trade outcomes.
+
+## Phase 3, Part 2 — actual-market signal diary
+
+**Status: initial implementation integrated; verification pending.** The user wants a diary collecting MT5 analytical data for possible future self-tuning once sufficiently mature. Part 2 does not place orders or automatically tune parameters. On the panel show today and all-time signal/win/loss counts for each M5, M15 and M30 lane of the current symbol. `Show details` is Boolean, default false, and controls detailed visibility only; recording continues when details are hidden.
+
+### Source and outcomes
+
+The user explicitly rejects virtual trading and wants **actual observed market data**, not fabricated or simulated price paths. Part 1 has no order execution: a diary win or loss therefore means an **observed plan/price outcome**, not profit or loss of a broker-executed trade. Use actual broker quote/tick data after a signal plan is recorded; for limit entry record whether the executable-side entry price was touched, not that an order filled. For market plans record the actual available quote used as the indicative entry. Track the appropriate market side for the symbol and direction, and only record an SL/TP outcome after an observed or reliably reconstructed entry event. Label uncertain, incomplete, unfilled and still-open cases separately; do not silently turn them into wins or losses. Missing ticks, restart and ambiguous ordering must not lead to invented outcomes. Specify recovery and tick-coverage safeguards before implementation.
+
+If actual trading is added later, broker orders, deals, fills, realised P/L, commissions and slippage must be separately identified and reconciled; an observed price touch is not itself a broker execution.
+
+### Counting and display
+
+- Scope the records to the current symbol, broker/account and timeframe, so unrelated symbols and accounts are not pooled. Compare instruments separately before considering broader analysis.
+- Today uses the broker-server calendar day. Count signals on the day of the signal, wins and losses on the day of resolution; overnight outcomes may make these daily numbers differ. All-time means since reliable diary collection began, not an invented pre-diary history.
+- Record uniquely identified signal ideas, not every tick or panel refresh; freeze the original planned entry/SL/TP and context so later panel updates do not rewrite what was evaluated. The initial rule records a new idea when the direction changes or returns from NONE. A continuing direction is not re-counted. A pending observation expires when its signal changes or becomes NONE; an already entered observation continues to its frozen target or stop.
+- Keep awaiting-data, unfilled/pending, open, expired, unavailable and unknown outcomes distinguishable; do not count them as wins or losses. These outcomes are never silently counted as wins or losses.
+
+### Detail data, persistence and future analysis
+
+Record enough context for later analysis, including signal timestamp, timeframe, direction, score and GT/CT/ST/RG, entry type and planned prices, lot, spread and relevant settings, observable entry/exit events, price outcome, time-to-event, costs where actually known, strategy version and data quality. Do not claim fees or actual broker executions for observational records. Store summaries/events rather than an unbounded tick stream by default.
+
+Use durable versioned storage with safe writes and restart recovery. Prevent duplicate records and conflicting writes when multiple charts run; isolate account/symbol and live/tester records. Preserve unreadable, ambiguous or incomplete data rather than overwriting or fabricating a result. `Show details=false` must not stop collection.
+
+The diary is intended to support future per-symbol/timeframe and regime analysis and possible self-tuning after sufficient evidence. Automatic adjustment is a separate later design: research measurement quality and costs, forward/out-of-sample evaluation, evidence requirements, bounded changes and rollback. No specific tuning policy or automatic changes are approved yet. Part 1 signals do not need to wait for diary maturity.
+
+### Implementation progress and remaining verification
+
+The initial implementation now connects the plan and observed-quote diary to the panel and inputs. The limit fallback uses the median recent opposite-direction bar move when no valid pivot is available; the stop uses confirmed structure or a recent-move fallback. The TP uses the median risk-normalized pre-stop excursion of at least 20 completed same-score bar analogues (4/6/8-bar horizons), or recent movement if unavailable, with opposing structure used where compatible with broker constraints. Replay uses closed-bar spread proxies and conservative same-bar ordering, not actual fills. It is applied only when MT5 reports Bid-based bars; Last or unknown bar-price types use the recent-movement fallback and display a Last/unknown proxy label. Current-chart pivots from such bars are technical proxies, not reconstructed Bid history. These policy choices are not out-of-sample validated.
+
+The diary counts one new idea when the signal direction changes or returns from NONE; a continuing signal is not counted repeatedly. If a plan or tick snapshot is unavailable at signal time, the record is AWAIT DATA and may activate later using a current actual quote while the signal direction remains current. Original signal context/time and later plan context/start time are stored separately; no earlier touch is inferred. Awaiting and frozen pending observations expire when the lane signal changes or becomes NONE; already entered observations continue independently. Open and pending observations are marked UNKNOWN after restart (including MT5 input changes), disconnection, detected tick-history gaps or a tick-history endpoint that does not match the sampled quote; outcome tracking uses available actual broker ticks and does not claim broker fills. Live diary storage uses a per-account/server/symbol single-writer lock, versioned binary snapshot and separate tester storage. Version-3 and version-4 records migrate to version 5; version-3 Bid/Last bar provenance remains unknown. `Show details` shows the latest recorded observation per lane.
+
+Automated C++ stub tests exercise plan kernels/runtime, panel and diary kernels/runtime including file corruption and restart. Tree-sitter grammar parsing has passed, but neither is native MQL compilation or live-broker verification. Actual MetaEditor compilation, tick coverage, file locking/persistence behavior, account conversion and out-of-sample strategy performance require confirmation before this phase can be called verified.

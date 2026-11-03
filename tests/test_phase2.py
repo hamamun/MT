@@ -45,6 +45,8 @@ using ENUM_TIMEFRAMES=int;
 struct MqlRates {datetime time; double open,high,low,close;};
 struct P2Countdown {bool loaded=false,valid=false;int label=0,age=0,remaining=0;datetime anchor=0;};
 struct P2Lane {string line;datetime lastBar=0,attemptedBar=0;ulong lastAttempt=0;int requested=0,lastGoodRequest=0;bool retry=false;P2Countdown pt,score;};
+void P3Invalidate(int){}
+void P3Remember(int,int,int,int,int,string,datetime,const vector<MqlRates>&,const vector<int>&,const vector<int>&,const vector<int>&,const vector<int>&){}
 P2Lane g_p2[3]; string _Symbol="TEST"; vector<MqlRates> feed; map<string,double> globals;
 ulong ticks=100000; int copyCalls=0; int maxBars=100001, maxCopy=2147483647;
 template<class T> int ArraySize(const vector<T>& v){return (int)v.size();}
