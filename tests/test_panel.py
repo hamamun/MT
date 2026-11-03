@@ -46,6 +46,7 @@ bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{}; return true;}
 long SymbolInfoInteger(string,int){return 2;}
 string DoubleToString(double x,int){return to_string(x);}
 string P3PlanLine(int i){return string("plan ")+to_string(i)+string(80,'x');}
+string P4Line(int i){return "auto "+to_string(i)+string(90,'z');}
 bool InpShowDetails=false;
 string P3DiarySummary(int i,datetime){return "diary "+to_string(i);}
 string P3DiaryDetail(int i){return "detail "+to_string(i);}
@@ -91,7 +92,9 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("suffix").find("2026.11.02")!=string::npos,"open clock");
  check(Combined("detail").empty(),"open detail and second row blank");
  check(Combined("plan0").find("plan 0")==0 && Combined("quotes").find("Bid:")==0,"phase 3 plan and quote rows");
- check(Combined("diary0")=="diary 0" && Combined("history0").empty(),"diary summary and hidden details");
+ check(Combined("auto0")=="auto 0"+string(90,'z') && Combined("diary0")=="diary 0" && Combined("history0").empty(),"auto rows, diary summary and hidden details");
+ check(labels.count("auto0_1") && labels["auto0_1"].text.size()<=48,"long auto rows are segmented");
+ check(labels["auto0_0"].y<labels["diary0_0"].y,"auto rows appear above diary");
  InpShowDetails=true;UpdatePanel();check(Combined("history0")=="detail 0" && boxH>openH,"details increase height");
  InpShowDetails=false;UpdatePanel();check(Combined("history0").empty() && boxH==openH,"details removed");
  check(labels.count("lane0_0") && labels.count("lane1_0") && labels.count("lane2_0"),"three lanes shown");
@@ -126,7 +129,7 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("state").empty() && Combined("suffix").empty(),"unsupported suppresses market fields");
  check(boxH<openH,"unsupported notice height shrinks");
  check(Combined("lane0").empty() && Combined("lane2").empty(),"unsupported removes all lane segments");
- check(Combined("plan0").empty() && Combined("quotes").empty(),"unsupported removes plan and quote segments");
+ check(Combined("plan0").empty() && Combined("quotes").empty() && Combined("auto0").empty(),"unsupported removes plan, quote and auto segments");
  _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();
  check(Combined("detail").empty(),"notice removed after supported chart");
  check(boxW==openW && boxH==openH,"panel resizes back");
