@@ -54,10 +54,12 @@ void P4ResetLane(int lane)
    g_p4[lane].modEntry=0; g_p4[lane].modSL=0; g_p4[lane].modTP=0;
 }
 
-// Preserve the expiry/upgrade cooldown across broker-confirmed closure.
-void P4Clear(int lane)
+// Keep the lane idle until its next bar after a confirmed trade/cancellation.
+// A definite rejected request is not an ended trade and does not start a wait.
+void P4Clear(int lane, bool waitForNewBar=false)
 {
-   int cooldown=g_p4[lane].cooldown, waitDirection=g_p4[lane].waitDirection;
+   int cooldown=waitForNewBar?2:g_p4[lane].cooldown;
+   int waitDirection=waitForNewBar?g_p4[lane].direction:g_p4[lane].waitDirection;
    P4ResetLane(lane);
    if(cooldown!=0)
    {
@@ -133,6 +135,9 @@ bool P4Load()
          (g_p4[i].modifying!=0 && (!P3Positive(g_p4[i].modEntry) || !P3Positive(g_p4[i].modSL) || !P3Positive(g_p4[i].modTP))) ||
          (g_p4[i].active==0 && (g_p4[i].direction!=0 || g_p4[i].cancel!=0 || order!=0 || position!=0 || g_p4[i].modifying!=0)))
       { FileClose(h); return(false); }
+      // Earlier journals used 1 for same-direction-only expiry waits.
+      // The new rule waits for the next bar for either direction.
+      if(g_p4[i].cooldown==1) g_p4[i].cooldown=2;
       g_p4[i].order=(ulong)order; g_p4[i].position=(ulong)position;
    }
    bool ok=(GetLastError()==0 && FileTell(h)==FileSize(h)); FileClose(h); return(ok);
@@ -275,15 +280,15 @@ bool P4PositionHasOrder(ulong position, ulong order)
    return(false);
 }
 
-bool P4JournalEnded(int lane, string &reason)
+bool P4JournalEnded(int lane, string &reason, bool &waitForNewBar)
 {
    P4Journal s=g_p4[lane];
-   reason="";
+   reason=""; waitForNewBar=false;
    if(s.order==0)
    {
       if(s.position==0) { reason="REVIEW: no order ticket"; return(false); }
       if(!P4PositionClosed(s.position)) { reason="REVIEW: position history incomplete"; return(false); }
-      return(true);
+      waitForNewBar=true; return(true);
    }
    if(!P4Connected()) { reason="REVIEW: order history unavailable"; return(false); }
    bool historySelected=false;
@@ -302,6 +307,9 @@ bool P4JournalEnded(int lane, string &reason)
       state!=ORDER_STATE_REJECTED && state!=ORDER_STATE_FILLED)
    { reason="REVIEW: order not final"; return(false); }
    ulong id=(ulong)position;
+   // All confirmed position closures and pending cancellations wait; an
+   // unfilled rejection still follows the normal request-retry policy.
+   waitForNewBar=(state!=ORDER_STATE_REJECTED || id>0 || s.position>0);
    if(s.position>0 && id>0 && id!=s.position)
    { reason="REVIEW: position ID mismatch"; return(false); }
    if(id>0)
@@ -340,6 +348,7 @@ bool P4JournalEnded(int lane, string &reason)
          !P4OrderPosition(s.order,dealPosition,filled) || MathAbs(filled-(initial-remaining))>1e-8 ||
          !P4PositionReconciled(dealPosition,s.order))
       { reason="REVIEW: partial fill unconfirmed"; return(false); }
+      waitForNewBar=true; // even a rejected remainder can have filled earlier
    }
    return(true);
 }
@@ -429,12 +438,12 @@ void P4Refresh(int lane)
    if(orders>0 && orderPending && g_p4[lane].birthBar==-1)
    {
       g_p4[lane].birthBar=iTime(_Symbol,P3Timeframe(lane),0);
-      if(g_p4[lane].birthBar<=0) { g_p4[lane].birthBar=0; g_p4[lane].cancel=1; g_p4[lane].cooldown=1; g_p4[lane].waitDirection=g_p4[lane].direction; }
+      if(g_p4[lane].birthBar<=0) { g_p4[lane].birthBar=0; g_p4[lane].cancel=1; g_p4[lane].cooldown=2; g_p4[lane].waitDirection=g_p4[lane].direction; }
       changed=true;
    }
    if(orders>0 && orderPending && g_p4[lane].birthBar==0 &&
       (g_p4[lane].cancel==0 || g_p4[lane].cooldown==0))
-   { g_p4[lane].cancel=1; g_p4[lane].cooldown=1; g_p4[lane].waitDirection=g_p4[lane].direction; changed=true; }
+   { g_p4[lane].cancel=1; g_p4[lane].cooldown=2; g_p4[lane].waitDirection=g_p4[lane].direction; changed=true; }
    if(g_p4[lane].modifying!=0 && orders>0 && orderPending)
    {
       double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
@@ -472,10 +481,10 @@ void P4Refresh(int lane)
    }
    else if(g_p4[lane].active!=0)
    {
-      string reason="";
-      if(P4JournalEnded(lane,reason))
+      string reason=""; bool waitForNewBar=false;
+      if(P4JournalEnded(lane,reason,waitForNewBar))
       {
-         P4Clear(lane);
+         P4Clear(lane,waitForNewBar);
          if(!P4Persist()) { v.state=P4_UNCERTAIN; v.note="Journal unavailable"; }
       }
       else { v.state=P4_UNCERTAIN; v.note=reason; }
@@ -664,16 +673,10 @@ int P4PendingAge(int lane)
    return(iBarShift(_Symbol,P3Timeframe(lane),g_p4[lane].birthBar,true));
 }
 
-bool P4CooldownReady(int lane, int direction)
+bool P4CooldownReady(int lane)
 {
    if(g_p4[lane].cooldown==0) return(true);
-   // Expiry blocks a repeat of the same signal; upgrade blocks all new orders
-   // until the next own-bar close, as requested for limit-to-market changes.
-   if(g_p4[lane].cooldown==1 && (direction==1 || direction==-1) && direction!=g_p4[lane].waitDirection)
-   {
-      g_p4[lane].cooldown=0; g_p4[lane].waitDirection=0; g_p4[lane].waitBar=0;
-      return(P4Persist());
-   }
+   // Any replacement uses the plan from a later close of this lane.
    datetime closed=iTime(_Symbol,P3Timeframe(lane),1);
    if(closed<=0) return(false);
    if(g_p4[lane].waitBar<=0)
@@ -775,9 +778,8 @@ string P4EntryReason(int lane, const P3Plan &plan, bool hedging)
       return("Plan data unavailable");
    if(g_p4[lane].cooldown!=0)
    {
-      bool opposite=(g_p4[lane].cooldown==1 && plan.signal!=g_p4[lane].waitDirection);
-      if(!opposite && (g_p4[lane].waitBar<=0 ||
-         iBarShift(_Symbol,P3Timeframe(lane),g_p4[lane].waitBar,true)<2))
+      if(g_p4[lane].waitBar<=0 ||
+         iBarShift(_Symbol,P3Timeframe(lane),g_p4[lane].waitBar,true)<2)
          return("Waiting for next closed bar");
    }
    MqlTick q;
@@ -827,10 +829,9 @@ void P4Process(bool allowEntry)
                       g_p3[lane].score==3*g_p4View[lane].direction;
          if(age<0 || age>=3 || upgrade)
          {
-            int cooldown=upgrade?2:1;
-            if(g_p4[lane].cooldown<cooldown)
+            if(g_p4[lane].cooldown!=2)
             {
-               g_p4[lane].cooldown=cooldown; g_p4[lane].waitDirection=g_p4[lane].direction;
+               g_p4[lane].cooldown=2; g_p4[lane].waitDirection=g_p4[lane].direction;
                if(!P4Persist()) return;
             }
             action=P4_CANCEL_REMAINDER;
@@ -861,7 +862,11 @@ void P4Process(bool allowEntry)
          // The persisted intent survives a restart, but its original reason
          // is not journalled. Do not infer it from today's signal.
          if(hadCancel && g_p4CancelNote[lane]=="") cancelWhy="";
-         if(g_p4[lane].cancel==0) { g_p4[lane].cancel=1; if(!P4Persist()) return; }
+         if(g_p4[lane].cancel==0 || g_p4[lane].cooldown!=2)
+         {
+            g_p4[lane].cancel=1; g_p4[lane].cooldown=2; g_p4[lane].waitDirection=g_p4[lane].direction;
+            if(!P4Persist()) return;
+         }
          if(g_p4CancelNote[lane]=="")
          {
             if(cancelWhy!="") g_p4CancelNote[lane]=cancelWhy;
@@ -886,14 +891,14 @@ void P4Process(bool allowEntry)
          // initialize its cooldown on the first later eligible tick.
          if(why=="Waiting for next closed bar" && allowEntry && action==P4_PLACE && g_p4[lane].waitBar<=0)
          {
-            P4CooldownReady(lane,plan.signal);
+            P4CooldownReady(lane);
             if(!g_p4Ready) return;
          }
          bool priorCheck=(why!="" && why==g_p4CheckNote[lane]);
          if(why!="" && !priorCheck) g_p4View[lane].note=why;
          else if(action==P4_PLACE && allowEntry)
          {
-            if(!P4CooldownReady(lane,plan.signal))
+            if(!P4CooldownReady(lane))
                g_p4View[lane].note="Waiting for next closed bar";
             else if(!g_p4Ready) return;
             else
@@ -989,7 +994,7 @@ string P4Explain(const string note)
    if(StringFind(note,"Signal WAIT: cancel pending")>=0) return("This timeframe's signal is WAIT, so MT requests cancellation of its pending limit.");
    if(StringFind(note,"No signal: cancel pending")>=0 || StringFind(note,"Signal changed: cancel pending")>=0) return("The signal no longer matches the pending limit, so MT requests cancellation.");
    if(StringFind(note,"Market upgrade: cancel pending")>=0) return("The signal upgraded to a market plan; MT cancels the old limit and waits for a later timeframe close before replacement.");
-   if(StringFind(note,"Pending age unavailable: cancel")>=0 || StringFind(note,"Pending expired: cancel")>=0) return("The pending limit is too old or its age cannot be verified. MT requests cancellation and applies the re-entry cooldown.");
+   if(StringFind(note,"Pending age unavailable: cancel")>=0 || StringFind(note,"Pending expired: cancel")>=0) return("The pending limit is too old or its age cannot be verified. MT requests cancellation and waits for a later timeframe close after confirmation.");
    if(StringFind(note,"Pending lot differs from allowed")>=0) return("The existing limit's lot does not meet the new plan's allowed size. MT requests cancellation rather than changing the volume.");
    if(StringFind(note,"Pending update:")>=0) return("The new pending plan failed a live-quote, SL/TP or broker-distance check. MT requests cancellation; the row gives the specific reason.");
    if(StringFind(note,"Pending volume step unavailable")>=0 || StringFind(note,"Pending price tick unavailable")>=0 || StringFind(note,"Pending volume/identity uncertain")>=0) return("MT cannot safely verify the pending order's broker properties. It requests cancellation.");
@@ -1002,7 +1007,7 @@ string P4Explain(const string note)
    if(note=="Trading permission unavailable") return("The terminal, EA or account does not currently permit trading, or is disconnected.");
    if(note=="Market not open") return("MT's market-state check is not OPEN, so it will not place a new order.");
    if(note=="Plan data unavailable") return("A complete valid frozen entry, lot, SL and TP matching the signal is unavailable.");
-   if(note=="Waiting for next closed bar") return("A prior expiry or market upgrade requires a later close of this timeframe before re-entry.");
+   if(note=="Waiting for next closed bar") return("After broker confirmation of a cancellation or position closure, MT waits for the next close of this timeframe and its new plan.");
    if(note=="Fresh quote unavailable") return("MT cannot obtain a valid recent Bid and Ask for this symbol.");
    if(note=="BUY limit not below Ask") return("A BUY limit entry must be below the current Ask. MT does not move the frozen entry to chase price.");
    if(note=="SELL limit not above Bid") return("A SELL limit entry must be above the current Bid. MT does not move the frozen entry to chase price.");

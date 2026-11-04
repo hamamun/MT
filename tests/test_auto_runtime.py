@@ -277,10 +277,14 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  plans[1].signal=P3_WAIT;permission=false;P4Process(false);check(g_p4[1].cancel && cancels==0,"WAIT latches cancellation when permission unavailable");
  plans[1].signal=-1;permission=true;uptime+=6000;P4Process(false);check(cancels==1 && orders.empty(),"sticky cancellation on signal change");
  P4Process(false);check(!g_p4[1].active && positions.size()==1,"broker confirms cancellation without closing position");
- plans[1]={-1,true,false,100.5,102,99,0.05};uptime+=6000;P4Process(true);P4Process(true);check(g_p4View[1].state==P4_PENDING,"same signal can place again after cancellation");
+ plans[1]={-1,true,false,100.5,102,99,0.05};uptime+=6000;P4Process(true);
+ check(sends==2 && P4Line(1).find("Waiting for next closed bar")!=string::npos,"same signal waits after cancellation");
+ laneBars[1].push_back(1002);plans[1].bar=1001;P4Process(true);P4Process(true);check(g_p4View[1].state==P4_PENDING,"same signal can place after a new own bar");
  InpAutoTrading=false;uptime+=6000;P4Process(false);P4Process(false);check(cancels==2 && positions.size()==1 && sends==3,"off cancels limits and preserves open position");
  InpAutoTrading=true;plans[1].signal=0;auto first=positions[0];deals.push_back({first.id,DEAL_ENTRY_OUT,first.lot});positions.clear();uptime+=6000;P4Process(true);
- check(sends==4 && positions.size()==1,"confirmed closure permits re-entry on same signal");
+ check(sends==3 && positions.empty() && P4Line(0).find("Waiting for next closed bar")!=string::npos,"confirmed closure waits before same-signal re-entry");
+ laneBars[0].push_back(1002);plans[0].bar=1001;P4Process(true);
+ check(sends==4 && positions.size()==1,"next own bar permits re-entry on same signal");
  P4Process(false);check(g_p4View[0].state==P4_OPEN,"re-entry confirmed open");
  plans[2]={1,true,true,100.02,99,101,0.05};g_p3[2].score=3;sendMode=1;uptime+=6000;P4Process(true);
  check(g_p4[2].active && g_p4[2].order==0,"ambiguous result remains journaled");int before=sends;P4Close();P4Init();uptime+=6000;P4Process(true);
@@ -402,12 +406,14 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  P4Close();P4Init();P4Process(true);check(sends==1 && g_p4[0].cooldown,"expiry cooldown survives restart");
  laneBars[0].push_back(5003);plans[0].bar=5002;uptime+=6000;P4Process(true);
  check(sends==2 && !g_p4[0].cooldown,"subsequent own-lane close permits repeat");
- // Expiry only delays the same signal; a confirmed opposite signal may enter.
+ // After expiry any replacement, including an opposite signal, waits for a new bar.
  resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
  laneBars[0].insert(laneBars[0].end(),{1002,1003,1004});plans[0].bar=1003;uptime+=6000;P4Process(false);P4Process(false);
- check(g_p4[0].cooldown==1 && !g_p4[0].active,"expiry preserves original direction for same-signal cooldown");
+ check(g_p4[0].cooldown==2 && !g_p4[0].active,"expiry waits for any direction");
  plans[0]={-1,true,true,100,101,99,0.05,1003};g_p3[0].score=-3;uptime+=6000;P4Process(true);
- check(sends==2 && positions.size()==1,"confirmed opposite signal is not delayed by expiry cooldown");
+ check(sends==1 && positions.empty() && P4Line(0).find("Waiting for next closed bar")!=string::npos,"opposite signal waits after expiry");
+ laneBars[0].push_back(1005);plans[0].bar=1004;uptime+=6000;P4Process(true);
+ check(sends==2 && positions.size()==1,"opposite signal can enter after the next own bar");
  // If the birth bar cannot be found, do not silently reset the order age.
  resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
  laneBars[0]={3000,3001};plans[0].bar=3000;uptime+=6000;P4Process(false);
@@ -501,12 +507,14 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(!g_p4[0].active && g_p4[1].active && !g_p4[2].active,"only complete own-order deal histories clear their lanes");
  check(P4Line(0)=="M5 | Auto: OFF" && P4Line(1).find("fill not confirmed closed")!=string::npos && P4Line(2)=="M30 | Auto: OFF","recovered closure and incomplete exit labels stay separate");
  deals[3].vol=0.04;uptime+=5000;P4Process(false);check(!g_p4[1].active,"completed later exit reconciles on retry");
- // Once the old fill is proven closed, the lane may use its valid current signal.
+ // Once the old fill is proven closed, the lane waits for a new plan.
  resetWorld();current={100,100.02,terminalTime};InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;
  g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=718;
  h=Order{};h.ticket=718;h.state=ORDER_STATE_FILLED;h.initial=0.05;history[718]=h;
  deals={{918,DEAL_ENTRY_IN,0.05,718},{918,DEAL_ENTRY_OUT,0.05,799}};
- P4Process(true);P4Process(false);check(sends==1 && positions.size()==1 && g_p4View[0].state==P4_OPEN,"confirmed closed fill releases lane for new signal");
+ P4Process(true);P4Process(false);check(sends==0 && positions.empty() && P4Line(0).find("Waiting for next closed bar")!=string::npos,"confirmed closed fill waits for a fresh plan");
+ laneBars[0].push_back(1002);plans[0].bar=1001;P4Process(true);P4Process(false);
+ check(sends==1 && positions.size()==1 && g_p4View[0].state==P4_OPEN,"new own-timeframe plan permits re-entry");
  // A seemingly closed subset of the filled order is not the whole fill.
  resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=719;
  h=Order{};h.ticket=719;h.state=ORDER_STATE_FILLED;h.initial=0.05;history[719]=h;
@@ -610,6 +618,59 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  for(auto &note:notes)check(P4Explain(note)!="Check the auto-trading row, broker orders and MT5 Experts log for details.","auto status has a specific tooltip");
  check(P4Explain("Order check: 10019 pending target does not clear spread; Pending modification check: 10019").find("pre-check failed")!=string::npos,"broker comment cannot replace check tooltip with unrelated warning");
  check(P4Explain("Pending modification check: 10019 target does not clear spread").find("pre-check")!=string::npos,"broker modification comment cannot replace check tooltip");
+ // Closed positions wait independently for each lane's next bar and plan.
+ resetWorld();current={100,100.02,terminalTime};InpAutoTrading=true;
+ plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;
+ plans[1]={-1,true,true,100,101,99,0.03};g_p3[1].score=-3;
+ P4Process(true);P4Process(false);check(sends==2 && positions.size()==2,"two independent positions opened");
+ for(auto &pos:positions){deals.push_back({pos.id,DEAL_ENTRY_OUT,pos.lot});}positions.clear();
+ plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;
+ P4Process(false);
+ check(P4Line(0).find("Waiting for next closed bar")!=string::npos && P4Line(1).find("Waiting for next closed bar")!=string::npos && P4Tooltip(0).find("position closure")!=string::npos,"closed positions show a new-bar wait per timeframe");
+ P4Close();P4Init();P4Process(true);check(sends==2 && positions.empty(),"closure wait survives restart for both directions");
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].stop=98.8;plans[0].target=100.8;uptime+=6000;P4Process(true);P4Process(false);
+ check(sends==3 && orders.size()==1 && lastRequest.action==TRADE_ACTION_PENDING && abs(lastRequest.price-99.7)<1e-9 && abs(lastRequest.tp-100.8)<1e-9,"M5 new-bar limit uses refreshed plan");
+ check(P4Line(1).find("Waiting for next closed bar")!=string::npos,"M5 bar does not release M15 wait");
+ laneBars[1].push_back(1002);plans[1].bar=1001;plans[1].stop=101.2;plans[1].target=99.2;uptime+=6000;P4Process(true);P4Process(false);
+ check(sends==4 && positions.size()==1 && lastRequest.action==TRADE_ACTION_DEAL && lastRequest.type==ORDER_TYPE_SELL && abs(lastRequest.sl-101.2)<1e-9 && abs(lastRequest.tp-99.2)<1e-9,"M15 new-bar market request uses refreshed exits");
+ // A filled limit is an open position; do not replace it on later bars.
+ // Once it closes, start a fresh wait, independent of its original fill bar.
+ resetWorld();current={100,100.02,terminalTime};InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ h=orders[0];orders.clear();h.position=980;h.state=ORDER_STATE_FILLED;history[h.ticket]=h;
+ part=Position{};part.id=980;part.ticket=1980;part.magic=P4Magic(0);part.type=POSITION_TYPE_BUY;part.entry=99.9;part.sl=99;part.tp=101;part.lot=0.05;part.symbol=_Symbol;part.comment="MT4-M5";positions.push_back(part);deals={{980,DEAL_ENTRY_IN,0.05,h.ticket}};
+ P4Process(false);check(P4Line(0).find("BUY OPEN")!=string::npos,"filled limit becomes an open position");
+ laneBars[0].push_back(1002);plans[0].bar=1001;uptime+=6000;P4Process(true);
+ check(sends==1 && positions.size()==1,"no replacement while filled position remains open");
+ deals.push_back({980,DEAL_ENTRY_OUT,0.05,999});positions.clear();uptime+=6000;P4Process(true);
+ check(sends==1 && P4Line(0).find("Waiting for next closed bar")!=string::npos,"closed filled limit waits for the bar after closure confirmation");
+ laneBars[0].push_back(1003);plans[0].bar=1002;plans[0].entry=100.5;P4Process(true);
+ check(sends==1 && P4Line(0).find("BUY limit not below Ask")!=string::npos,"new bar still reports any live-price blocker");
+ laneBars[0].push_back(1004);plans[0].bar=1003;plans[0].entry=99.8;uptime+=6000;P4Process(true);
+ check(sends==2 && orders.size()==1,"later valid plan may enter after the wait");
+ // A broker-cancelled limit without an explicit MT cancel request also waits.
+ resetWorld();current={100,100.02,terminalTime};InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;
+ g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=800;h=Order{};h.ticket=800;h.state=ORDER_STATE_CANCELED;h.initial=0.05;h.lot=0.05;history[800]=h;
+ P4Process(true);check(sends==0 && P4Line(0).find("Waiting for next closed bar")!=string::npos,"external broker cancellation waits for next bar");
+ // A rejected remainder with a proven partial fill still ended a trade.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;
+ g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=801;h=Order{};h.ticket=801;h.state=ORDER_STATE_REJECTED;h.initial=0.05;h.lot=0.03;history[801]=h;
+ deals={{981,DEAL_ENTRY_IN,0.02,801},{981,DEAL_ENTRY_OUT,0.02,999}};P4Process(true);
+ check(!g_p4[0].active && g_p4[0].cooldown==2 && sends==0 && P4Line(0).find("Waiting for next closed bar")!=string::npos,"closed partial fill on rejected remainder waits for next bar");
+ // The wait follows confirmation, not a cancellation request or a bar that
+ // closed while the broker was still processing that request.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ plans[0].signal=0;sendMode=3;uptime+=6000;P4Process(false);
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0]={-1,true,true,100,101,99,0.05,1001};g_p3[0].score=-3;
+ sendMode=0;uptime+=6000;P4Process(false);P4Process(true);
+ check(sends==1 && positions.empty() && P4Line(0).find("Waiting for next closed bar")!=string::npos,"a bar before confirmation cannot release cancellation wait");
+ laneBars[0].push_back(1003);plans[0].bar=1002;uptime+=6000;P4Process(true);check(sends==2 && positions.size()==1,"new bar after confirmed cancellation permits opposite market plan");
+ // Old persisted same-direction-only expiry waits migrate to the new policy.
+ resetWorld();g_p4[0].cooldown=1;g_p4[0].waitDirection=1;g_p4[0].waitBar=1000;P4Persist();P4Close();P4Init();
+ InpAutoTrading=true;plans[0]={-1,true,true,100,101,99,0.05};g_p3[0].score=-3;P4Process(true);
+ check(g_p4[0].cooldown==2 && sends==0 && P4Line(0).find("Waiting for next closed bar")!=string::npos,"legacy expiry wait also blocks opposite direction");
+ // An unfilled definitive rejection is not a finished trade and has no bar wait.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;sendMode=2;P4Process(true);P4Process(false);
+ check(g_p4[0].cooldown==0 && P4Line(0).find("Order rejected:")!=string::npos,"unfilled rejection retains the broker reason without a false bar wait");
  // Tester connectivity is simulated and must not depend on live network state.
  resetWorld();P4Close();tester=true;connected=false;P4Init();InpAutoTrading=true;
  plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);
