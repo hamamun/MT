@@ -24,6 +24,10 @@ struct P4View
 P4Journal g_p4[3];
 P4View g_p4View[3];
 ulong g_p4Attempt[3];
+string g_p4CheckNote[3];
+string g_p4CancelNote[3];
+datetime g_p4CheckBar[3];
+int g_p4CheckScore[3];
 int g_p4Lock=INVALID_HANDLE, g_p4Flags=0;
 string g_p4File="";
 bool g_p4Ready=false;
@@ -142,7 +146,7 @@ void P4Close()
 void P4Init()
 {
    P4Close();
-   for(int i=0;i<3;i++) { P4ResetLane(i); g_p4Attempt[i]=0; g_p4View[i].note="Starting"; }
+   for(int i=0;i<3;i++) { P4ResetLane(i); g_p4Attempt[i]=0; g_p4CheckNote[i]=""; g_p4CancelNote[i]=""; g_p4CheckBar[i]=0; g_p4CheckScore[i]=0; g_p4View[i].state=P4_UNCERTAIN; g_p4View[i].note="Starting"; }
    g_p4Flags=MQLInfoInteger(MQL_TESTER)!=0?0:FILE_COMMON;
    g_p4File=P3DiaryKey()+"_autotrade.bin";
    g_p4Lock=FileOpen(g_p4File+".lock",FILE_READ|FILE_WRITE|FILE_BIN|g_p4Flags);
@@ -182,10 +186,13 @@ bool P4FreshQuote(const MqlTick &quote)
 }
 
 // A missing live position is not proof of closure. Reconcile actual deals.
-bool P4PositionClosed(ulong id)
+// A matching entry deal is required when the historical order has lost its
+// position identifier. This is positive evidence, not an absence-of-deals guess.
+bool P4PositionReconciled(ulong id, ulong requiredOrder)
 {
    if(id==0 || !P4Connected() || !HistorySelectByPosition(id)) return(false);
    double in=0.0,out=0.0;
+   bool matched=(requiredOrder==0);
    for(int i=0;i<HistoryDealsTotal();i++)
    {
       ulong ticket=HistoryDealGetTicket(i);
@@ -195,34 +202,67 @@ bool P4PositionClosed(ulong id)
       if(!HistoryDealGetInteger(ticket,DEAL_ENTRY,how) || !HistoryDealGetDouble(ticket,DEAL_VOLUME,volume) ||
          !MathIsValidNumber(volume) || volume<0.0) return(false);
       if(volume==0.0) continue;
-      if(how==DEAL_ENTRY_IN) in+=volume;
+      if(how==DEAL_ENTRY_IN)
+      {
+         in+=volume;
+         if(requiredOrder!=0)
+         {
+            long order=0;
+            if(!HistoryDealGetInteger(ticket,DEAL_ORDER,order) || order<0) return(false);
+            if((ulong)order==requiredOrder) matched=true;
+         }
+      }
       else if(how==DEAL_ENTRY_OUT || how==DEAL_ENTRY_OUT_BY) out+=volume;
-      else return(false); // reversal or unrecognized deal type: cannot prove closure
+      else return(false);
    }
-   return(in>0.0 && MathAbs(out-in)<=1e-8);
+   return(matched && in>0.0 && MathAbs(out-in)<=1e-8);
 }
 
-bool P4JournalEnded(int lane)
+bool P4PositionClosed(ulong id) { return(P4PositionReconciled(id,0)); }
+
+bool P4JournalEnded(int lane, string &reason)
 {
    P4Journal s=g_p4[lane];
-   if(s.order==0) return(s.position>0 && P4PositionClosed(s.position));
-   if(!P4Connected() || !HistoryOrderSelect(s.order)) return(false);
+   reason="";
+   if(s.order==0)
+   {
+      if(s.position==0) { reason="REVIEW: no order ticket"; return(false); }
+      if(!P4PositionClosed(s.position)) { reason="REVIEW: position history incomplete"; return(false); }
+      return(true);
+   }
+   if(!P4Connected() || !HistoryOrderSelect(s.order))
+   { reason="REVIEW: order history unavailable"; return(false); }
    long state=0, position=0;
    if(!HistoryOrderGetInteger(s.order,ORDER_STATE,state) ||
-      !HistoryOrderGetInteger(s.order,ORDER_POSITION_ID,position) || position<0) return(false);
+      !HistoryOrderGetInteger(s.order,ORDER_POSITION_ID,position) || position<0)
+   { reason="REVIEW: order history data unavailable"; return(false); }
    if(state!=ORDER_STATE_CANCELED && state!=ORDER_STATE_EXPIRED &&
-      state!=ORDER_STATE_REJECTED && state!=ORDER_STATE_FILLED) return(false);
+      state!=ORDER_STATE_REJECTED && state!=ORDER_STATE_FILLED)
+   { reason="REVIEW: order not final"; return(false); }
    ulong id=(ulong)position;
-   if(s.position>0 && id!=s.position) return(false);
-   if(id>0) return(P4PositionClosed(id));
-   if(s.position!=0 || state==ORDER_STATE_FILLED) return(false);
-   // A cancelled/expired order may have been partially filled before its
-   // position ID becomes visible. Only clear a demonstrably unfilled order.
+   if(s.position>0 && id>0 && id!=s.position)
+   { reason="REVIEW: position ID mismatch"; return(false); }
+   if(id>0)
+   {
+      if(!P4PositionClosed(id)) { reason="REVIEW: position history incomplete"; return(false); }
+      return(true);
+   }
+   if(s.position>0)
+   {
+      if(!P4PositionReconciled(s.position,s.order))
+      { reason="REVIEW: link or closure unconfirmed"; return(false); }
+      return(true);
+   }
+   if(state==ORDER_STATE_FILLED)
+   { reason="REVIEW: fill identity missing"; return(false); }
    double initial=0, remaining=0;
    if(!HistoryOrderGetDouble(s.order,ORDER_VOLUME_INITIAL,initial) ||
       !HistoryOrderGetDouble(s.order,ORDER_VOLUME_CURRENT,remaining) ||
-      !P3Positive(initial) || !MathIsValidNumber(remaining) || remaining<0.0) return(false);
-   return(MathAbs(initial-remaining)<=1e-8);
+      !P3Positive(initial) || !MathIsValidNumber(remaining) || remaining<0.0 || remaining>initial+1e-8)
+   { reason="REVIEW: order volumes unavailable"; return(false); }
+   if(MathAbs(initial-remaining)>1e-8)
+   { reason="REVIEW: partial fill unconfirmed"; return(false); }
+   return(true);
 }
 
 bool P4Linked(ulong order, ulong position)
@@ -340,22 +380,26 @@ void P4Refresh(int lane)
    {
       v.state=orders>0?P4_PARTIAL:P4_OPEN; v.direction=posDir; v.position=positionId; v.order=orderTicket;
       v.entry=posEntry; v.sl=posSL; v.tp=posTP; v.lot=posLot;
-      if(posSL<=0.0 || posTP<=0.0) v.note="SL/TP missing: REVIEW";
+      if(posSL<=0.0 || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
+      if(orders>0 && (ordSL<=0.0 || ordTP<=0.0))
+      { if(v.note!="") v.note+="; "; v.note+="Pending SL/TP missing: REVIEW"; }
       if(orders>0) { if(v.note!="") v.note+="; "; v.note+="Entry remainder pending"; }
    }
    else if(orders>0)
    {
       v.state=P4_PENDING; v.direction=orderDir; v.order=orderTicket;
       v.entry=ordEntry; v.sl=ordSL; v.tp=ordTP; v.lot=ordLot;
+      if(ordSL<=0.0 || ordTP<=0.0) v.note="SL/TP missing: REVIEW";
    }
    else if(g_p4[lane].active!=0)
    {
-      if(P4JournalEnded(lane))
+      string reason="";
+      if(P4JournalEnded(lane,reason))
       {
          P4Clear(lane);
          if(!P4Persist()) { v.state=P4_UNCERTAIN; v.note="Journal unavailable"; }
       }
-      else { v.state=P4_UNCERTAIN; v.note="Await broker confirmation / REVIEW"; }
+      else { v.state=P4_UNCERTAIN; v.note=reason; }
    }
    g_p4View[lane]=v;
 }
@@ -398,7 +442,8 @@ void P4Cancel(int lane, ulong ticket)
    request.magic=(ulong)P4Magic(lane);
    g_p4Attempt[lane]=now;
    bool sent=OrderSend(request,result);
-   g_p4View[lane].note=StringFormat("Cancellation requested (%u)",result.retcode);
+   if(g_p4View[lane].note!="") g_p4View[lane].note+="; ";
+   g_p4View[lane].note+=StringFormat("Cancellation requested (%u)",result.retcode);
    if(!sent) PrintFormat("MT %s cancellation request failed: retcode %u error %d",P4TF(lane),result.retcode,GetLastError());
 }
 
@@ -419,34 +464,54 @@ bool P4ProtectionAllowed(bool market)
 
 // Validate frozen levels against the live executable quote; never chase or
 // reprice a plan. OrderCheck remains the broker's final preflight.
-bool P4LiveLevels(const MqlTick &quote, const P3Plan &plan)
+string P4LiveLevelReason(const MqlTick &quote, const P3Plan &plan)
 {
    double point=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
    long stops=0;
    if(!SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL,stops) || !P3Positive(point) || stops<0 || !P3Positive(quote.bid) ||
       !P3Positive(quote.ask) || quote.ask<quote.bid || !P3Positive(plan.entry) ||
-      !P3Positive(plan.stop) || !P3Positive(plan.target)) return(false);
-   // Allow only numerical noise at the minimum-distance boundary.
+      !P3Positive(plan.stop) || !P3Positive(plan.target)) return("Broker stops or plan data unavailable");
    double minimum=MathMax(0.0,(double)stops*point-point*1e-7);
    if(plan.signal>0)
    {
-      if(plan.stop>=plan.entry || plan.target<=plan.entry) return(false);
-      if(plan.market) return(plan.stop<quote.bid && plan.target>quote.bid &&
-                             plan.stop<quote.ask && plan.target>quote.ask &&
-                             quote.bid-plan.stop>=minimum && plan.target-quote.bid>=minimum);
-      return(plan.entry<quote.ask && quote.ask-plan.entry>=minimum &&
-             plan.entry-plan.stop>=minimum && plan.target-plan.entry>=minimum);
+      if(plan.stop>=plan.entry || plan.target<=plan.entry) return("Plan SL/TP invalid");
+      if(plan.market)
+      {
+         if(plan.stop>=quote.bid || plan.target<=quote.bid || plan.stop>=quote.ask || plan.target<=quote.ask)
+            return("Market price outside SL/TP");
+         if(quote.bid-plan.stop<minimum || plan.target-quote.bid<minimum) return("Broker minimum distance not met");
+      }
+      else
+      {
+         if(plan.entry>=quote.ask) return("BUY limit not below Ask");
+         if(quote.ask-plan.entry<minimum || plan.entry-plan.stop<minimum || plan.target-plan.entry<minimum)
+            return("Broker minimum distance not met");
+      }
+      return("");
    }
    if(plan.signal<0)
    {
-      if(plan.stop<=plan.entry || plan.target>=plan.entry) return(false);
-      if(plan.market) return(plan.stop>quote.ask && plan.target<quote.ask &&
-                             plan.stop>quote.bid && plan.target<quote.bid &&
-                             plan.stop-quote.ask>=minimum && quote.ask-plan.target>=minimum);
-      return(plan.entry>quote.bid && plan.entry-quote.bid>=minimum &&
-             plan.stop-plan.entry>=minimum && plan.entry-plan.target>=minimum);
+      if(plan.stop<=plan.entry || plan.target>=plan.entry) return("Plan SL/TP invalid");
+      if(plan.market)
+      {
+         if(plan.stop<=quote.ask || plan.target>=quote.ask || plan.stop<=quote.bid || plan.target>=quote.bid)
+            return("Market price outside SL/TP");
+         if(plan.stop-quote.ask<minimum || quote.ask-plan.target<minimum) return("Broker minimum distance not met");
+      }
+      else
+      {
+         if(plan.entry<=quote.bid) return("SELL limit not above Bid");
+         if(plan.entry-quote.bid<minimum || plan.stop-plan.entry<minimum || plan.entry-plan.target<minimum)
+            return("Broker minimum distance not met");
+      }
+      return("");
    }
-   return(false);
+   return("Signal unavailable");
+}
+
+bool P4LiveLevels(const MqlTick &quote, const P3Plan &plan)
+{
+   return(P4LiveLevelReason(quote,plan)=="");
 }
 
 bool P4SpreadOK(int direction, double entry, double target, const MqlTick &q)
@@ -463,7 +528,8 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    if(g_p4Attempt[lane]!=0 && now-g_p4Attempt[lane]<5000) return;
    if(!P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market) || !plan.valid ||
       !P4CanTrade() || g_marketState!=MARKET_OPEN || !P4FreshQuote(quote)) return;
-   if(!P4LiveLevels(quote,plan)) { g_p4View[lane].note="Frozen plan invalid at live quote"; return; }
+   string levelReason=P4LiveLevelReason(quote,plan);
+   if(levelReason!="") { g_p4View[lane].note=levelReason; return; }
    if(!plan.market && !P4SpreadOK(plan.signal,plan.entry,plan.target,quote))
    { g_p4View[lane].note="Pending target does not clear spread"; return; }
    if(!P4ProtectionAllowed(plan.market)) { g_p4View[lane].note="SL/TP lifetime or order mode unavailable"; return; }
@@ -480,7 +546,14 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    g_p4Attempt[lane]=now;
    ResetLastError();
    if(!OrderCheck(request,check) || check.retcode!=0)
-   { g_p4View[lane].note=StringFormat("Order check: %u",check.retcode); return; }
+   {
+      g_p4CheckNote[lane]=StringFormat("Order check: %u (error %d)",check.retcode,GetLastError());
+      if(check.comment!="") g_p4CheckNote[lane]+=" "+check.comment;
+      g_p4CheckBar[lane]=plan.bar; g_p4CheckScore[lane]=g_p3[lane].score;
+      PrintFormat("MT %s %s",P4TF(lane),g_p4CheckNote[lane]);
+      g_p4View[lane].note=g_p4CheckNote[lane]; return;
+   }
+   g_p4CheckNote[lane]="";
    // Persist intent before send. Uncertain results never trigger a blind resend.
    g_p4[lane].active=1; g_p4[lane].direction=plan.signal; g_p4[lane].cancel=0;
    g_p4[lane].order=0; g_p4[lane].position=0;
@@ -488,11 +561,18 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    if(!P4Persist()) return;
    ResetLastError();
    bool sent=OrderSend(request,result);
+   int sendError=GetLastError();
    if(result.order>0) g_p4[lane].order=result.order;
-   else if(P4DefiniteReject(result.retcode)) P4Clear(lane);
+   else if(result.deal==0 && P4DefiniteReject(result.retcode))
+   {
+      P4Clear(lane);
+      g_p4CheckNote[lane]=StringFormat("Order rejected: %u (error %d)",result.retcode,sendError);
+      if(result.comment!="") g_p4CheckNote[lane]+=" "+result.comment;
+      g_p4CheckBar[lane]=plan.bar; g_p4CheckScore[lane]=g_p3[lane].score;
+   }
    if(!P4Persist()) return;
    if(!sent || P4DefiniteReject(result.retcode))
-      PrintFormat("MT %s order result %u error %d",P4TF(lane),result.retcode,GetLastError());
+      PrintFormat("MT %s order result %u error %d: %s",P4TF(lane),result.retcode,sendError,result.comment);
    g_p4View[lane].state=P4_UNCERTAIN;
    g_p4View[lane].note=StringFormat("Order result %u; awaiting broker",result.retcode);
 }
@@ -536,6 +616,13 @@ bool P4TargetClearsSpread(const P4View &v, const MqlTick &q)
    return(P4SpreadOK(v.direction,v.entry,v.tp,q));
 }
 
+void P4ModifyCancel(int lane, string reason)
+{
+   g_p4View[lane].note=reason;
+   g_p4[lane].cancel=1;
+   P4Persist();
+}
+
 void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
 {
    P4View v=g_p4View[lane];
@@ -544,12 +631,17 @@ void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
    // A pending order's volume cannot be modified. The frozen plan's lot is
    // the allowed size for its new stop, including broker-minimum/bypass rules.
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
-   if(!plan.valid || plan.market || plan.signal!=v.direction || !P3Positive(step) ||
-      v.lot>plan.lot+step*1e-7 || (InpMinimumLot && MathAbs(v.lot-plan.lot)>step*1e-7) ||
-      !P4LiveLevels(q,plan) || !P4SpreadOK(plan.signal,plan.entry,plan.target,q))
-   { g_p4[lane].cancel=1; P4Persist(); return; }
+   if(!plan.valid || plan.market || plan.signal!=v.direction)
+   { P4ModifyCancel(lane,"Pending plan unsuitable: cancel"); return; }
+   if(!P3Positive(step)) { P4ModifyCancel(lane,"Pending volume step unavailable: cancel"); return; }
+   if(v.lot>plan.lot+step*1e-7 || (InpMinimumLot && MathAbs(v.lot-plan.lot)>step*1e-7))
+   { P4ModifyCancel(lane,"Pending lot differs from allowed: cancel"); return; }
+   string levelReason=P4LiveLevelReason(q,plan);
+   if(levelReason!="") { P4ModifyCancel(lane,"Pending update: "+levelReason+"; cancel"); return; }
+   if(!P4SpreadOK(plan.signal,plan.entry,plan.target,q))
+   { P4ModifyCancel(lane,"Pending update target does not clear spread; cancel"); return; }
    double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
-   if(!P3Positive(tick)) { g_p4[lane].cancel=1; P4Persist(); return; }
+   if(!P3Positive(tick)) { P4ModifyCancel(lane,"Pending price tick unavailable: cancel"); return; }
    if(MathAbs(v.entry-plan.entry)<=tick*1e-6 && MathAbs(v.sl-plan.stop)<=tick*1e-6 &&
       MathAbs(v.tp-plan.target)<=tick*1e-6)
    { g_p4[lane].planBar=plan.bar; P4Persist(); return; }
@@ -566,14 +658,19 @@ void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
       !OrderGetInteger(ORDER_POSITION_ID,positionId) || !P3Positive(currentLot) ||
       !P3Positive(initialLot) || positionId<0 || positionId>0 ||
       MathAbs(currentLot-v.lot)>step*1e-7 || currentLot<initialLot-step*1e-7)
-   { g_p4[lane].cancel=1; P4Persist(); return; }
+   { P4ModifyCancel(lane,"Pending volume/identity uncertain: cancel"); return; }
    MqlTradeRequest request={}; MqlTradeCheckResult check={}; MqlTradeResult result={};
    request.action=TRADE_ACTION_MODIFY; request.order=v.order; request.symbol=_Symbol;
    request.magic=(ulong)P4Magic(lane); request.price=plan.entry; request.sl=plan.stop; request.tp=plan.target;
    request.type_time=ORDER_TIME_GTC;
    g_p4Attempt[lane]=now;
+   ResetLastError();
    if(!OrderCheck(request,check) || check.retcode!=0)
-   { g_p4[lane].cancel=1; P4Persist(); return; }
+   {
+      string why=StringFormat("Pending modification check: %u (error %d)",check.retcode,GetLastError());
+      if(check.comment!="") why+=" "+check.comment;
+      P4ModifyCancel(lane,why+"; cancel"); return;
+   }
    // Write-ahead intent: on any crash or uncertain result, only matching
    // broker values confirm the update; otherwise cancellation is requested.
    g_p4[lane].modifying=1; g_p4[lane].modEntry=plan.entry;
@@ -582,7 +679,42 @@ void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
    bool sent=OrderSend(request,result);
    g_p4View[lane].note=StringFormat("Modification requested (%u); awaiting broker",result.retcode);
    if(!sent || P4DefiniteReject(result.retcode))
-   { g_p4[lane].cancel=1; P4Persist(); }
+   { g_p4View[lane].note+="; cancel pending"; g_p4[lane].cancel=1; P4Persist(); }
+}
+
+// Report the same preflight reasons even on timer refreshes. It never sends
+// an order, changes the frozen plan or treats a signal as broker execution.
+string P4EntryReason(int lane, const P3Plan &plan, bool hedging)
+{
+   if(plan.signal==P3_WAIT) return("Signal WAIT");
+   if(plan.signal==0) return("No qualifying signal");
+   if(plan.signal!=1 && plan.signal!=-1) return("Signal unavailable");
+   if(!hedging) return("Hedging account required");
+   if(!P4CanTrade()) return("Trading permission unavailable");
+   if(g_marketState!=MARKET_OPEN) return("Market not open");
+   if(!plan.valid || !P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market))
+      return("Plan data unavailable");
+   if(g_p4[lane].cooldown!=0)
+   {
+      bool opposite=(g_p4[lane].cooldown==1 && plan.signal!=g_p4[lane].waitDirection);
+      if(!opposite && (g_p4[lane].waitBar<=0 ||
+         iBarShift(_Symbol,P3Timeframe(lane),g_p4[lane].waitBar,true)<2))
+         return("Waiting for next closed bar");
+   }
+   MqlTick q;
+   if(!SymbolInfoTick(_Symbol,q) || !P4FreshQuote(q)) return("Fresh quote unavailable");
+   string levelReason=P4LiveLevelReason(q,plan);
+   if(levelReason!="") return(levelReason);
+   if(!plan.market && !P4SpreadOK(plan.signal,plan.entry,plan.target,q))
+      return("Pending target does not clear spread");
+   if(!P4ProtectionAllowed(plan.market)) return("SL/TP lifetime or order mode unavailable");
+   ENUM_ORDER_TYPE_FILLING fill;
+   if(!P4FillMode(plan.market,fill)) return("Filling mode unavailable");
+   if(g_p4CheckNote[lane]!="" && g_p4CheckBar[lane]==plan.bar &&
+      g_p4CheckScore[lane]==g_p3[lane].score) return(g_p4CheckNote[lane]);
+   ulong now=GetTickCount64();
+   if(g_p4Attempt[lane]!=0 && now-g_p4Attempt[lane]<5000) return("Request retry delay");
+   return("");
 }
 
 // Called on a symbol tick for new entries and on the timer for cancellation/
@@ -594,10 +726,21 @@ void P4Process(bool allowEntry)
    {
       P4Refresh(lane);
       if(!g_p4Ready) return;
+      bool hadCancel=(g_p4[lane].cancel!=0);
+      if(g_p4View[lane].state==P4_EMPTY || g_p4View[lane].state==P4_OPEN) g_p4CancelNote[lane]="";
       P3Plan plan; P3MakePlan(lane,plan);
       bool hedging=AccountInfoInteger(ACCOUNT_MARGIN_MODE)==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
       P4_ACTION action=P4Decide(InpAutoTrading,plan.signal,g_p4View[lane].state,
                                 g_p4View[lane].direction,hedging,P4CanTrade(),plan.valid);
+      string cancelWhy="";
+      if(action==P4_CANCEL_REMAINDER)
+      {
+         if(g_p4View[lane].state==P4_PARTIAL) cancelWhy="Partial fill: cancel remainder";
+         else if(!InpAutoTrading) cancelWhy="Auto OFF: cancel pending";
+         else if(plan.signal==P3_WAIT) cancelWhy="Signal WAIT: cancel pending";
+         else if(plan.signal==0) cancelWhy="No signal: cancel pending";
+         else cancelWhy="Signal changed: cancel pending";
+      }
       if(g_p4View[lane].state==P4_PENDING)
       {
          int age=P4PendingAge(lane);
@@ -612,20 +755,22 @@ void P4Process(bool allowEntry)
                if(!P4Persist()) return;
             }
             action=P4_CANCEL_REMAINDER;
+            if(cancelWhy=="") cancelWhy=upgrade?"Market upgrade: cancel pending":(age<0?"Pending age unavailable: cancel":"Pending expired: cancel");
          }
          else if(action!=P4_CANCEL_REMAINDER && (!plan.valid || plan.market))
-            action=P4_CANCEL_REMAINDER;
+         { action=P4_CANCEL_REMAINDER; cancelWhy="Pending plan unsuitable: cancel"; }
          else if(action!=P4_CANCEL_REMAINDER)
          {
             MqlTick q;
             if(SymbolInfoTick(_Symbol,q) && P4FreshQuote(q) && g_marketState==MARKET_OPEN)
             {
-               if(!P4TargetClearsSpread(g_p4View[lane],q)) action=P4_CANCEL_REMAINDER;
+               if(!P4TargetClearsSpread(g_p4View[lane],q))
+               { action=P4_CANCEL_REMAINDER; cancelWhy="Pending target does not clear spread; cancel"; }
                else if(plan.bar>g_p4[lane].planBar)
                {
                   P4Modify(lane,q,plan);
                   if(!g_p4Ready) return;
-                  if(g_p4[lane].cancel!=0) action=P4_CANCEL_REMAINDER;
+                  if(g_p4[lane].cancel!=0) { action=P4_CANCEL_REMAINDER; if(g_p4View[lane].note=="") cancelWhy="Pending modification unconfirmed: cancel"; }
                }
             }
          }
@@ -634,23 +779,59 @@ void P4Process(bool allowEntry)
       if(g_p4[lane].cancel!=0 && g_p4View[lane].state==P4_PENDING) action=P4_CANCEL_REMAINDER;
       if(action==P4_CANCEL_REMAINDER)
       {
+         // The persisted intent survives a restart, but its original reason
+         // is not journalled. Do not infer it from today's signal.
+         if(hadCancel && g_p4CancelNote[lane]=="") cancelWhy="";
          if(g_p4[lane].cancel==0) { g_p4[lane].cancel=1; if(!P4Persist()) return; }
-         g_p4View[lane].note="Cancellation pending";
+         if(g_p4CancelNote[lane]=="")
+         {
+            if(cancelWhy!="") g_p4CancelNote[lane]=cancelWhy;
+            else if(StringFind(g_p4View[lane].note,"Pending ")==0 ||
+                    StringFind(g_p4View[lane].note,"Modification requested (")==0)
+               g_p4CancelNote[lane]=g_p4View[lane].note;
+            else g_p4CancelNote[lane]="Cancellation pending";
+         }
+         if(g_p4View[lane].note!=g_p4CancelNote[lane])
+         {
+            if(g_p4View[lane].note!="") g_p4View[lane].note+="; ";
+            g_p4View[lane].note+=g_p4CancelNote[lane];
+         }
          P4Cancel(lane,g_p4View[lane].order);
       }
-      else if(action==P4_PLACE && allowEntry)
+      else if(g_p4View[lane].state==P4_EMPTY && InpAutoTrading)
       {
-         if(!P4CooldownReady(lane,plan.signal)) { g_p4View[lane].note="Waiting for next closed bar"; continue; }
-         if(!g_p4Ready) return;
-         MqlTick quote;
-         if(SymbolInfoTick(_Symbol,quote) && P4FreshQuote(quote))
+         if(g_p4CheckBar[lane]!=plan.bar || g_p4CheckScore[lane]!=g_p3[lane].score)
+            g_p4CheckNote[lane]="";
+         string why=P4EntryReason(lane,plan,hedging);
+         // When bar history was unavailable at confirmed cancellation,
+         // initialize its cooldown on the first later eligible tick.
+         if(why=="Waiting for next closed bar" && allowEntry && action==P4_PLACE && g_p4[lane].waitBar<=0)
          {
-            if(plan.valid && P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market)) P4Place(lane,quote,plan);
+            P4CooldownReady(lane,plan.signal);
+            if(!g_p4Ready) return;
          }
-         else g_p4View[lane].note="Fresh quote unavailable";
+         bool priorCheck=(why!="" && why==g_p4CheckNote[lane]);
+         if(why!="" && !priorCheck) g_p4View[lane].note=why;
+         else if(action==P4_PLACE && allowEntry)
+         {
+            if(!P4CooldownReady(lane,plan.signal))
+               g_p4View[lane].note="Waiting for next closed bar";
+            else if(!g_p4Ready) return;
+            else
+            {
+               MqlTick quote;
+               if(SymbolInfoTick(_Symbol,quote) && P4FreshQuote(quote))
+               {
+                  g_p4View[lane].note=priorCheck?why:"Ready: waiting for tick";
+                  P4Place(lane,quote,plan);
+               }
+               else g_p4View[lane].note="Fresh quote unavailable";
+            }
+         }
+         else if(priorCheck) g_p4View[lane].note=why;
+         else if(action==P4_PLACE) g_p4View[lane].note="Ready: waiting for tick";
+         else if(why!="") g_p4View[lane].note=why;
       }
-      else if(action==P4_HOLD && g_p4View[lane].state==P4_EMPTY && InpAutoTrading)
-         g_p4View[lane].note=hedging?"Plan or trading permission unavailable":"Hedging account required";
    }
 }
 
@@ -691,18 +872,97 @@ string P4Money(int direction, double lot, double entry, double exitPrice)
    return((usd>0?"+":"")+DoubleToString(usd,2)+" USD");
 }
 
+// Human-readable descriptions for the auto row. Numeric broker return
+// codes remain visible in the row and should be checked in the Experts log.
+string P4Explain(const string note)
+{
+   if(note=="Starting") return("MT is initializing this timeframe's trading state.");
+   if(note=="Disconnected") return("MT cannot confirm broker state while the terminal is disconnected.");
+   if(note=="Position scan unavailable" || note=="Position data unavailable") return("MT could not reliably read broker positions. New entries are held.");
+   if(note=="Order scan unavailable" || note=="Order data unavailable") return("MT could not reliably read broker orders. New entries are held.");
+   if(note=="MULTIPLE: REVIEW") return("More than one matching order or position was found. Check the broker account before taking action.");
+   if(note=="Untracked broker object: REVIEW") return("A matching broker object has no reliable MT journal record. Check ownership manually.");
+   if(note=="Position identity: REVIEW" || note=="Order identity: REVIEW") return("The broker object does not match the identity saved by MT. Check the account and history.");
+   if(note=="Unconfirmed intent: REVIEW") return("MT cannot safely match an earlier request to the broker object. New entries are held.");
+   if(note=="Waiting for broker identity") return("MT is waiting for broker records linking the order and position.");
+   if(note=="Partial-fill identity: REVIEW") return("MT cannot yet link the partial position and remaining order reliably.");
+   if(note=="REVIEW: no order ticket") return("An earlier request has no saved order or position ticket. MT cannot prove whether it was executed; check broker orders, deals and Experts logs.");
+   if(note=="REVIEW: order history unavailable") return("The saved order ticket is not available in broker history yet. Check connection and MT5 order history.");
+   if(note=="REVIEW: order history data unavailable") return("The broker history did not provide the order state or position identifier.");
+   if(note=="REVIEW: order not final") return("Broker history does not yet show the saved order as completed, cancelled, expired or rejected.");
+   if(note=="REVIEW: position ID mismatch") return("The position identifier in broker history does not match MT's saved position.");
+   if(note=="REVIEW: position history incomplete") return("MT cannot verify from entry and exit deals that the saved position has fully closed.");
+   if(note=="REVIEW: link or closure unconfirmed") return("MT cannot prove both the order-to-position link and complete closure from broker deals.");
+   if(note=="REVIEW: fill identity missing") return("The broker reports a filled order without a usable position identifier.");
+   if(note=="REVIEW: order volumes unavailable") return("The initial or remaining order volume is missing or invalid in broker history.");
+   if(note=="REVIEW: partial fill unconfirmed") return("Order volumes suggest a possible partial fill but MT cannot confirm its position. Check deals and history.");
+   if(note=="Journal unavailable") return("MT could not save its trading journal. Trading actions are suspended.");
+   if(note=="Market request in flight") return("The market request has not yet been reconciled with the broker.");
+   if(StringFind(note,"SL/TP missing: REVIEW")>=0) return("A broker-side SL or TP is missing. MT requests cancellation of any pending remainder; it does not close or modify an open position.");
+   if(note=="Pending target does not clear spread") return("The limit's target distance is not larger than the current spread.");
+   if(StringFind(note,"target does not clear spread")>=0) return("The limit's target distance is not larger than the current spread. MT requests cancellation of the existing limit.");
+   if(StringFind(note,"Partial fill: cancel remainder")>=0 || StringFind(note,"Entry remainder pending")>=0) return("A partially filled position has an unfilled entry remainder; MT requests its cancellation.");
+   if(StringFind(note,"Auto OFF: cancel pending")>=0) return("Auto Trading is off, so MT requests cancellation of its pending limit; any open position remains open.");
+   if(StringFind(note,"Signal WAIT: cancel pending")>=0) return("This timeframe's signal is WAIT, so MT requests cancellation of its pending limit.");
+   if(StringFind(note,"No signal: cancel pending")>=0 || StringFind(note,"Signal changed: cancel pending")>=0) return("The signal no longer matches the pending limit, so MT requests cancellation.");
+   if(StringFind(note,"Market upgrade: cancel pending")>=0) return("The signal upgraded to a market plan; MT cancels the old limit and waits for a later timeframe close before replacement.");
+   if(StringFind(note,"Pending age unavailable: cancel")>=0 || StringFind(note,"Pending expired: cancel")>=0) return("The pending limit is too old or its age cannot be verified. MT requests cancellation and applies the re-entry cooldown.");
+   if(StringFind(note,"Pending modification check:")>=0) return("The broker pre-check for the pending-order update failed. MT requests cancellation; the row shows the broker code and comment.");
+   if(StringFind(note,"Pending lot differs from allowed")>=0) return("The existing limit's lot does not meet the new plan's allowed size. MT requests cancellation rather than changing the volume.");
+   if(StringFind(note,"Pending update:")>=0) return("The new pending plan failed a live-quote, SL/TP or broker-distance check. MT requests cancellation; the row gives the specific reason.");
+   if(StringFind(note,"Pending volume step unavailable")>=0 || StringFind(note,"Pending price tick unavailable")>=0 || StringFind(note,"Pending volume/identity uncertain")>=0) return("MT cannot safely verify the pending order's broker properties. It requests cancellation.");
+   if(StringFind(note,"Pending plan unsuitable: cancel")>=0 || StringFind(note,"Pending modification unconfirmed: cancel")>=0) return("The pending plan or modification cannot be safely maintained. MT requests cancellation.");
+   if(StringFind(note,"Cancellation pending")>=0 || StringFind(note,"Cancellation requested (")>=0) return("MT is requesting cancellation. The broker must confirm it; a fill or rejection can occur first.");
+   if(StringFind(note,"Modification requested (")==0) return("MT requested new pending-order levels. Only broker-confirmed levels are authoritative; a failed or unconfirmed update is cancelled.");
+   if(StringFind(note,"Order result ")==0) return("MT sent an order request and is reconciling the broker result. The number is a broker return code.");
+   if(StringFind(note,"Order rejected:")==0) return("The broker definitely rejected the last request. The row shows its return code and terminal error; MT may retry on a later tick.");
+   if(StringFind(note,"Order check:")==0) return("The broker pre-check failed. The row shows its return code and terminal error; inspect the Experts log.");
+   if(note=="Signal WAIT" || note=="Signal unavailable") return("The timeframe signal is unavailable; MT cannot open a new trade.");
+   if(note=="No qualifying signal") return("The current timeframe has no qualifying BUY or SELL signal.");
+   if(note=="Hedging account required") return("MT requires a retail hedging account for new auto-trading entries.");
+   if(note=="Trading permission unavailable") return("The terminal, EA or account does not currently permit trading, or is disconnected.");
+   if(note=="Market not open") return("MT's market-state check is not OPEN, so it will not place a new order.");
+   if(note=="Plan data unavailable") return("A complete valid frozen entry, lot, SL and TP matching the signal is unavailable.");
+   if(note=="Waiting for next closed bar") return("A prior expiry or market upgrade requires a later close of this timeframe before re-entry.");
+   if(note=="Fresh quote unavailable") return("MT cannot obtain a valid recent Bid and Ask for this symbol.");
+   if(note=="BUY limit not below Ask") return("A BUY limit entry must be below the current Ask. MT does not move the frozen entry to chase price.");
+   if(note=="SELL limit not above Bid") return("A SELL limit entry must be above the current Bid. MT does not move the frozen entry to chase price.");
+   if(note=="Market price outside SL/TP") return("The current Bid or Ask is already outside the frozen market plan's stop or target.");
+   if(note=="Plan SL/TP invalid") return("The frozen SL and TP are not on the correct sides of the entry.");
+   if(note=="Broker minimum distance not met") return("The entry or protective levels do not meet the broker's minimum stop distance at the current quote.");
+   if(note=="Broker stops or plan data unavailable") return("MT cannot read a valid broker stop distance or complete plan/quote levels.");
+   if(note=="Pending target does not clear spread") return("The limit's target distance is not larger than the current spread.");
+   if(note=="SL/TP lifetime or order mode unavailable") return("The broker does not report support for the required order, SL, TP and lasting protective levels.");
+   if(note=="Filling mode unavailable") return("MT cannot determine a supported volume-filling policy for this market order.");
+   if(note=="Request retry delay") return("MT waits at least five seconds between requests for this timeframe.");
+   if(note=="Ready: waiting for tick") return("Current local checks pass; MT waits for a symbol tick before attempting a new order. The broker may still reject it.");
+   return("Check the auto-trading row, broker orders and MT5 Experts log for details.");
+}
+
+string P4Tooltip(int lane)
+{
+   string mode=InpAutoTrading?"Auto Trading is ON. ":"Auto Trading is OFF; no new entries will be requested. ";
+   if(!g_p4Ready) return(mode+"The trading coordinator or journal is unavailable; inspect the Experts log.");
+   P4View v=g_p4View[lane];
+   if(v.note!="") return(mode+P4Explain(v.note));
+   if(v.state==P4_PENDING) return(mode+"A broker-confirmed limit is waiting. Distance is from BUY Ask or SELL Bid.");
+   if(v.state==P4_OPEN || v.state==P4_PARTIAL) return(mode+"A broker-confirmed position is open. Displayed SL and TP are broker values.");
+   return(mode+"No active MT order or position has been identified for this timeframe.");
+}
+
 string P4Line(int lane)
 {
    string tf=P4TF(lane);
-   if(!g_p4Ready) return(tf+" | Auto: coordinator unavailable");
+   string head=tf+" | Auto: "+(InpAutoTrading?"ON":"OFF");
+   if(!g_p4Ready) return(head+" | coordinator unavailable");
    P4View v=g_p4View[lane];
    if(v.state!=P4_PENDING && v.state!=P4_OPEN && v.state!=P4_PARTIAL)
    {
-      if(v.note!="") return(tf+" | Auto: "+v.note);
-      return(tf+(InpAutoTrading?" | Auto: no active order":" | Auto: OFF"));
+      if(v.note!="") return(head+(v.state==P4_EMPTY && v.note!="Starting"?" | no active order":"")+" | "+v.note);
+      return(InpAutoTrading?head+" | no active order":head);
    }
    int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
-   string s=tf+" | "+(v.direction>0?"BUY ":"SELL ")+(v.state==P4_PENDING?"LIMIT":"OPEN")+
+   string s=head+" | "+(v.direction>0?"BUY ":"SELL ")+(v.state==P4_PENDING?"LIMIT":"OPEN")+
             " | Entry "+DoubleToString(v.entry,digits);
    if(v.state==P4_PENDING)
    {

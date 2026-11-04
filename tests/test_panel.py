@@ -46,7 +46,10 @@ bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{}; return true;}
 long SymbolInfoInteger(string,int){return 2;}
 string DoubleToString(double x,int){return to_string(x);}
 string P3PlanLine(int i){return string("plan ")+to_string(i)+string(80,'x');}
-string P4Line(int i){return "auto "+to_string(i)+string(90,'z');}
+string autos[3]={"auto 0"+string(90,'z'),"auto 1"+string(90,'z'),"auto 2"+string(90,'z')};
+string P4Line(int i){return autos[i];}
+string tips[3]={"tip 0", "tip 1", "tip 2"};
+string P4Tooltip(int i){return tips[i];}
 bool InpShowDetails=false;
 string P3DiarySummary(int i,datetime){return "diary "+to_string(i);}
 string P3DiaryDetail(int i){return "detail "+to_string(i);}
@@ -59,6 +62,9 @@ bool g_built=true, measureFailure=false;
 int fontSize=10, boxW=0,boxH=0;
 struct Label {int x,y,size; string text;};
 map<string,Label> labels;
+map<string,string> tooltips;
+#define OBJPROP_TOOLTIP 77
+bool ObjectSetString(int,string name,int,string value){tooltips[name.substr(3)]=value;return true;}
 long TerminalInfoInteger(int){return 96;}
 bool TextSetFont(string,int size,uint){fontSize=-size/10;return !measureFailure;}
 bool TextGetSize(string text,uint &w,uint &h){w=uint(text.size()*fontSize);h=uint(fontSize+4);return true;}
@@ -75,7 +81,7 @@ string FormatClock(datetime t){return t==100?"2026.11.02 10:00:00":"2026.11.02 1
 void MakeRect(string,int,int,int w,int h,color,color){boxW=w;boxH=h;}
 void MakeLabel(string name,int x,int y,string text,color,int size,bool){labels[name]={x,y,size,text.substr(0,63)};}
 int ObjectFind(int,string name){return labels.count(name.substr(3))?0:-1;}
-void ObjectDelete(int,string name){labels.erase(name.substr(3));}
+void ObjectDelete(int,string name){labels.erase(name.substr(3));tooltips.erase(name.substr(3));}
 void ChartRedraw(){}
 void P2Update(){}
 string lanes[3]={"M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | SC: +3/3 (50%L)",
@@ -94,6 +100,13 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("plan0").find("plan 0")==0 && Combined("quotes").find("Bid:")==0,"phase 3 plan and quote rows");
  check(Combined("auto0")=="auto 0"+string(90,'z') && Combined("diary0")=="diary 0" && Combined("history0").empty(),"auto rows, diary summary and hidden details");
  check(labels.count("auto0_1") && labels["auto0_1"].text.size()<=48,"long auto rows are segmented");
+ for(int i=0;i<3;i++)for(int j=0;labels.count("auto"+to_string(i)+"_"+to_string(j));j++)
+   check(tooltips["auto"+to_string(i)+"_"+to_string(j)]==tips[i],"each segment has its own lane tooltip");
+ tips[1]="updated M15 reason";UpdatePanel();
+ check(tooltips["auto1_0"]==tips[1] && tooltips["auto1_1"]==tips[1] && tooltips["auto0_0"]==tips[0] && tooltips["auto2_0"]==tips[2],"tooltip refresh stays in its own timeframe");
+ autos[1]="auto 1 short";tips[1]="short M15 reason";UpdatePanel();
+ check(Combined("auto1")==autos[1] && !labels.count("auto1_1") && !tooltips.count("auto1_1") && tooltips["auto1_0"]==tips[1],"shrinking auto row clears stale segments and updates tooltip");
+ autos[1]="auto 1"+string(90,'z');UpdatePanel();
  check(labels["auto0_0"].y<labels["diary0_0"].y,"auto rows appear above diary");
  InpShowDetails=true;UpdatePanel();check(Combined("history0")=="detail 0" && boxH>openH,"details increase height");
  InpShowDetails=false;UpdatePanel();check(Combined("history0").empty() && boxH==openH,"details removed");

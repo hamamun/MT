@@ -106,6 +106,7 @@ using datetime=long; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
 #define DEAL_POSITION_ID 50
 #define DEAL_ENTRY 51
 #define DEAL_VOLUME 52
+#define DEAL_ORDER 53
 #define DEAL_ENTRY_IN 1
 #define DEAL_ENTRY_OUT 2
 #define DEAL_ENTRY_OUT_BY 3
@@ -174,7 +175,7 @@ bool P3MakePlanAt(int i,const MqlTick &,P3Plan &p){p=plans[i];return p.valid;}
 string P3LotText(double x){return DoubleToString(x,2);}
 struct Order {unsigned long ticket=0,position=0;long magic=0;int type=0,state=0;double entry=0,sl=0,tp=0,lot=0,initial=0;string symbol,comment;};
 struct Position {unsigned long ticket=0,id=0;long magic=0;int type=0;double entry=0,sl=0,tp=0,lot=0;string symbol,comment;};
-struct Deal {unsigned long position=0;int how=0;double vol=0;};
+struct Deal {unsigned long position=0;int how=0;double vol=0;unsigned long order=0;};
 vector<Order> orders;vector<Position> positions;map<unsigned long,Order> history;vector<Deal> deals;unsigned long historyPosition=0,historyOrder=0;
 int selectedOrder=-1,selectedPosition=-1;
 int OrdersTotal(){return orders.size();}int PositionsTotal(){return positions.size();}
@@ -187,7 +188,7 @@ string PositionGetString(int p){return p==POSITION_SYMBOL?positions[selectedPosi
 long PositionGetInteger(int p){auto &o=positions[selectedPosition];return p==POSITION_MAGIC?o.magic:p==POSITION_IDENTIFIER?o.id:o.type;}
 double PositionGetDouble(int p){auto &o=positions[selectedPosition];return p==POSITION_PRICE_OPEN?o.entry:p==POSITION_SL?o.sl:p==POSITION_TP?o.tp:o.lot;}
 bool HistorySelectByPosition(unsigned long id){historyPosition=id;return true;}int HistoryDealsTotal(){return deals.size();}
-unsigned long HistoryDealGetTicket(int i){return i+1;}long HistoryDealGetInteger(unsigned long tk,int p){auto &d=deals[tk-1];return p==DEAL_POSITION_ID?d.position:d.how;}
+unsigned long HistoryDealGetTicket(int i){return i+1;}long HistoryDealGetInteger(unsigned long tk,int p){auto &d=deals[tk-1];return p==DEAL_POSITION_ID?d.position:p==DEAL_ORDER?d.order:d.how;}
 double HistoryDealGetDouble(unsigned long tk,int){return deals[tk-1].vol;}
 bool readFailure=false;
 bool HistoryDealGetInteger(unsigned long tk,int p,long &x){if(readFailure)return false;x=HistoryDealGetInteger(tk,p);return true;}
@@ -203,20 +204,33 @@ long HistoryOrderGetInteger(unsigned long tk,int p){return p==ORDER_STATE?histor
 bool HistoryOrderGetInteger(unsigned long tk,int p,long &x){if(readFailure)return false;x=HistoryOrderGetInteger(tk,p);return true;}
 bool HistoryOrderGetDouble(unsigned long tk,int p,double &x){if(readFailure)return false;x=p==ORDER_VOLUME_INITIAL?history[tk].initial:history[tk].lot;return true;}
 struct MqlTradeRequest{int action=0;string symbol;unsigned long magic=0,order=0;double volume=0,price=0,sl=0,tp=0;int type=0,deviation=0,type_filling=0,type_time=0;string comment;};
-struct MqlTradeCheckResult{unsigned retcode=0;};struct MqlTradeResult{unsigned retcode=0;unsigned long order=0,deal=0;};
-bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){out.retcode=checkOk?0:TRADE_RETCODE_NO_MONEY;return checkOk;}
+struct MqlTradeCheckResult{unsigned retcode=0;string comment;};struct MqlTradeResult{unsigned retcode=0;unsigned long order=0,deal=0;string comment;};
+bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){out.retcode=checkOk?0:TRADE_RETCODE_NO_MONEY;if(!checkOk)out.comment="Not enough money";return checkOk;}
 int sendMode=0,sends=0,cancels=0,modifies=0;unsigned long nextTicket=100;MqlTradeRequest lastRequest{};
 bool OrderSend(MqlTradeRequest &r,MqlTradeResult &out){
  lastRequest=r;
  if(r.action==TRADE_ACTION_MODIFY){modifies++;if(sendMode==5){out.retcode=TRADE_RETCODE_REJECT;return false;}if(sendMode==6){out.retcode=10012;return false;}if(sendMode==8){out.retcode=10009;return true;}if(sendMode==7){for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;}out.retcode=10012;return false;}for(auto &o:orders)if(o.ticket==r.order){o.entry=r.price;o.sl=r.sl;o.tp=r.tp;out.retcode=10009;return true;}return false;}
  if(r.action==TRADE_ACTION_REMOVE){cancels++;if(sendMode==3){out.retcode=10028;return false;}for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);if(sendMode==4){Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;out.retcode=10036;return false;}o.state=ORDER_STATE_CANCELED;history[o.ticket]=o;out.retcode=10009;return true;}return false;}
- sends++; if(sendMode==1){out.retcode=10012;return false;} if(sendMode==2){out.retcode=TRADE_RETCODE_REJECT;return false;}
+ sends++; if(sendMode==1){out.retcode=10012;return false;} if(sendMode==2){out.retcode=TRADE_RETCODE_REJECT;return false;} if(sendMode==9){out.retcode=TRADE_RETCODE_REJECT;out.deal=888;return false;}
  Order o; o.ticket=nextTicket++;o.magic=r.magic;o.type=r.type;o.entry=r.price;o.sl=r.sl;o.tp=r.tp;o.lot=r.volume;o.initial=r.volume;o.symbol=r.symbol;o.comment=r.comment;out.order=o.ticket;out.retcode=10009;
  if(r.action==TRADE_ACTION_PENDING){orders.push_back(o);}else{Position p; p.ticket=o.ticket+1000;p.id=o.ticket+1000;p.magic=o.magic;p.type=r.type==ORDER_TYPE_BUY?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});}
  return true;
 }
 '''
 main=r'''
+// Reference the pre-status-change price gate to detect accidental trading-rule changes.
+bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
+ double point=SymbolInfoDouble(_Symbol,SYMBOL_POINT);long stops=0;
+ if(!SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL,stops)||!P3Positive(point)||stops<0||!P3Positive(quote.bid)||!P3Positive(quote.ask)||quote.ask<quote.bid||!P3Positive(plan.entry)||!P3Positive(plan.stop)||!P3Positive(plan.target))return false;
+ double minimum=MathMax(0.0,(double)stops*point-point*1e-7);
+ if(plan.signal>0){if(plan.stop>=plan.entry||plan.target<=plan.entry)return false;
+  if(plan.market)return plan.stop<quote.bid&&plan.target>quote.bid&&plan.stop<quote.ask&&plan.target>quote.ask&&quote.bid-plan.stop>=minimum&&plan.target-quote.bid>=minimum;
+  return plan.entry<quote.ask&&quote.ask-plan.entry>=minimum&&plan.entry-plan.stop>=minimum&&plan.target-plan.entry>=minimum;}
+ if(plan.signal<0){if(plan.stop<=plan.entry||plan.target>=plan.entry)return false;
+  if(plan.market)return plan.stop>quote.ask&&plan.target<quote.ask&&plan.stop>quote.bid&&plan.target<quote.bid&&plan.stop-quote.ask>=minimum&&quote.ask-plan.target>=minimum;
+  return plan.entry>quote.bid&&plan.entry-quote.bid>=minimum&&plan.stop-plan.entry>=minimum&&plan.entry-plan.target>=minimum;}
+ return false;
+}
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";
@@ -226,11 +240,18 @@ void resetWorld(){
 }
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
  P4Init();check(g_p4Ready && !InpAutoTrading,"initialization and default off");
+ check(P4Line(0).find("Starting")!=string::npos && P4Line(0).find("no active order")==string::npos,"initial state does not invent an empty broker scan");
+ double levelValues[]={98,99,100,100.02,101,102};bool equivalent=true;
+ for(int d:{-1,1})for(bool market:{false,true})for(long stops:{0,10,100})for(double entry:levelValues)for(double sl:levelValues)for(double tp:levelValues){
+   P3Plan p{d,true,market,entry,sl,tp,0.05};stopPoints=stops;
+   if(P4LiveLevels(current,p)!=oldLiveLevels(current,p))equivalent=false;
+ }
+ stopPoints=0;check(equivalent,"price reason refactor preserves original execution gate");
  // An invalid frozen plan is not sent; the same plan may be used once the
  // live quote returns to a valid range, without moving its levels.
  InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;
  current.bid=101.1;current.ask=101.12;P4Process(true);
- check(sends==0 && P4Line(0).find("invalid at live quote")!=string::npos,"passed exit holds order");
+ check(sends==0 && P4Line(0).find("Market price outside SL/TP")!=string::npos,"passed exit holds order");
  current.bid=100;current.ask=100.02;InpAutoTrading=false;
  // Frozen entry/exit levels are checked against the current executable quote.
  P3Plan buyMarket{1,true,true,100.02,99,101,0.05};
@@ -427,6 +448,81 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  FileWriteInteger(legacy,1297368116,INT_VALUE);FileWriteInteger(legacy,1,INT_VALUE);
  for(int k=0;k<3;k++){FileWriteInteger(legacy,k==0?1:0,INT_VALUE);FileWriteInteger(legacy,k==0?1:0,INT_VALUE);FileWriteInteger(legacy,0,INT_VALUE);FileWriteLong(legacy,k==0?(long)legacyOrder:0);FileWriteLong(legacy,k==0?(long)legacyPos:0);}FileClose(legacy);
  P4Init();P4Process(false);check(positions.size()==1 && g_p4View[0].state==P4_OPEN && cancels==0,"legacy open position remains open");
+ // OFF never conceals unresolved intent; three rows retain independent state.
+ resetWorld();current={100,100.02,terminalTime};
+ g_p4[0].active=1;g_p4[0].direction=1; // no ticket is not proof of no trade
+ g_p4[1].active=1;g_p4[1].direction=1;g_p4[1].order=700;
+ Order h;h.ticket=700;h.state=ORDER_STATE_CANCELED;h.initial=0.05;h.lot=0.05;history[700]=h;
+ P4Process(false);
+ check(P4Line(0).find("M5 | Auto: OFF | REVIEW: no order ticket")!=string::npos,"off and unresolved intent visible together");
+ check(P4Line(1)=="M15 | Auto: OFF" && P4Line(2)=="M30 | Auto: OFF","confirmed empty off rows remain separate");
+ check(P4Tooltip(0).find("cannot prove")!=string::npos && P4Tooltip(1).find("OFF")!=string::npos,"review and mode tooltip");
+ InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;plans[1].signal=0;plans[2].signal=P3_WAIT;P4Process(true);
+ check(sends==0 && P4Line(0).find("ON | REVIEW: no order ticket")!=string::npos,"unidentified intent blocks repeat even while on");
+ check(P4Line(1).find("no active order | No qualifying signal")!=string::npos && P4Line(2).find("Signal WAIT")!=string::npos,"empty signals reported per lane");
+ // Sticky cancellation retains its original reason over timer refreshes.
+ resetWorld();current={100,100.02,terminalTime};InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ plans[0].signal=P3_WAIT;permission=false;P4Process(false);plans[0].signal=1;P4Process(false);
+ check(P4Line(0).find("Signal WAIT: cancel pending")!=string::npos && g_p4[0].cancel,"sticky cancellation displays original reason across timer refresh");
+ // On restart the cancellation intent persists but its reason was not saved.
+ P4Close();P4Init();plans[0].signal=P3_WAIT;P4Process(false);
+ check(g_p4[0].cancel && P4Line(0).find("Cancellation pending")!=string::npos && P4Line(0).find("Signal WAIT: cancel pending")==string::npos,"restart does not invent an original cancellation reason");
+ // Closed position with zero historical order position ID: require final order,
+ // saved position, matching entry deal and fully matching exits.
+ resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=701;g_p4[0].position=901;
+ h=Order{};h.ticket=701;h.state=ORDER_STATE_FILLED;h.position=0;history[701]=h;
+ deals={{901,DEAL_ENTRY_IN,0.05,999},{901,DEAL_ENTRY_OUT,0.05,0}};
+ P4Process(false);check(g_p4[0].active && P4Line(0).find("link or closure unconfirmed")!=string::npos,"closed unrelated position cannot clear saved order");
+ deals[0].order=701;deals[1].vol=0.02;P4Process(false);
+ check(g_p4[0].active && P4Line(0).find("link or closure unconfirmed")!=string::npos,"matching entry without full exit remains held");
+ deals[1].vol=0.05;history[701].state=99;P4Process(false);
+ check(g_p4[0].active && P4Line(0).find("order not final")!=string::npos,"complete deals cannot override nonfinal order");
+ history[701].state=ORDER_STATE_FILLED;P4Process(false);
+ check(!g_p4[0].active && P4Line(0)=="M5 | Auto: OFF","linked complete deals and final order reconcile");
+ // Other history ambiguities cannot be mistaken for a closed position.
+ resetWorld();g_p4[1].active=1;g_p4[1].direction=1;g_p4[1].order=702;g_p4[1].position=902;
+ P4Process(false);check(P4Line(1).find("order history unavailable")!=string::npos,"missing history reason");
+ h=Order{};h.ticket=702;h.state=ORDER_STATE_FILLED;h.position=903;history[702]=h;P4Process(false);
+ check(g_p4[1].active && P4Line(1).find("position ID mismatch")!=string::npos,"mismatched position held");
+ history[702].position=902;deals={{902,DEAL_ENTRY_IN,0.05,702},{902,DEAL_ENTRY_OUT,0.02,0}};P4Process(false);
+ check(g_p4[1].active && P4Line(1).find("position history incomplete")!=string::npos,"partial exit held");
+ // The current live blocker is visible on timer refresh without an order send.
+ resetWorld();current={100,100.02,terminalTime};InpAutoTrading=true;
+ plans[0]={1,true,false,100.1,99,101,0.05};g_p3[0].score=2;
+ plans[1]={-1,true,false,99.9,101,99,0.05};g_p3[1].score=-2;
+ plans[2]={1,true,true,100.02,99,101,0.05};g_p3[2].score=3;P4Process(false);
+ g_p4Attempt[2]=uptime;P4Process(false);check(P4Line(2).find("Request retry delay")!=string::npos,"request pacing reason visible");g_p4Attempt[2]=0;P4Process(false);
+ check(sends==0 && P4Line(0).find("BUY limit not below Ask")!=string::npos && P4Line(1).find("SELL limit not above Bid")!=string::npos,"invalid limits report exact lane and side");
+ check(P4Line(2).find("Ready: waiting for tick")!=string::npos && P4Tooltip(0).find("below the current Ask")!=string::npos,"ready and price tooltips");
+ permission=false;P4Process(false);check(P4Line(2).find("Trading permission unavailable")!=string::npos,"permission blocker visible on timer");permission=true;
+ current.time=terminalTime-20;P4Process(false);check(P4Line(2).find("Fresh quote unavailable")!=string::npos,"stale quote blocker visible");current.time=terminalTime;
+ hedging=false;P4Process(false);check(P4Line(2).find("Hedging account required")!=string::npos,"hedging blocker visible");hedging=true;
+ g_marketState=1;P4Process(false);check(P4Line(2).find("Market not open")!=string::npos,"market blocker visible");g_marketState=MARKET_OPEN;
+ checkOk=false;P4Process(true);P4Process(false);check(P4Line(2).find("Order check: 10019")!=string::npos && P4Line(2).find("Not enough money")!=string::npos && sends==0,"broker check reason survives timer");
+ checkOk=true;uptime+=6000;P4Process(true);P4Process(false);check(sends==1 && P4Line(2).find("BUY OPEN")!=string::npos,"successful retry replaces old check reason");
+ InpAutoTrading=false;P4Process(false);check(P4Line(2).find("Auto: OFF | BUY OPEN")!=string::npos,"off retains broker open-position details");
+ // Definite broker rejection survives refresh; uncertain outcomes never get released.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;sendMode=2;
+ P4Process(true);P4Process(false);check(P4Line(0).find("Order rejected: 10006")!=string::npos && !g_p4[0].active,"definite reject reason survives refresh");
+ // Contradictory reject plus a deal ticket is not a definite no-fill.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;sendMode=9;
+ P4Process(true);uptime+=6000;P4Process(true);
+ check(sends==1 && g_p4[0].active && P4Line(0).find("REVIEW: no order ticket")!=string::npos,"reject with deal evidence cannot clear intent or resend");
+ // A rejected pending update reports its actual pre-check and retains it.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;checkOk=false;sendMode=3;uptime+=6000;P4Process(false);P4Process(false);
+ check(P4Line(0).find("Pending modification check: 10019")!=string::npos && P4Line(0).find("Not enough money")!=string::npos && g_p4[0].cancel,"pending modification pre-check reason survives refresh");
+ // A missing SL warning survives a partial-fill cancellation request.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ orders[0].position=900;part=Position{};part.id=900;part.ticket=901;part.magic=P4Magic(0);part.type=POSITION_TYPE_BUY;part.entry=99.9;part.sl=0;part.tp=101;part.lot=0.02;part.symbol=_Symbol;part.comment="MT4-M5";positions.push_back(part);deals.push_back({900,DEAL_ENTRY_IN,0.02});
+ uptime+=6000;sendMode=3;P4Process(false);
+ check(P4Line(0).find("SL/TP missing: REVIEW")!=string::npos && P4Line(0).find("cancel remainder")!=string::npos && P4Tooltip(0).find("SL or TP is missing")!=string::npos,"partial cancellation does not hide missing protection");
+ // A cooldown established with missing bar history is initialized when bars return.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;
+ g_p4[0].cooldown=2;g_p4[0].waitBar=0;P4Process(true);
+ check(g_p4[0].waitBar==1000 && sends==0,"cooldown obtains first available closed bar");
+ laneBars[0].push_back(1002);plans[0].bar=1001;uptime+=6000;P4Process(true);
+ check(sends==1,"cooldown releases only after later own close");
  // Tester connectivity is simulated and must not depend on live network state.
  resetWorld();P4Close();tester=true;connected=false;P4Init();InpAutoTrading=true;
  plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);
