@@ -163,6 +163,7 @@ void OnTick()
 void OnTimer()
 {
    P3DiaryMonitor();
+   if(ChartSupported()) UpdateState(ServerNow());
    P4Process(false);
    UpdatePanel();
 }
@@ -590,7 +591,7 @@ void MeasureLine(const string text, const int size, int &width, int &height)
 
 // An empty string removes all prior segments. Removing surplus segments
 // also prevents stale characters after a long value becomes shorter.
-void MakeTextLine(string name, int x, int y, string text, color clr, int size)
+void MakeTextLine(string name, int x, int y, string text, color clr, int size, string tooltip="")
 {
    int len = StringLen(text);
    int segment = 0;
@@ -599,6 +600,7 @@ void MakeTextLine(string name, int x, int y, string text, color clr, int size)
       string part = StringSubstr(text, offset, LABEL_CHUNK);
       string segmentName = name + "_" + IntegerToString(segment);
       MakeLabel(segmentName, x, y, part, clr, size, false);
+      if(tooltip!="") ObjectSetString(0,OBJ_PREFIX+segmentName,OBJPROP_TOOLTIP,tooltip);
       int w, h;
       Measure(part, size, w, h);
       x += w;
@@ -741,7 +743,7 @@ void UpdatePanel()
    for(int i=0;i<3;i++)
    {
       MakeTextLine("auto"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+7+i),
-                   supported?autoLines[i]:"",clrSilver,PANEL_FONT_SIZE);
+                   supported?autoLines[i]:"",clrSilver,PANEL_FONT_SIZE,supported?P4Tooltip(i):"");
       MakeTextLine("diary"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+10+i),
                    supported?diaryLines[i]:"",clrSilver,PANEL_FONT_SIZE);
       MakeTextLine("history"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+13+i),
