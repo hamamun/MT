@@ -48,6 +48,8 @@ using datetime=long; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
 #define SYMBOL_ORDER_GTC_MODE 18
 #define SYMBOL_POINT 19
 #define SYMBOL_TRADE_STOPS_LEVEL 20
+#define SYMBOL_TRADE_TICK_SIZE 21
+#define SYMBOL_VOLUME_STEP 22
 #define SYMBOL_ORDER_MARKET 1
 #define SYMBOL_ORDER_LIMIT 2
 #define SYMBOL_ORDER_SL 16
@@ -70,6 +72,7 @@ using datetime=long; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
 #define TRADE_ACTION_DEAL 1
 #define TRADE_ACTION_PENDING 2
 #define TRADE_ACTION_REMOVE 3
+#define TRADE_ACTION_MODIFY 4
 #define ORDER_TYPE_BUY 1
 #define ORDER_TYPE_SELL 2
 #define ORDER_TYPE_BUY_LIMIT 3
@@ -122,6 +125,11 @@ using datetime=long; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
 #define TRADE_RETCODE_INVALID_FILL 10030
 #define MARKET_OPEN 0
 int g_marketState=MARKET_OPEN; string _Symbol="XAUUSD";
+bool InpMinimumLot=false;
+vector<datetime> laneBars[3]={{700,800,900,1000,1001},{700,800,900,1000,1001},{700,800,900,1000,1001}};
+int P3Timeframe(int lane){return lane;}
+datetime iTime(string,int tf,int shift){auto &b=laneBars[tf];return b.size()>(size_t)shift?b[b.size()-1-shift]:0;}
+int iBarShift(string,int tf,datetime t,bool){auto &b=laneBars[tf];for(int i=0;i<(int)b.size();i++)if(b[i]==t)return (int)b.size()-1-i;return -1;}
 bool connected=true, permission=true, hedging=true, diskFail=false, checkOk=true, calcOk=true, tester=false;
 long terminalTime=1700000000; unsigned long uptime=10000;
 long TerminalInfoInteger(int p){return p==TERMINAL_CONNECTED?connected:permission;}
@@ -156,10 +164,10 @@ bool FileMove(string a,int,string b,int){if(diskFail||!files.count(a))return fal
 void FileFlush(int){} unsigned long FileSize(int h){return files[handles[h].name].size();}unsigned long FileTell(int h){return handles[h].pos;}
 template<class T> void writeVal(int h,T x){auto &a=handles[h];auto &v=files[a.name];if(a.pos+sizeof(T)>v.size())v.resize(a.pos+sizeof(T));memcpy(&v[a.pos],&x,sizeof(T));a.pos+=sizeof(T);}
 template<class T> T readVal(int h){auto &a=handles[h];auto &v=files[a.name];T x{};if(a.pos+sizeof(T)>v.size()){lastError=1;return x;}memcpy(&x,&v[a.pos],sizeof(T));a.pos+=sizeof(T);return x;}
-void FileWriteInteger(int h,int x,int){writeVal<int>(h,x);}void FileWriteLong(int h,long x){writeVal<long>(h,x);}
-int FileReadInteger(int h,int){return readVal<int>(h);}long FileReadLong(int h){return readVal<long>(h);}
+void FileWriteInteger(int h,int x,int){writeVal<int>(h,x);}void FileWriteLong(int h,long x){writeVal<long>(h,x);}void FileWriteDouble(int h,double x){writeVal<double>(h,x);}
+int FileReadInteger(int h,int){return readVal<int>(h);}long FileReadLong(int h){return readVal<long>(h);}double FileReadDouble(int h){return readVal<double>(h);}
 #include "MT_AutoPolicy.mqh"
-struct P3Plan{int signal=P3_WAIT;bool valid=false,market=false;double entry=0,stop=0,target=0,lot=0;};
+struct P3Plan{int signal=P3_WAIT;bool valid=false,market=false;double entry=0,stop=0,target=0,lot=0;datetime bar=1000;};
 struct Lane{int score=0;};Lane g_p3[3];P3Plan plans[3];
 bool P3MakePlan(int i,P3Plan &p){p=plans[i];return p.valid;}
 bool P3MakePlanAt(int i,const MqlTick &,P3Plan &p){p=plans[i];return p.valid;}
@@ -174,7 +182,7 @@ unsigned long OrderGetTicket(int i){selectedOrder=i;return orders[i].ticket;}uns
 bool OrderSelect(unsigned long tk){for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==tk){selectedOrder=i;return true;}return false;}
 string OrderGetString(int p){return p==ORDER_SYMBOL?orders[selectedOrder].symbol:orders[selectedOrder].comment;}
 long OrderGetInteger(int p){auto &o=orders[selectedOrder];return p==ORDER_MAGIC?o.magic:p==ORDER_TYPE?o.type:p==ORDER_POSITION_ID?o.position:0;}
-double OrderGetDouble(int p){auto &o=orders[selectedOrder];return p==ORDER_PRICE_OPEN?o.entry:p==ORDER_SL?o.sl:p==ORDER_TP?o.tp:o.lot;}
+double OrderGetDouble(int p){auto &o=orders[selectedOrder];return p==ORDER_PRICE_OPEN?o.entry:p==ORDER_SL?o.sl:p==ORDER_TP?o.tp:p==ORDER_VOLUME_INITIAL?o.initial:o.lot;}
 string PositionGetString(int p){return p==POSITION_SYMBOL?positions[selectedPosition].symbol:positions[selectedPosition].comment;}
 long PositionGetInteger(int p){auto &o=positions[selectedPosition];return p==POSITION_MAGIC?o.magic:p==POSITION_IDENTIFIER?o.id:o.type;}
 double PositionGetDouble(int p){auto &o=positions[selectedPosition];return p==POSITION_PRICE_OPEN?o.entry:p==POSITION_SL?o.sl:p==POSITION_TP?o.tp:o.lot;}
@@ -197,9 +205,10 @@ bool HistoryOrderGetDouble(unsigned long tk,int p,double &x){if(readFailure)retu
 struct MqlTradeRequest{int action=0;string symbol;unsigned long magic=0,order=0;double volume=0,price=0,sl=0,tp=0;int type=0,deviation=0,type_filling=0,type_time=0;string comment;};
 struct MqlTradeCheckResult{unsigned retcode=0;};struct MqlTradeResult{unsigned retcode=0;unsigned long order=0,deal=0;};
 bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){out.retcode=checkOk?0:TRADE_RETCODE_NO_MONEY;return checkOk;}
-int sendMode=0,sends=0,cancels=0;unsigned long nextTicket=100;MqlTradeRequest lastRequest{};
+int sendMode=0,sends=0,cancels=0,modifies=0;unsigned long nextTicket=100;MqlTradeRequest lastRequest{};
 bool OrderSend(MqlTradeRequest &r,MqlTradeResult &out){
  lastRequest=r;
+ if(r.action==TRADE_ACTION_MODIFY){modifies++;if(sendMode==5){out.retcode=TRADE_RETCODE_REJECT;return false;}if(sendMode==6){out.retcode=10012;return false;}if(sendMode==8){out.retcode=10009;return true;}if(sendMode==7){for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;}out.retcode=10012;return false;}for(auto &o:orders)if(o.ticket==r.order){o.entry=r.price;o.sl=r.sl;o.tp=r.tp;out.retcode=10009;return true;}return false;}
  if(r.action==TRADE_ACTION_REMOVE){cancels++;if(sendMode==3){out.retcode=10028;return false;}for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);if(sendMode==4){Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;out.retcode=10036;return false;}o.state=ORDER_STATE_CANCELED;history[o.ticket]=o;out.retcode=10009;return true;}return false;}
  sends++; if(sendMode==1){out.retcode=10012;return false;} if(sendMode==2){out.retcode=TRADE_RETCODE_REJECT;return false;}
  Order o; o.ticket=nextTicket++;o.magic=r.magic;o.type=r.type;o.entry=r.price;o.sl=r.sl;o.tp=r.tp;o.lot=r.volume;o.initial=r.volume;o.symbol=r.symbol;o.comment=r.comment;out.order=o.ticket;out.retcode=10009;
@@ -211,7 +220,7 @@ main=r'''
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";
- g_marketState=MARKET_OPEN;uptime=10000;sendMode=0;sends=0;cancels=0;nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
+ g_marketState=MARKET_OPEN;uptime=10000;sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
  for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;}
  InpAutoTrading=false;P4Init();
 }
@@ -242,8 +251,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  readFailure=true;P4Process(true);check(g_p4View[0].state==P4_UNCERTAIN && sends==1,"broker read failure blocks decisions");readFailure=false;
  plans[1]={-1,true,false,100.5,102,99,0.05};g_p3[1].score=-2;uptime+=6000;P4Process(true);P4Process(true);
  check(sends==2 && g_p4View[1].state==P4_PENDING && P4Line(1).find("distance")!=string::npos,"pending sell limit and distance");
- plans[1].signal=P3_WAIT;P4Process(false);check(cancels==0,"unavailable signal does not cancel");
- plans[1].signal=0;permission=false;P4Process(false);check(g_p4[1].cancel && cancels==0,"cancellation intent persists while permission unavailable");
+ plans[1].signal=P3_WAIT;permission=false;P4Process(false);check(g_p4[1].cancel && cancels==0,"WAIT latches cancellation when permission unavailable");
  plans[1].signal=-1;permission=true;uptime+=6000;P4Process(false);check(cancels==1 && orders.empty(),"sticky cancellation on signal change");
  P4Process(false);check(!g_p4[1].active && positions.size()==1,"broker confirms cancellation without closing position");
  plans[1]={-1,true,false,100.5,102,99,0.05};uptime+=6000;P4Process(true);P4Process(true);check(g_p4View[1].state==P4_PENDING,"same signal can place again after cancellation");
@@ -268,6 +276,10 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  orders[0].position=900;Position part;part.id=900;part.ticket=901;part.magic=P4Magic(0);part.type=POSITION_TYPE_BUY;part.entry=99.9;part.sl=99;part.tp=101;part.lot=0.02;part.symbol=_Symbol;part.comment="MT4-M5";positions.push_back(part);deals.push_back({900,DEAL_ENTRY_IN,0.02});
  uptime+=6000;P4Process(false);P4Process(false);
  check(orders.empty() && positions.size()==1 && cancels==1 && g_p4View[0].state==P4_OPEN,"partial fill cancels remainder but does not close position");
+ // A reduced pending remainder is canceled even before its position appears.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ orders[0].lot=0.03;uptime+=6000;P4Process(false);check(orders.empty() && cancels==1,"partial remainder is canceled before position synchronization");
+ P4Process(false);check(g_p4View[0].state==P4_UNCERTAIN,"missing partial-fill identity holds lane for reconciliation");
  // A cancellation request can race a fill; broker-confirmed position must survive.
  resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;
  P4Process(true);P4Process(false);plans[0].signal=0;sendMode=4;uptime+=6000;P4Process(false);P4Process(false);
@@ -283,7 +295,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  uptime+=6000;int oldSends=sends;P4Process(true);
  check(sends==oldSends && g_p4View[0].state==P4_UNCERTAIN,"partial canceled order without position ID stays held");
  // A same-magic broker object without a journal cannot be safely owned or cancelled.
- resetWorld();Order unknown;unknown.ticket=999;unknown.magic=P4Magic(0);unknown.type=ORDER_TYPE_BUY_LIMIT;unknown.entry=99;unknown.sl=98;unknown.tp=101;unknown.lot=0.01;unknown.symbol=_Symbol;unknown.comment="other";orders.push_back(unknown);
+ resetWorld();Order unknown;unknown.ticket=999;unknown.magic=P4Magic(0);unknown.type=ORDER_TYPE_BUY_LIMIT;unknown.entry=99;unknown.sl=98;unknown.tp=101;unknown.lot=0.01;unknown.initial=0.01;unknown.symbol=_Symbol;unknown.comment="other";orders.push_back(unknown);
  plans[0]={1,true,false,99,98,101,0.01};g_p3[0].score=2;InpAutoTrading=true;P4Process(true);
  check(g_p4View[0].state==P4_UNTRACKED && sends==0 && cancels==0,"untracked order held");
  InpAutoTrading=false;P4Process(false);check(cancels==0,"untracked order not cancelled when disabled");
@@ -330,6 +342,91 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  // Stale symbol snapshots cannot trigger new orders.
  resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;
  current.time=terminalTime-11;P4Process(true);check(sends==0,"stale quote prevents order");current.time=terminalTime;
+ // A new own-lane plan changes the broker's pending entry/SL/TP, not volume.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;
+ P4Process(true);P4Process(false);double originalLot=orders[0].lot;datetime birth=g_p4[0].birthBar;
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].stop=98.8;plans[0].target=100.8;uptime+=6000;
+ P4Process(true);check(modifies==1 && g_p4[0].modifying && orders[0].entry==99.7 && orders[0].lot==originalLot,"pending plan modification sent once without changing volume");
+ P4Close();P4Init();P4Process(false);
+ check(g_p4View[0].state==P4_PENDING && !g_p4[0].modifying && g_p4View[0].entry==99.7 && g_p4[0].birthBar==birth,"restart confirms broker-modified prices and preserves original age");
+ P4Process(false);check(modifies==1,"same bar does not reprice again");
+ // Actual pending lot cannot be silently replaced with a lower-risk displayed lot.
+ laneBars[0].push_back(1003);plans[0].bar=1002;plans[0].entry=99.6;plans[0].lot=0.02;uptime+=6000;
+ P4Process(true);P4Process(false);check(orders.empty() && modifies==1 && cancels==1,"new plan with lower allowed lot cancels instead of increasing risk");
+ // Failed or uncertain pending modification latches cancellation, survives restart.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].stop=98.8;sendMode=6;uptime+=6000;P4Process(true);
+ check(g_p4[0].cancel && g_p4[0].modifying && orders.size()==1,"uncertain modification requests cancellation without assuming new levels");
+ P4Close();P4Init();sendMode=0;uptime+=6000;P4Process(false);P4Process(false);
+ check(orders.empty() && !g_p4[0].active,"uncertain modification cancellation survives restart");
+ // Accepted-but-unconfirmed modification cannot silently become authoritative.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].stop=98.8;sendMode=8;uptime+=6000;P4Process(true);P4Process(false);
+ check(g_p4[0].cancel && orders[0].entry==99.9,"accepted response with old broker levels latches cancellation");
+ sendMode=0;uptime+=6000;P4Process(false);P4Process(false);check(orders.empty(),"unconfirmed modification is canceled");
+ // If the order fills during modification, retain the broker position and exits.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].stop=98.8;sendMode=7;uptime+=6000;P4Process(true);P4Process(false);
+ check(positions.size()==1 && orders.empty() && g_p4View[0].state==P4_OPEN && positions[0].sl==99,"modify/fill race preserves broker-confirmed position and exits");
+ // WAIT for an open position never closes or modifies it.
+ plans[0].signal=P3_WAIT;P4Process(false);check(positions.size()==1 && cancels==0,"WAIT leaves open position untouched");
+ // Three actual own-timeframe bar closes expire the order, even through gaps.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].push_back(5000);plans[0].bar=1001;uptime+=6000;P4Process(false);check(orders.size()==1,"one actual close, not elapsed time, does not expire");
+ laneBars[0].push_back(5001);plans[0].bar=5000;uptime+=6000;P4Process(false);check(orders.size()==1,"two closes do not expire");
+ laneBars[0].push_back(5002);plans[0].bar=5001;uptime+=6000;P4Process(true);check(orders.empty() && g_p4[0].cooldown,"third actual close requests cancellation");
+ P4Process(true);check(sends==1 && !g_p4[0].active && g_p4[0].cooldown,"confirmed expiry does not immediately replace");
+ P4Close();P4Init();P4Process(true);check(sends==1 && g_p4[0].cooldown,"expiry cooldown survives restart");
+ laneBars[0].push_back(5003);plans[0].bar=5002;uptime+=6000;P4Process(true);
+ check(sends==2 && !g_p4[0].cooldown,"subsequent own-lane close permits repeat");
+ // Expiry only delays the same signal; a confirmed opposite signal may enter.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].insert(laneBars[0].end(),{1002,1003,1004});plans[0].bar=1003;uptime+=6000;P4Process(false);P4Process(false);
+ check(g_p4[0].cooldown==1 && !g_p4[0].active,"expiry preserves original direction for same-signal cooldown");
+ plans[0]={-1,true,true,100,101,99,0.05,1003};g_p3[0].score=-3;uptime+=6000;P4Process(true);
+ check(sends==2 && positions.size()==1,"confirmed opposite signal is not delayed by expiry cooldown");
+ // If the birth bar cannot be found, do not silently reset the order age.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0]={3000,3001};plans[0].bar=3000;uptime+=6000;P4Process(false);
+ check(orders.empty() && g_p4[0].cooldown,"unknown birth history requests cancellation and cooldown");
+ // Upgrading +/-2 to +/-3 cancels and awaits a later own-bar close.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ g_p3[0].score=3;plans[0].market=true;plans[0].entry=100.02;uptime+=6000;P4Process(true);P4Process(true);
+ check(orders.empty() && sends==1 && g_p4[0].cooldown,"market upgrade cancels without immediate replacement");
+ laneBars[1].push_back(1002);P4Process(true);check(sends==1,"another timeframe cannot release cooldown");
+ laneBars[0].push_back(1002);plans[0].bar=1001;uptime+=6000;P4Process(true);check(sends==2 && positions.size()==1,"market upgrade re-enters on subsequent own close");
+ // SELL upgrade, expiry coinciding with WAIT, and cancellation retries.
+ resetWorld();InpAutoTrading=true;plans[2]={-1,true,false,100.5,102,99,0.05};g_p3[2].score=-2;P4Process(true);P4Process(false);
+ plans[2].market=true;plans[2].entry=100;g_p3[2].score=-3;uptime+=6000;P4Process(true);P4Process(true);
+ check(orders.empty() && g_p4[2].cooldown && sends==1,"sell upgrade requests cancellation and cooldown");
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].insert(laneBars[0].end(),{1002,1003,1004});plans[0].bar=1003;plans[0].signal=P3_WAIT;sendMode=3;uptime+=6000;P4Process(false);
+ check(g_p4[0].cancel && g_p4[0].cooldown && orders.size()==1,"expiry and WAIT both preserve the cooldown during failed cancel");
+ laneBars[0].push_back(1005);plans[0].bar=1004;plans[0].signal=1;sendMode=0;uptime+=6000;P4Process(false);P4Process(true);
+ check(orders.empty() && sends==1 && g_p4[0].cooldown,"cooldown begins at broker-confirmed cancellation, not earlier request");
+ laneBars[0].push_back(1006);plans[0].bar=1005;uptime+=6000;P4Process(true);check(sends==2,"next bar after confirmed cancellation allows entry");
+ // A new limit whose target fails the spread check is not placed.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,99.91,0.05};g_p3[0].score=2;P4Process(true);
+ check(sends==0 && P4Line(0).find("spread")!=string::npos,"limit target must clear live spread before placement");
+ // A live spread beyond target distance cancels the existing limit.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,100.2,0.05};g_p3[0].score=2;current={100,100.02,terminalTime};P4Process(true);P4Process(false);
+ current={100,100.4,terminalTime};uptime+=6000;P4Process(false);check(orders.empty() && cancels==1,"excess spread cancels pending");current={100,100.02,terminalTime};
+ // A plan HOLD cancels only the pending, not an existing open position.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ plans[0].valid=false;uptime+=6000;P4Process(false);check(orders.empty() && cancels==1,"unsuitable plan cancels pending");
+ // A version-1 pending journal has unknown age: migrate and cancel it,
+ // never infer that an already-resting order has just been placed.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ unsigned long oldTicket=g_p4[0].order;P4Close();int legacy=FileOpen(g_p4File,FILE_WRITE|FILE_BIN|g_p4Flags);
+ FileWriteInteger(legacy,1297368116,INT_VALUE);FileWriteInteger(legacy,1,INT_VALUE);
+ for(int k=0;k<3;k++){FileWriteInteger(legacy,k==0?1:0,INT_VALUE);FileWriteInteger(legacy,k==0?1:0,INT_VALUE);FileWriteInteger(legacy,0,INT_VALUE);FileWriteLong(legacy,k==0?(long)oldTicket:0);FileWriteLong(legacy,0);}FileClose(legacy);
+ P4Init();uptime+=6000;P4Process(false);check(orders.empty() && g_p4[0].cooldown,"legacy pending with unknown age is migrated and cancelled");
+ // Legacy journals do not cause already-open positions to be closed.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);P4Process(false);
+ unsigned long legacyOrder=g_p4[0].order,legacyPos=g_p4[0].position;P4Close();legacy=FileOpen(g_p4File,FILE_WRITE|FILE_BIN|g_p4Flags);
+ FileWriteInteger(legacy,1297368116,INT_VALUE);FileWriteInteger(legacy,1,INT_VALUE);
+ for(int k=0;k<3;k++){FileWriteInteger(legacy,k==0?1:0,INT_VALUE);FileWriteInteger(legacy,k==0?1:0,INT_VALUE);FileWriteInteger(legacy,0,INT_VALUE);FileWriteLong(legacy,k==0?(long)legacyOrder:0);FileWriteLong(legacy,k==0?(long)legacyPos:0);}FileClose(legacy);
+ P4Init();P4Process(false);check(positions.size()==1 && g_p4View[0].state==P4_OPEN && cancels==0,"legacy open position remains open");
  // Tester connectivity is simulated and must not depend on live network state.
  resetWorld();P4Close();tester=true;connected=false;P4Init();InpAutoTrading=true;
  plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);
