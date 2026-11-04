@@ -347,12 +347,45 @@ bool P4ProtectionAllowed(bool market)
           (stopLifetime==SYMBOL_ORDERS_GTC || stopLifetime==SYMBOL_ORDERS_DAILY_EXCLUDING_STOPS));
 }
 
+// Validate frozen levels against the live executable quote; never chase or
+// reprice a plan. OrderCheck remains the broker's final preflight.
+bool P4LiveLevels(const MqlTick &quote, const P3Plan &plan)
+{
+   double point=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
+   long stops=0;
+   if(!SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL,stops) || !P3Positive(point) || stops<0 || !P3Positive(quote.bid) ||
+      !P3Positive(quote.ask) || quote.ask<quote.bid || !P3Positive(plan.entry) ||
+      !P3Positive(plan.stop) || !P3Positive(plan.target)) return(false);
+   // Allow only numerical noise at the minimum-distance boundary.
+   double minimum=MathMax(0.0,(double)stops*point-point*1e-7);
+   if(plan.signal>0)
+   {
+      if(plan.stop>=plan.entry || plan.target<=plan.entry) return(false);
+      if(plan.market) return(plan.stop<quote.bid && plan.target>quote.bid &&
+                             plan.stop<quote.ask && plan.target>quote.ask &&
+                             quote.bid-plan.stop>=minimum && plan.target-quote.bid>=minimum);
+      return(plan.entry<quote.ask && quote.ask-plan.entry>=minimum &&
+             plan.entry-plan.stop>=minimum && plan.target-plan.entry>=minimum);
+   }
+   if(plan.signal<0)
+   {
+      if(plan.stop<=plan.entry || plan.target>=plan.entry) return(false);
+      if(plan.market) return(plan.stop>quote.ask && plan.target<quote.ask &&
+                             plan.stop>quote.bid && plan.target<quote.bid &&
+                             plan.stop-quote.ask>=minimum && quote.ask-plan.target>=minimum);
+      return(plan.entry>quote.bid && plan.entry-quote.bid>=minimum &&
+             plan.stop-plan.entry>=minimum && plan.entry-plan.target>=minimum);
+   }
+   return(false);
+}
+
 void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
 {
    ulong now=GetTickCount64();
    if(g_p4Attempt[lane]!=0 && now-g_p4Attempt[lane]<5000) return;
    if(!P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market) || !plan.valid ||
       !P4CanTrade() || g_marketState!=MARKET_OPEN || !P4FreshQuote(quote)) return;
+   if(!P4LiveLevels(quote,plan)) { g_p4View[lane].note="Frozen plan invalid at live quote"; return; }
    if(!P4ProtectionAllowed(plan.market)) { g_p4View[lane].note="SL/TP lifetime or order mode unavailable"; return; }
    ENUM_ORDER_TYPE_FILLING fill;
    if(!P4FillMode(plan.market,fill)) { g_p4View[lane].note="Filling mode unavailable"; return; }
@@ -409,7 +442,6 @@ void P4Process(bool allowEntry)
          MqlTick quote;
          if(SymbolInfoTick(_Symbol,quote) && P4FreshQuote(quote))
          {
-            P3MakePlanAt(lane,quote,plan);
             if(plan.valid && P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market)) P4Place(lane,quote,plan);
          }
          else g_p4View[lane].note="Fresh quote unavailable";

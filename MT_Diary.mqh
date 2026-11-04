@@ -31,8 +31,9 @@ struct P3Observation
    long lastQuoteMs;
 };
 
-// A market observation starts at the actually observed quote supplied by
-// the caller. A pending observation starts before any entry price touch.
+// A market observation starts with the supplied entry reference; the caller
+// must record the actual observed start quote if it differs. A pending
+// observation starts before any entry price touch.
 bool P3ObservationStart(P3Observation &p, int direction, bool market,
                         double entry, double stop, double target, long planMs)
 {

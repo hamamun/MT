@@ -256,6 +256,19 @@ void P3DiarySignalContext(P3DiaryRow &r)
    r.signalBar=r.bar; r.signalSpread=r.spread;
 }
 
+// A frozen market reference may differ from the quote at observation start.
+// Record the actual start quote, and do not start after price has passed a
+// planned exit. Evaluate the start tick as well, including limit touches.
+bool P3DiaryStart(P3Observation &obs, const P3Plan &plan, const MqlTick &current)
+{
+   double entryQuote=plan.signal>0?current.ask:current.bid;
+   if(plan.market && (plan.signal>0 ? (entryQuote<=plan.stop || entryQuote>=plan.target) :
+                                     (entryQuote>=plan.stop || entryQuote<=plan.target))) return(false);
+   if(!P3ObservationStart(obs,plan.signal,plan.market,plan.entry,plan.stop,plan.target,current.time_msc)) return(false);
+   if(plan.market) obs.entryQuote=entryQuote;
+   return(P3ObservationQuote(obs,current.time_msc,current.bid,current.ask));
+}
+
 // Count actual quote events, not an inferred broker execution. OnTick can be
 // coalesced; request all intermediate Bid/Ask ticks inclusive of the previous
 // millisecond and skip the already processed ticks at that millisecond.
@@ -332,7 +345,7 @@ void P3DiaryTick()
    {
       for(int lane=0;lane<3;lane++)
       {
-         P3Plan plan; P3MakePlanAt(lane,current,plan);
+         P3Plan plan; P3MakePlan(lane,plan);
          int direction=plan.signal;
          if(direction==P3_WAIT) continue;
          int awaiting=P3DiaryAwaitIndex(lane);
@@ -342,7 +355,7 @@ void P3DiaryTick()
             if(direction!=0 && awaiting>=0 && plan.priced && coverage)
             {
                P3Observation started;
-               if(P3ObservationStart(started,direction,plan.market,plan.entry,plan.stop,plan.target,current.time_msc))
+               if(P3DiaryStart(started,plan,current))
                {
                   long originalSignal=g_diary[awaiting].obs.signalMs;
                   P3DiaryContext(g_diary[awaiting],lane,plan,current);
@@ -376,7 +389,7 @@ void P3DiaryTick()
          P3DiaryRow r;
          P3DiaryContext(r,lane,plan,current);
          P3DiarySignalContext(r);
-         if(!plan.priced || !coverage || !P3ObservationStart(r.obs,direction,plan.market,plan.entry,plan.stop,plan.target,current.time_msc))
+         if(!plan.priced || !coverage || !P3DiaryStart(r.obs,plan,current))
          {
             r.obs.direction=direction; r.obs.entry=plan.entry; r.obs.stop=plan.stop; r.obs.target=plan.target;
             r.obs.entryQuote=0.0; r.obs.exitQuote=0.0;
