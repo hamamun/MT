@@ -36,7 +36,7 @@ bool P4PlanMatchesSignal(int direction, int score, bool market)
 // slot and ownership from broker records, durably journal intent, validate
 // requests, and reconcile results before it is safe to carry out an action.
 // A cancellation action is a request to try cancellation, not confirmation
-// that an order was cancelled. An unavailable signal must not be read as NONE.
+// that an order was cancelled. WAIT separately requests cancellation.
 P4_ACTION P4Decide(bool enabled, int signal, P4_SLOT_STATE state,
                    int pendingDirection, bool hedgingAccount,
                    bool placePermission, bool planValid)
@@ -54,7 +54,7 @@ P4_ACTION P4Decide(bool enabled, int signal, P4_SLOT_STATE state,
    {
       if(pendingDirection != 1 && pendingDirection != -1) return(P4_HOLD);
       if(!enabled) return(P4_CANCEL_REMAINDER);
-      if(signal == P3_WAIT) return(P4_NO_ACTION);
+      if(signal == P3_WAIT) return(P4_CANCEL_REMAINDER);
       if(signal < -1 || signal > 1) return(P4_HOLD);
       return(signal != pendingDirection ? P4_CANCEL_REMAINDER : P4_NO_ACTION);
    }

@@ -35,7 +35,7 @@ int main() {
  check(P4Decide(true,0,P4_PENDING,1,true,true,true)==P4_CANCEL_REMAINDER,"NONE cancels pending");
  check(P4Decide(true,-1,P4_PENDING,1,true,true,true)==P4_CANCEL_REMAINDER,"opposite cancels pending");
  check(P4Decide(true,1,P4_PENDING,1,true,true,true)==P4_NO_ACTION,"same signal preserves pending");
- check(P4Decide(true,P3_WAIT,P4_PENDING,1,true,true,true)==P4_NO_ACTION,"unavailable is not NONE");
+ check(P4Decide(true,P3_WAIT,P4_PENDING,1,true,true,true)==P4_CANCEL_REMAINDER,"WAIT cancels pending");
  check(P4Decide(true,1,P4_PENDING,0,true,true,true)==P4_HOLD,"unknown pending direction held");
  check(P4Decide(true,1,P4_PARTIAL,1,true,true,true)==P4_CANCEL_REMAINDER,"partial fill cancels remainder");
  // Once broker reconciliation proves closure, the unchanged signal may re-enter.

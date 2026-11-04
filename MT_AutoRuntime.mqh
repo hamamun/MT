@@ -9,6 +9,9 @@ struct P4Journal
 {
    int active, direction, cancel;
    ulong order, position;
+   datetime birthBar, planBar, waitBar;
+   int cooldown, waitDirection, modifying;
+   double modEntry, modSL, modTP;
 };
 struct P4View
 {
@@ -37,10 +40,25 @@ long P4Magic(int lane)
    return((long)(4000000000000000+(h%100000000000000)*3+(ulong)lane));
 }
 
-void P4Clear(int lane)
+void P4ResetLane(int lane)
 {
    g_p4[lane].active=0; g_p4[lane].direction=0; g_p4[lane].cancel=0;
    g_p4[lane].order=0; g_p4[lane].position=0;
+   g_p4[lane].birthBar=0; g_p4[lane].planBar=0; g_p4[lane].waitBar=0;
+   g_p4[lane].cooldown=0; g_p4[lane].waitDirection=0; g_p4[lane].modifying=0;
+   g_p4[lane].modEntry=0; g_p4[lane].modSL=0; g_p4[lane].modTP=0;
+}
+
+// Preserve the expiry/upgrade cooldown across broker-confirmed closure.
+void P4Clear(int lane)
+{
+   int cooldown=g_p4[lane].cooldown, waitDirection=g_p4[lane].waitDirection;
+   P4ResetLane(lane);
+   if(cooldown!=0)
+   {
+      g_p4[lane].cooldown=cooldown; g_p4[lane].waitDirection=waitDirection;
+      g_p4[lane].waitBar=iTime(_Symbol,P3Timeframe(lane),1);
+   }
 }
 
 bool P4Save()
@@ -50,16 +68,21 @@ bool P4Save()
    int h=FileOpen(tmp,FILE_WRITE|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return(false);
    ResetLastError();
-   FileWriteInteger(h,1297368116,INT_VALUE); FileWriteInteger(h,1,INT_VALUE);
+   FileWriteInteger(h,1297368116,INT_VALUE); FileWriteInteger(h,2,INT_VALUE);
    for(int i=0;i<3;i++)
    {
       FileWriteInteger(h,g_p4[i].active,INT_VALUE);
       FileWriteInteger(h,g_p4[i].direction,INT_VALUE);
       FileWriteInteger(h,g_p4[i].cancel,INT_VALUE);
       FileWriteLong(h,(long)g_p4[i].order); FileWriteLong(h,(long)g_p4[i].position);
+      FileWriteLong(h,(long)g_p4[i].birthBar); FileWriteLong(h,(long)g_p4[i].planBar);
+      FileWriteLong(h,(long)g_p4[i].waitBar);
+      FileWriteInteger(h,g_p4[i].cooldown,INT_VALUE); FileWriteInteger(h,g_p4[i].waitDirection,INT_VALUE);
+      FileWriteInteger(h,g_p4[i].modifying,INT_VALUE);
+      FileWriteDouble(h,g_p4[i].modEntry); FileWriteDouble(h,g_p4[i].modSL); FileWriteDouble(h,g_p4[i].modTP);
    }
    FileFlush(h);
-   bool ok=(GetLastError()==0 && FileSize(h)==92);
+   bool ok=(GetLastError()==0 && FileSize(h)==272);
    FileClose(h);
    if(!ok) return(false);
    return(FileMove(tmp,g_p4Flags,g_p4File,g_p4Flags|FILE_REWRITE));
@@ -67,26 +90,47 @@ bool P4Save()
 
 bool P4Load()
 {
-   for(int i=0;i<3;i++) P4Clear(i);
+   for(int i=0;i<3;i++) P4ResetLane(i);
    if(!FileIsExist(g_p4File,g_p4Flags)) return(true);
    int h=FileOpen(g_p4File,FILE_READ|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return(false);
-   if(FileSize(h)!=92 || FileReadInteger(h,INT_VALUE)!=1297368116 || FileReadInteger(h,INT_VALUE)!=1)
+   long size=(long)FileSize(h);
+   int magic=FileReadInteger(h,INT_VALUE), version=FileReadInteger(h,INT_VALUE);
+   if(magic!=1297368116 || !((version==1 && size==92) || (version==2 && size==272)))
    { FileClose(h); return(false); }
+   ResetLastError();
    for(int i=0;i<3;i++)
    {
       g_p4[i].active=FileReadInteger(h,INT_VALUE);
       g_p4[i].direction=FileReadInteger(h,INT_VALUE);
       g_p4[i].cancel=FileReadInteger(h,INT_VALUE);
       long order=FileReadLong(h), position=FileReadLong(h);
+      if(version==2)
+      {
+         g_p4[i].birthBar=(datetime)FileReadLong(h); g_p4[i].planBar=(datetime)FileReadLong(h);
+         g_p4[i].waitBar=(datetime)FileReadLong(h);
+         g_p4[i].cooldown=FileReadInteger(h,INT_VALUE); g_p4[i].waitDirection=FileReadInteger(h,INT_VALUE);
+         g_p4[i].modifying=FileReadInteger(h,INT_VALUE);
+         g_p4[i].modEntry=FileReadDouble(h); g_p4[i].modSL=FileReadDouble(h); g_p4[i].modTP=FileReadDouble(h);
+      }
+      // Version 1 has no verified birth bar; its old pending entries will
+      // be cancelled rather than silently treated as new after migration.
       if((g_p4[i].active!=0 && g_p4[i].active!=1) ||
          (g_p4[i].cancel!=0 && g_p4[i].cancel!=1) || order<0 || position<0 ||
          (g_p4[i].active==1 && g_p4[i].direction!=1 && g_p4[i].direction!=-1) ||
-         (g_p4[i].active==0 && (g_p4[i].direction!=0 || g_p4[i].cancel!=0 || order!=0 || position!=0)))
+         g_p4[i].birthBar < -1 || g_p4[i].planBar<0 || g_p4[i].waitBar<0 ||
+         (g_p4[i].cooldown<0 || g_p4[i].cooldown>2) ||
+         (g_p4[i].cooldown==0 && g_p4[i].waitDirection!=0) ||
+         (g_p4[i].cooldown!=0 && g_p4[i].waitDirection!=1 && g_p4[i].waitDirection!=-1) ||
+         (g_p4[i].modifying!=0 && g_p4[i].modifying!=1) ||
+         !MathIsValidNumber(g_p4[i].modEntry) || !MathIsValidNumber(g_p4[i].modSL) ||
+         !MathIsValidNumber(g_p4[i].modTP) ||
+         (g_p4[i].modifying!=0 && (!P3Positive(g_p4[i].modEntry) || !P3Positive(g_p4[i].modSL) || !P3Positive(g_p4[i].modTP))) ||
+         (g_p4[i].active==0 && (g_p4[i].direction!=0 || g_p4[i].cancel!=0 || order!=0 || position!=0 || g_p4[i].modifying!=0)))
       { FileClose(h); return(false); }
       g_p4[i].order=(ulong)order; g_p4[i].position=(ulong)position;
    }
-   bool ok=(FileTell(h)==FileSize(h)); FileClose(h); return(ok);
+   bool ok=(GetLastError()==0 && FileTell(h)==FileSize(h)); FileClose(h); return(ok);
 }
 
 void P4Close()
@@ -98,7 +142,7 @@ void P4Close()
 void P4Init()
 {
    P4Close();
-   for(int i=0;i<3;i++) { P4Clear(i); g_p4Attempt[i]=0; g_p4View[i].note="Starting"; }
+   for(int i=0;i<3;i++) { P4ResetLane(i); g_p4Attempt[i]=0; g_p4View[i].note="Starting"; }
    g_p4Flags=MQLInfoInteger(MQL_TESTER)!=0?0:FILE_COMMON;
    g_p4File=P3DiaryKey()+"_autotrade.bin";
    g_p4Lock=FileOpen(g_p4File+".lock",FILE_READ|FILE_WRITE|FILE_BIN|g_p4Flags);
@@ -198,7 +242,7 @@ void P4Refresh(int lane)
    if(!P4Connected())
    { v.state=P4_UNCERTAIN; v.note="Disconnected"; g_p4View[lane]=v; return; }
    int positions=0,orders=0; ulong positionId=0,orderTicket=0; int posDir=0,orderDir=0;
-   double posEntry=0,posSL=0,posTP=0,posLot=0,ordEntry=0,ordSL=0,ordTP=0,ordLot=0;
+   double posEntry=0,posSL=0,posTP=0,posLot=0,ordEntry=0,ordSL=0,ordTP=0,ordLot=0,ordInitial=0;
    string posComment="",ordComment="";
    bool orderPending=false;
    long magic=P4Magic(lane);
@@ -227,8 +271,9 @@ void P4Refresh(int lane)
       if(symbol!=_Symbol || objectMagic!=magic) continue;
       if(!OrderGetInteger(ORDER_TYPE,type) || !OrderGetDouble(ORDER_PRICE_OPEN,ordEntry) ||
          !OrderGetDouble(ORDER_SL,ordSL) || !OrderGetDouble(ORDER_TP,ordTP) ||
-         !OrderGetDouble(ORDER_VOLUME_CURRENT,ordLot) || !OrderGetString(ORDER_COMMENT,ordComment) ||
-         !P3Positive(ordEntry) || !P3Positive(ordLot) || !MathIsValidNumber(ordSL) || ordSL<0.0 ||
+         !OrderGetDouble(ORDER_VOLUME_CURRENT,ordLot) || !OrderGetDouble(ORDER_VOLUME_INITIAL,ordInitial) ||
+         !OrderGetString(ORDER_COMMENT,ordComment) ||
+         !P3Positive(ordEntry) || !P3Positive(ordLot) || !P3Positive(ordInitial) || ordLot>ordInitial+1e-8 || !MathIsValidNumber(ordSL) || ordSL<0.0 ||
          !MathIsValidNumber(ordTP) || ordTP<0.0)
       { v.state=P4_UNCERTAIN; v.note="Order data unavailable"; g_p4View[lane]=v; return; }
       if(type!=ORDER_TYPE_BUY_LIMIT && type!=ORDER_TYPE_SELL_LIMIT && type!=ORDER_TYPE_BUY && type!=ORDER_TYPE_SELL)
@@ -260,6 +305,31 @@ void P4Refresh(int lane)
    bool changed=false;
    if(orders>0 && g_p4[lane].order==0) { g_p4[lane].order=orderTicket; changed=true; }
    if(positions>0 && g_p4[lane].position==0) { g_p4[lane].position=positionId; changed=true; }
+   // Capture the current forming bar only after a pending is broker-visible.
+   // Unknown legacy birth/history is not silently reset to a new age.
+   if(orders>0 && orderPending && g_p4[lane].birthBar==-1)
+   {
+      g_p4[lane].birthBar=iTime(_Symbol,P3Timeframe(lane),0);
+      if(g_p4[lane].birthBar<=0) { g_p4[lane].birthBar=0; g_p4[lane].cancel=1; g_p4[lane].cooldown=1; g_p4[lane].waitDirection=g_p4[lane].direction; }
+      changed=true;
+   }
+   if(orders>0 && orderPending && g_p4[lane].birthBar==0 &&
+      (g_p4[lane].cancel==0 || g_p4[lane].cooldown==0))
+   { g_p4[lane].cancel=1; g_p4[lane].cooldown=1; g_p4[lane].waitDirection=g_p4[lane].direction; changed=true; }
+   if(g_p4[lane].modifying!=0 && orders>0 && orderPending)
+   {
+      double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+      bool match=P3Positive(tick) && MathAbs(ordEntry-g_p4[lane].modEntry)<=tick*1e-6 &&
+                 MathAbs(ordSL-g_p4[lane].modSL)<=tick*1e-6 && MathAbs(ordTP-g_p4[lane].modTP)<=tick*1e-6;
+      if(match) { g_p4[lane].modifying=0; changed=true; }
+      else if(g_p4[lane].cancel==0) { g_p4[lane].cancel=1; changed=true; } // delayed/rejected modification
+   }
+   if(positions>0 && orders==0 && g_p4[lane].modifying!=0)
+   { g_p4[lane].modifying=0; changed=true; } // fill won the race; never modify the position
+   // A reduced remainder can be visible before its position is synchronized.
+   // Cancel it rather than modifying it or assuming the entry is unfilled.
+   if(orders>0 && orderPending && ordLot<ordInitial-1e-8 && g_p4[lane].cancel==0)
+   { g_p4[lane].cancel=1; changed=true; }
    // Never knowingly leave an owned pending entry without both planned exits.
    if(orders>0 && orderPending && (ordSL<=0.0 || ordTP<=0.0) && g_p4[lane].cancel==0)
    { g_p4[lane].cancel=1; changed=true; }
@@ -379,6 +449,14 @@ bool P4LiveLevels(const MqlTick &quote, const P3Plan &plan)
    return(false);
 }
 
+bool P4SpreadOK(int direction, double entry, double target, const MqlTick &q)
+{
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   return((direction==1 || direction==-1) && P3Positive(entry) && P3Positive(target) &&
+          P3Positive(q.bid) && P3Positive(q.ask) && q.ask>=q.bid && P3Positive(tick) &&
+          (double)direction*(target-entry)>q.ask-q.bid+tick*1e-7);
+}
+
 void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
 {
    ulong now=GetTickCount64();
@@ -386,6 +464,8 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    if(!P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market) || !plan.valid ||
       !P4CanTrade() || g_marketState!=MARKET_OPEN || !P4FreshQuote(quote)) return;
    if(!P4LiveLevels(quote,plan)) { g_p4View[lane].note="Frozen plan invalid at live quote"; return; }
+   if(!plan.market && !P4SpreadOK(plan.signal,plan.entry,plan.target,quote))
+   { g_p4View[lane].note="Pending target does not clear spread"; return; }
    if(!P4ProtectionAllowed(plan.market)) { g_p4View[lane].note="SL/TP lifetime or order mode unavailable"; return; }
    ENUM_ORDER_TYPE_FILLING fill;
    if(!P4FillMode(plan.market,fill)) { g_p4View[lane].note="Filling mode unavailable"; return; }
@@ -404,6 +484,7 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    // Persist intent before send. Uncertain results never trigger a blind resend.
    g_p4[lane].active=1; g_p4[lane].direction=plan.signal; g_p4[lane].cancel=0;
    g_p4[lane].order=0; g_p4[lane].position=0;
+   g_p4[lane].birthBar=plan.market?0:-1; g_p4[lane].planBar=plan.bar;
    if(!P4Persist()) return;
    ResetLastError();
    bool sent=OrderSend(request,result);
@@ -414,6 +495,94 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
       PrintFormat("MT %s order result %u error %d",P4TF(lane),result.retcode,GetLastError());
    g_p4View[lane].state=P4_UNCERTAIN;
    g_p4View[lane].note=StringFormat("Order result %u; awaiting broker",result.retcode);
+}
+
+// Return -1 when history cannot prove age; such an order is cancelled, not
+// treated as newborn. A shift counts actual broker bars, not elapsed minutes.
+int P4PendingAge(int lane)
+{
+   if(g_p4[lane].birthBar<=0) return(-1);
+   return(iBarShift(_Symbol,P3Timeframe(lane),g_p4[lane].birthBar,true));
+}
+
+bool P4CooldownReady(int lane, int direction)
+{
+   if(g_p4[lane].cooldown==0) return(true);
+   // Expiry blocks a repeat of the same signal; upgrade blocks all new orders
+   // until the next own-bar close, as requested for limit-to-market changes.
+   if(g_p4[lane].cooldown==1 && (direction==1 || direction==-1) && direction!=g_p4[lane].waitDirection)
+   {
+      g_p4[lane].cooldown=0; g_p4[lane].waitDirection=0; g_p4[lane].waitBar=0;
+      return(P4Persist());
+   }
+   datetime closed=iTime(_Symbol,P3Timeframe(lane),1);
+   if(closed<=0) return(false);
+   if(g_p4[lane].waitBar<=0)
+   {
+      g_p4[lane].waitBar=closed;
+      P4Persist();
+      return(false);
+   }
+   if(iBarShift(_Symbol,P3Timeframe(lane),g_p4[lane].waitBar,true)<2) return(false);
+   g_p4[lane].cooldown=0; g_p4[lane].waitDirection=0; g_p4[lane].waitBar=0;
+   return(P4Persist());
+}
+
+// Like SimpleEA's final-target spread veto, using MT's one target. This
+// checks existing levels, not distance to the live price (which can approach
+// the entry normally). Missing/stale quotes cannot prove a spread failure.
+bool P4TargetClearsSpread(const P4View &v, const MqlTick &q)
+{
+   return(P4SpreadOK(v.direction,v.entry,v.tp,q));
+}
+
+void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
+{
+   P4View v=g_p4View[lane];
+   if(v.state!=P4_PENDING || g_p4[lane].cancel!=0 || g_p4[lane].modifying!=0 ||
+      g_marketState!=MARKET_OPEN || !P4FreshQuote(q)) return;
+   // A pending order's volume cannot be modified. The frozen plan's lot is
+   // the allowed size for its new stop, including broker-minimum/bypass rules.
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+   if(!plan.valid || plan.market || plan.signal!=v.direction || !P3Positive(step) ||
+      v.lot>plan.lot+step*1e-7 || (InpMinimumLot && MathAbs(v.lot-plan.lot)>step*1e-7) ||
+      !P4LiveLevels(q,plan) || !P4SpreadOK(plan.signal,plan.entry,plan.target,q))
+   { g_p4[lane].cancel=1; P4Persist(); return; }
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(!P3Positive(tick)) { g_p4[lane].cancel=1; P4Persist(); return; }
+   if(MathAbs(v.entry-plan.entry)<=tick*1e-6 && MathAbs(v.sl-plan.stop)<=tick*1e-6 &&
+      MathAbs(v.tp-plan.target)<=tick*1e-6)
+   { g_p4[lane].planBar=plan.bar; P4Persist(); return; }
+   if(!P4CanTrade()) return;
+   ulong now=GetTickCount64();
+   if(g_p4Attempt[lane]!=0 && now-g_p4Attempt[lane]<5000) return;
+   if(!OrderSelect(v.order) || g_p4[lane].order!=v.order) return;
+   string symbol=""; long magic=0,type=0;
+   if(!OrderGetString(ORDER_SYMBOL,symbol) || !OrderGetInteger(ORDER_MAGIC,magic) ||
+      !OrderGetInteger(ORDER_TYPE,type) || symbol!=_Symbol || magic!=P4Magic(lane) ||
+      (type!=ORDER_TYPE_BUY_LIMIT && type!=ORDER_TYPE_SELL_LIMIT)) return;
+   double currentLot=0,initialLot=0; long positionId=0;
+   if(!OrderGetDouble(ORDER_VOLUME_CURRENT,currentLot) || !OrderGetDouble(ORDER_VOLUME_INITIAL,initialLot) ||
+      !OrderGetInteger(ORDER_POSITION_ID,positionId) || !P3Positive(currentLot) ||
+      !P3Positive(initialLot) || positionId<0 || positionId>0 ||
+      MathAbs(currentLot-v.lot)>step*1e-7 || currentLot<initialLot-step*1e-7)
+   { g_p4[lane].cancel=1; P4Persist(); return; }
+   MqlTradeRequest request={}; MqlTradeCheckResult check={}; MqlTradeResult result={};
+   request.action=TRADE_ACTION_MODIFY; request.order=v.order; request.symbol=_Symbol;
+   request.magic=(ulong)P4Magic(lane); request.price=plan.entry; request.sl=plan.stop; request.tp=plan.target;
+   request.type_time=ORDER_TIME_GTC;
+   g_p4Attempt[lane]=now;
+   if(!OrderCheck(request,check) || check.retcode!=0)
+   { g_p4[lane].cancel=1; P4Persist(); return; }
+   // Write-ahead intent: on any crash or uncertain result, only matching
+   // broker values confirm the update; otherwise cancellation is requested.
+   g_p4[lane].modifying=1; g_p4[lane].modEntry=plan.entry;
+   g_p4[lane].modSL=plan.stop; g_p4[lane].modTP=plan.target; g_p4[lane].planBar=plan.bar;
+   if(!P4Persist()) return;
+   bool sent=OrderSend(request,result);
+   g_p4View[lane].note=StringFormat("Modification requested (%u); awaiting broker",result.retcode);
+   if(!sent || P4DefiniteReject(result.retcode))
+   { g_p4[lane].cancel=1; P4Persist(); }
 }
 
 // Called on a symbol tick for new entries and on the timer for cancellation/
@@ -429,6 +598,38 @@ void P4Process(bool allowEntry)
       bool hedging=AccountInfoInteger(ACCOUNT_MARGIN_MODE)==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
       P4_ACTION action=P4Decide(InpAutoTrading,plan.signal,g_p4View[lane].state,
                                 g_p4View[lane].direction,hedging,P4CanTrade(),plan.valid);
+      if(g_p4View[lane].state==P4_PENDING)
+      {
+         int age=P4PendingAge(lane);
+         bool upgrade=plan.signal==g_p4View[lane].direction &&
+                      g_p3[lane].score==3*g_p4View[lane].direction;
+         if(age<0 || age>=3 || upgrade)
+         {
+            int cooldown=upgrade?2:1;
+            if(g_p4[lane].cooldown<cooldown)
+            {
+               g_p4[lane].cooldown=cooldown; g_p4[lane].waitDirection=g_p4[lane].direction;
+               if(!P4Persist()) return;
+            }
+            action=P4_CANCEL_REMAINDER;
+         }
+         else if(action!=P4_CANCEL_REMAINDER && (!plan.valid || plan.market))
+            action=P4_CANCEL_REMAINDER;
+         else if(action!=P4_CANCEL_REMAINDER)
+         {
+            MqlTick q;
+            if(SymbolInfoTick(_Symbol,q) && P4FreshQuote(q) && g_marketState==MARKET_OPEN)
+            {
+               if(!P4TargetClearsSpread(g_p4View[lane],q)) action=P4_CANCEL_REMAINDER;
+               else if(plan.bar>g_p4[lane].planBar)
+               {
+                  P4Modify(lane,q,plan);
+                  if(!g_p4Ready) return;
+                  if(g_p4[lane].cancel!=0) action=P4_CANCEL_REMAINDER;
+               }
+            }
+         }
+      }
       // A prior cancellation request remains in force even if the signal changes again.
       if(g_p4[lane].cancel!=0 && g_p4View[lane].state==P4_PENDING) action=P4_CANCEL_REMAINDER;
       if(action==P4_CANCEL_REMAINDER)
@@ -439,6 +640,8 @@ void P4Process(bool allowEntry)
       }
       else if(action==P4_PLACE && allowEntry)
       {
+         if(!P4CooldownReady(lane,plan.signal)) { g_p4View[lane].note="Waiting for next closed bar"; continue; }
+         if(!g_p4Ready) return;
          MqlTick quote;
          if(SymbolInfoTick(_Symbol,quote) && P4FreshQuote(quote))
          {
