@@ -23,13 +23,12 @@ enum P4_ACTION
    P4_HOLD = 3
 };
 
-// Execution must preserve the requested score-to-order-type mapping, even if
-// a caller supplies stale or inconsistent plan data.
-bool P4PlanMatchesSignal(int direction, int score, bool market)
+// Validate the score, direction and the closed-bar volume-derived order type.
+bool P4PlanMatchesSignal(int direction, int score, bool market, int volumeState)
 {
    if(direction != 1 && direction != -1) return(false);
    if(score != direction * 2 && score != direction * 3) return(false);
-   return(market == (score == direction * 3));
+   return(market == P3MarketStyle(score,volumeState));
 }
 
 // This policy is not a broker state machine. The caller must establish the

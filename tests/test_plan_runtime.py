@@ -40,7 +40,7 @@ using datetime=long long; using ENUM_TIMEFRAMES=int; using ENUM_ORDER_TYPE=int;
 #define MARKET_OPEN 0
 int g_marketState=0;
 string _Symbol="TEST";
-struct MqlRates {datetime time=0; double open=0,high=0,low=0,close=0; int spread=0;};
+struct MqlRates {datetime time=0; double open=0,high=0,low=0,close=0; int spread=0; long long tick_volume=0;};
 struct MqlTick {double bid=100,ask=100.02;datetime time=1001;};
 MqlTick current{}; datetime closed[3]={1000,1000,1000}, opened[3]={1001,1001,1001};
 datetime iTime(string,int tf,int shift){int i=tf==5?0:tf==15?1:2;return shift?closed[i]:opened[i];}
@@ -72,7 +72,7 @@ string DoubleToString(double n,int digits){ostringstream o;o<<fixed<<setprecisio
 main=r'''
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
  for(int i=0;i<1000;i++){double p=100+sin(i*0.3)*0.3;feed.push_back({i+1,p,p+0.8,p-0.8,p+0.1,2});}
- vector<int> scores(1000,2),gts(1000,1),cts(1000,1),status(1000,1);
+ vector<int> scores(1100,2),gts(1100,1),cts(1100,1),status(1100,1);
  P3Reset();P3ResetSnapshots();P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
  P3Plan p{};check(!P3MakePlan(0,p)&&p.signal==1,"no plan until observed tick");
  current.time=1000;P3CaptureQuotes();P3FreezePlans();check(!P3MakePlan(0,p),"pre-close quote is not captured");
@@ -102,6 +102,27 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  P3Remember(1,1,1,1,3,"MIXED",1002,feed,scores,gts,cts,status);P3FreezePlans();
  check(!P3MakePlan(1,p) && p.priced && !p.valid,"sizing failure keeps price snapshot");
  calcFail=false;current.ask=106;P3FreezePlans();P3MakePlan(1,p);check(!p.valid && p.entry==105.2,"sizing failure frozen until next bar");
+ // Each lane uses its own last completed bar; the current bar is absent.
+ P3Reset();P3ResetSnapshots();current={100,100.02,1004};
+ closed[0]=1003;opened[0]=1004;feed.push_back({1003,100,101,99,100,2,49});
+ for(int i=int(feed.size())-21;i<int(feed.size())-1;i++)feed[i].tick_volume=100;
+ P3CaptureQuotes();P3Remember(0,1,1,1,3,"MIXED",1003,feed,scores,gts,cts,status);P3FreezePlans();
+ check(P3MakePlan(0,p) && p.signal==1 && !p.market && p.entry<100.02,"weak volume converts +3 to limit");
+ check(P3PlanLine(0).find("Volume: LOW")!=string::npos && P3PlanLine(0).find("LIMIT")!=string::npos,"weak volume displayed");
+ closed[1]=1003;opened[1]=1004;auto m15Feed=feed;m15Feed.back().tick_volume=100;
+ P3CaptureQuotes();P3Remember(1,1,1,1,-3,"MIXED",1003,m15Feed,scores,gts,cts,status);P3FreezePlans();
+ check(P3MakePlan(1,p) && p.signal==-1 && p.market && P3PlanLine(1).find("Volume: OK")!=string::npos,"M15 uses its own confirmed volume while M5 is weak");
+ check(P3MakePlan(0,p) && !p.market,"M15 volume does not change M5 limit");
+ // Same-bar corrected history changes the selected style: frozen level is not reinterpreted.
+ feed.back().tick_volume=100;P3Remember(0,1,1,1,3,"MIXED",1003,feed,scores,gts,cts,status);P3FreezePlans();
+ check(!P3MakePlan(0,p) && p.signal==1,"same-bar volume correction holds incompatible frozen plan");
+ closed[0]=1004;opened[0]=1005;current.time=1005;feed.push_back({1004,100,101,99,100,2,100});
+ P3CaptureQuotes();P3Remember(0,1,1,1,3,"MIXED",1004,feed,scores,gts,cts,status);P3FreezePlans();
+ check(P3MakePlan(0,p) && p.market && P3PlanLine(0).find("Volume: OK")!=string::npos,"confirmed volume permits market next bar");
+ for(auto &b:feed)b.tick_volume=0;
+ closed[0]=1005;opened[0]=1006;current.time=1006;feed.push_back({1005,100,101,99,100,2});
+ P3CaptureQuotes();P3Remember(0,1,1,1,3,"MIXED",1005,feed,scores,gts,cts,status);P3FreezePlans();
+ check(P3MakePlan(0,p) && p.market && P3PlanLine(0).find("Volume: --")!=string::npos,"missing volume permits market and is visible");
  if(!f)cout<<"Phase 3 plan-runtime stub checks passed\n";
  return f?1:0;}
 

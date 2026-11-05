@@ -42,6 +42,20 @@ double P3RecentMove(const MqlRates &rates[], int last, int dir, double tick)
    return(MathMax(tick, moves[n / 2]));
 }
 
+// Compare the completed bar's tick volume with the preceding 20 bars,
+// excluding the tested bar. Match SimpleEA's 50% threshold and unavailable
+// behavior: fewer than ten positive baseline bars means no volume evidence.
+int P3VolumeState(const MqlRates &rates[], int last)
+{
+   if(last < 20 || last >= ArraySize(rates)) return(-1);
+   double sum=0.0;
+   int valid=0;
+   for(int k=last-20; k<last; k++)
+      if(rates[k].tick_volume>0) { sum+=(double)rates[k].tick_volume; valid++; }
+   if(valid<10 || sum<=0.0 || rates[last].tick_volume<0) return(-1);
+   return((double)rates[last].tick_volume >= 0.5*sum/valid ? 1 : 0);
+}
+
 bool P3GeometryAt(const MqlRates &rates[], int last, int lane, int dir, bool market,
                   double bid, double ask, double tick, double minDistance, P3Geometry &out)
 {
@@ -144,13 +158,14 @@ double P3ObservedTargetR(const MqlRates &rates[], const int &scores[], const int
    samples = 0;
    int horizon = lane == 0 ? 4 : (lane == 1 ? 6 : 8);
    int dir = score > 0 ? 1 : -1;
-   bool market = MathAbs(score) >= 3;
+   bool market = P3MarketStyle(score,P3VolumeState(rates,n-1));
    double values[];
    int earliest = (int)MathMax(700, n - 6000);
    int nextAllowed = n;
    for(int t = n - horizon - 1; t >= earliest; t--)
    {
-      if(t + horizon >= nextAllowed || scores[t] != score) continue;
+      if(t + horizon >= nextAllowed || scores[t] != score ||
+         P3MarketStyle(scores[t],P3VolumeState(rates,t)) != market) continue;
       int selected=P3SelectedTrend(lane,choice,gts[t],cts[t],statuses[t]);
       if(P3Signal(scores[t],selected,allowAgainst)!=dir) continue;
       double spread = rates[t].spread > 0 ? rates[t].spread * point : spreadFallback;

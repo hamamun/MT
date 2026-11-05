@@ -14,7 +14,7 @@ input bool InpShowDetails = false;                 // Show diary details
 
 struct P3LaneData
 {
-   int gt, ct, st, score;
+   int gt, ct, st, score, volumeState;
    string regime;
    datetime bar;
    double targetR;
@@ -27,7 +27,7 @@ void P3Invalidate(int lane)
    g_p3[lane].gt = P3_WAIT; g_p3[lane].ct = P3_WAIT;
    g_p3[lane].st = P3_WAIT; g_p3[lane].score = P3_WAIT;
    g_p3[lane].bar = 0; g_p3[lane].targetR = 0.0; g_p3[lane].samples = 0;
-   g_p3[lane].regime = "WAIT";
+   g_p3[lane].regime = "WAIT"; g_p3[lane].volumeState = -1;
 }
 
 void P3Reset()
@@ -59,6 +59,7 @@ void P3Remember(int lane, int gt, int ct, int st, int score, string regime,
 {
    g_p3[lane].gt=gt; g_p3[lane].ct=ct; g_p3[lane].st=st; g_p3[lane].score=score;
    g_p3[lane].regime=regime; g_p3[lane].bar=bar;
+   g_p3[lane].volumeState=P3VolumeState(rates,ArraySize(rates)-1);
    g_p3[lane].targetR=0.0; g_p3[lane].samples=0;
    if(score < -3 || score > 3 || MathAbs(score) < 2 || !P3HasBidBars()) return;
    double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
@@ -126,7 +127,7 @@ bool P3MakePlanAt(int lane, const MqlTick &q, P3Plan &plan)
    int selected=P3SelectedTrend(lane,P3Choice(lane),g_p3[lane].gt,g_p3[lane].ct,g_p3[lane].st);
    plan.signal=P3Signal(g_p3[lane].score,selected,P3Against(lane));
    if(plan.signal == 0 || plan.signal == P3_WAIT) return(false);
-   plan.market=MathAbs(g_p3[lane].score)==3;
+   plan.market=P3MarketStyle(g_p3[lane].score,g_p3[lane].volumeState);
    if(!P3Positive(q.bid) || !P3Positive(q.ask) || q.ask<q.bid) return(false);
    // A stale or closed market must not turn a cached quote into a current entry.
    if(g_marketState != MARKET_OPEN) return(false);
@@ -212,7 +213,7 @@ bool P3MakePlan(int lane, P3Plan &plan)
    plan.signal=P3Signal(g_p3[lane].score,selected,P3Against(lane));
    if(g_p3[lane].bar<=0 || iTime(_Symbol,P3Timeframe(lane),1)!=g_p3[lane].bar)
    { plan.signal=P3_WAIT; return(false); }
-   bool market=MathAbs(g_p3[lane].score)==3;
+   bool market=P3MarketStyle(g_p3[lane].score,g_p3[lane].volumeState);
    plan.market=market;
    if(!g_p3Frozen[lane] || g_p3QuoteBar[lane]!=g_p3[lane].bar ||
       g_p3Plan[lane].signal!=plan.signal || g_p3Plan[lane].market!=market) return(false);
@@ -237,6 +238,11 @@ string P3PlanLine(int lane)
    if(p.signal==P3_WAIT) return(tf+" | Signal: WAIT");
    if(p.signal==0) return(tf+" | Signal: NONE");
    string s=tf+" | Signal: "+(p.signal>0?"BUY":"SELL");
+   if(MathAbs(g_p3[lane].score)==3)
+   {
+      s+=" | Volume: ";
+      s+=(g_p3[lane].volumeState<0?"--":(g_p3[lane].volumeState==0?"LOW":"OK"));
+   }
    int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
    string currency=AccountInfoString(ACCOUNT_CURRENCY);
    if(!P3Positive(p.entry)) return(s+" | Entry: -- | Plan data unavailable");

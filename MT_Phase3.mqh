@@ -44,6 +44,13 @@ int P3Signal(int score, int selectedTrend, bool allowAgainst)
    return(0);
 }
 
+// Closed-bar tick-volume state: -1 unavailable, 0 weak, 1 confirmed.
+// Like SimpleEA, missing volume does not veto a score-3 market entry.
+bool P3MarketStyle(int score, int volumeState)
+{
+   return((score == 3 || score == -3) && volumeState != 0);
+}
+
 bool P3Positive(double v)
 {
    return(MathIsValidNumber(v) && v != EMPTY_VALUE && v > 0.0);

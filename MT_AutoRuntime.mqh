@@ -614,7 +614,7 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
 {
    ulong now=GetTickCount64();
    if(g_p4Attempt[lane]!=0 && now-g_p4Attempt[lane]<5000) return;
-   if(!P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market) || !plan.valid ||
+   if(!P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market,g_p3[lane].volumeState) || !plan.valid ||
       !P4CanTrade() || g_marketState!=MARKET_OPEN || !P4FreshQuote(quote)) return;
    string levelReason=P4LiveLevelReason(quote,plan);
    if(levelReason!="") { g_p4View[lane].note=levelReason; return; }
@@ -774,7 +774,7 @@ string P4EntryReason(int lane, const P3Plan &plan, bool hedging)
    if(!hedging) return("Hedging account required");
    if(!P4CanTrade()) return("Trading permission unavailable");
    if(g_marketState!=MARKET_OPEN) return("Market not open");
-   if(!plan.valid || !P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market))
+   if(!plan.valid || !P4PlanMatchesSignal(plan.signal,g_p3[lane].score,plan.market,g_p3[lane].volumeState))
       return("Plan data unavailable");
    if(g_p4[lane].cooldown!=0)
    {
@@ -825,8 +825,7 @@ void P4Process(bool allowEntry)
       if(g_p4View[lane].state==P4_PENDING)
       {
          int age=P4PendingAge(lane);
-         bool upgrade=plan.signal==g_p4View[lane].direction &&
-                      g_p3[lane].score==3*g_p4View[lane].direction;
+         bool upgrade=plan.valid && plan.signal==g_p4View[lane].direction && plan.market;
          if(age<0 || age>=3 || upgrade)
          {
             if(g_p4[lane].cooldown!=2)

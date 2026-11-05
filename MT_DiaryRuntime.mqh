@@ -240,7 +240,7 @@ void P3DiaryContext(P3DiaryRow &r, int lane, const P3Plan &plan, const MqlTick &
    r.regime=g_p3[lane].regime=="STEADY"?1:(g_p3[lane].regime=="CHOPPY"?2:(g_p3[lane].regime=="MIXED"?0:99));
    r.market=plan.market?1:0; r.choice=(int)P3Choice(lane); r.against=P3Against(lane)?1:0;
    r.bypass=InpBypassRisk?1:0; r.minimum=InpMinimumLot?1:0; r.bar=(long)plan.bar;
-   r.barProxy=plan.barProxy?1:0; r.strategy=30003;
+   r.barProxy=plan.barProxy?1:0; r.strategy=30004;
    r.lot=plan.lot; r.spread=current.ask-current.bid;
    r.equity=AccountInfoDouble(ACCOUNT_EQUITY); r.balance=AccountInfoDouble(ACCOUNT_BALANCE);
    if(!MathIsValidNumber(r.equity)) r.equity=0.0;

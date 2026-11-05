@@ -18,11 +18,11 @@ double MathFloor(double x) { return floor(x); }
 int main() {
  int failures=0;
  auto check=[&](bool b,const char *s) { if(!b) { cerr << "FAIL " << s << '\n'; ++failures; } };
- for(int dir: {-1,1}) for(int score=-4;score<=4;score++) for(int market=0;market<=1;market++) {
-   bool expected=(score==dir*2 && !market) || (score==dir*3 && market);
-   check(P4PlanMatchesSignal(dir,score,market)==expected,"score/direction/entry-type mapping");
+ for(int dir: {-1,1}) for(int score=-4;score<=4;score++) for(int market=0;market<=1;market++) for(int vol: {-1,0,1}) {
+   bool expected=(score==dir*2 && !market) || (score==dir*3 && market==(vol!=0));
+   check(P4PlanMatchesSignal(dir,score,market,vol)==expected,"score/direction/volume entry type mapping");
  }
- check(!P4PlanMatchesSignal(0,2,false),"NONE has no executable plan");
+ check(!P4PlanMatchesSignal(0,2,false,1),"NONE has no executable plan");
  check(P4Decide(false,1,P4_EMPTY,0,true,true,true)==P4_NO_ACTION,"disabled never places");
  check(P4Decide(true,1,P4_EMPTY,0,true,true,true)==P4_PLACE,"qualified BUY places");
  check(P4Decide(true,-1,P4_EMPTY,0,true,true,true)==P4_PLACE,"qualified SELL places");

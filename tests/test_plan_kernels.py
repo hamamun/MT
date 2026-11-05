@@ -14,7 +14,7 @@ stubs = r'''
 #include <vector>
 using namespace std;
 #define EMPTY_VALUE numeric_limits<double>::max()
-struct MqlRates { long time=0; double open=0,high=0,low=0,close=0; int spread=0; };
+struct MqlRates { long time=0; double open=0,high=0,low=0,close=0; int spread=0; long long tick_volume=0; };
 bool MathIsValidNumber(double x){return isfinite(x);}
 double MathFloor(double x){return floor(x);} double MathCeil(double x){return ceil(x);}
 double MathAbs(double x){return abs(x);}
@@ -32,6 +32,17 @@ int main(){int fails=0;auto check=[&](bool v,const char*s){if(!v){cerr<<"FAIL "<
    double base=100+0.02*i+sin(i*0.37)*0.5;
    bars[i]={i+1,base,base+0.8,base-0.8,base+0.05,2};
  }
+ // Same as SimpleEA: exclude the tested bar from the 20-bar average;
+ // 50% passes, fewer than ten usable preceding values is unavailable.
+ for(auto &b:bars)b.tick_volume=100;
+ check(P3VolumeState(bars,19)==-1,"short history is unavailable");
+ bars[999].tick_volume=49;check(P3VolumeState(bars,999)==0,"49 percent is weak");
+ bars[999].tick_volume=50;check(P3VolumeState(bars,999)==1,"50 percent passes");
+ bars[999].tick_volume=0;check(P3VolumeState(bars,999)==0,"zero tested bar with baseline is weak");
+ for(int i=979;i<990;i++)bars[i].tick_volume=0;
+ check(P3VolumeState(bars,999)==-1,"missing baseline is unavailable");
+ check(P3MarketStyle(3,-1) && P3MarketStyle(-3,1) && !P3MarketStyle(3,0) && !P3MarketStyle(-2,1),"order style by volume and score");
+ for(auto &b:bars)b.tick_volume=0;
  P3Geometry g{};
  check(P3GeometryAt(bars,999,0,1,true,120.0,120.02,0.01,0.05,g),"market buy geometry");
  check(g.entry==120.02 && g.stop<g.entry && g.stop<=119.95,"market buy stop side/distance");
@@ -48,6 +59,19 @@ int main(){int fails=0;auto check=[&](bool v,const char*s){if(!v){cerr<<"FAIL "<
  double r2=P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,true,0.01,0.01,0.05,0.02,count2);
  check(count1>0 && count1==count2 && r1==r2,"historical replay cannot see future outside window");
  check(isfinite(r1) && r1>=0,"historical result finite");
+ // Historical targets must use the same score-3 market/limit style as today.
+ for(int i=0;i<900;i++){bars[i].tick_volume=100;scores[i]=3;}
+ bars[899].tick_volume=49;int weakOnly=0;
+ P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,true,0.01,0.01,0.05,0.02,weakOnly);
+ check(weakOnly==0,"weak-volume target does not use historical market analogs");
+ bars[899].tick_volume=100;int marketOnly=0;
+ P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,true,0.01,0.01,0.05,0.02,marketOnly);
+ check(marketOnly>0,"market-volume target uses matching historical market analogs");
+ for(int i=702;i<899;i+=4)bars[i].tick_volume=20;
+ bars[899].tick_volume=20;int weakWithHistory=0;
+ P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,true,0.01,0.01,0.05,0.02,weakWithHistory);
+ check(weakWithHistory>0,"weak-volume target uses historical limit analogs");
+
  fill(cts.begin(),cts.end(),-1); int rejected=0;
  P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,false,0.01,0.01,0.05,0.02,rejected);
  check(rejected==0,"historical strict-trend filter honored");
