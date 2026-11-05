@@ -73,7 +73,6 @@ struct P2Countdown
 };
 struct P2Lane
 {
-   string line;
    datetime lastBar;
    datetime attemptedBar;
    ulong lastAttempt;
@@ -851,16 +850,6 @@ int P2Status(int gt, int ct)
    return(2);                         // CONFLICT
 }
 
-string P2StateText(int state)
-{
-   if(state == 1) return("UP");
-   if(state == -1) return("DOWN");
-   if(state == 0) return("FLAT");
-   if(state == 2) return("CONFLICT");
-   if(state == 3) return("MIXED");
-   return("WAIT");
-}
-
 // The first observed segment is left-censored and must not count as a run.
 // The current segment is right-censored, and is excluded from samples.
 bool P2Remaining(const int &labels[], int first, int last, int &age, int &remaining)
@@ -964,7 +953,7 @@ string P2CountdownText(int lane, bool score, P2Countdown &c, const int &labels[]
    if(!c.valid)
    {
       int age = 0, remaining = 0;
-      if(!P2Remaining(labels, first, last, age, remaining)) return(score ? "--%L" : "--");
+      if(!P2Remaining(labels, first, last, age, remaining)) return(UIFormatCountdown(score, false, 0, 0));
       c.valid = true;
       c.label = labels[last];
       c.age = age;
@@ -974,16 +963,7 @@ string P2CountdownText(int lane, bool score, P2Countdown &c, const int &labels[]
       P2Save(lane, score, c);
    }
    int left = c.remaining - (last - anchorIndex);
-   if(score)
-   {
-      if(left < 0) return("past est.");
-      if(left == 0) return("~0%L");
-      int percent = (int)MathRound(100.0 * left / (c.age + c.remaining));
-      if(percent == 0) return("<1%L");
-      return(IntegerToString(percent) + "%L");
-   }
-   if(left < 0) return("0b+");
-   return("~" + IntegerToString(left) + "b");
+   return(UIFormatCountdown(score, true, left, c.age + c.remaining));
 }
 
 // Automate's 30-bar regression divided by median absolute change over 20.
@@ -1044,7 +1024,7 @@ void P2Reset()
 {
    for(int i = 0; i < 3; i++)
    {
-      g_p2[i].line = "";
+      UIClearReading(i);
       g_p2[i].lastBar = 0;
       g_p2[i].attemptedBar = 0;
       g_p2[i].lastAttempt = 0;
@@ -1054,13 +1034,6 @@ void P2Reset()
       g_p2[i].pt.loaded = false; g_p2[i].pt.valid = false;
       g_p2[i].score.loaded = false; g_p2[i].score.valid = false;
    }
-}
-
-string P2Line(int lane)
-{
-   if(g_p2[lane].line != "") return(g_p2[lane].line);
-   string tf = lane == 0 ? "M5" : (lane == 1 ? "M15" : "M30");
-   return(tf + " | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT");
 }
 
 void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
@@ -1086,7 +1059,7 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
    g_p2[lane].retry = true;
    if(n < 2 || latest <= 0 || rates[n-1].time != latest)
    {
-      g_p2[lane].line = "";
+      UIClearReading(lane);
       return;
    }
    g_p2[lane].lastGoodRequest = n;
@@ -1104,7 +1077,7 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
    if(firstValid > 0)
    {
       int size = n - firstValid;
-      if(size < 2) { g_p2[lane].line = ""; return; }
+      if(size < 2) { UIClearReading(lane); return; }
       for(int i = 0; i < size; i++) rates[i] = rates[i + firstValid];
       n = size;
       ArrayResize(rates, n);
@@ -1114,7 +1087,7 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
       double partialClose[];
       int partialGT[];
       if(ArrayResize(partialClose, n) != n || ArrayResize(partialGT, n) != n)
-      { g_p2[lane].line = ""; return; }
+      { UIClearReading(lane); return; }
       for(int i = 0; i < n; i++) partialClose[i] = rates[i].close;
       double tick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       if(tick <= 0.0) tick = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -1129,9 +1102,7 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
       }
       if(lane == 2 && n > 30 && partialGT[n-1] != P2_WAIT)
          ptext = P2CountdownText(lane, false, g_p2[lane].pt, partialGT, rates, 29, n-1);
-      string tfname = lane == 0 ? "M5" : (lane == 1 ? "M15" : "M30");
-      g_p2[lane].line = tfname + " | GT: " + P2StateText(partialGT[n-1]) +
-                        " | CT: WAIT | ST: WAIT | RG: " + rg + " | PT: " + ptext + " | SC: WAIT";
+      UISetReadings(lane,partialGT[n-1],P2_WAIT,P2_WAIT,rg,ptext,P2_WAIT,"");
       g_p2[lane].lastBar = latest;
       return; // keep retrying for the remaining required history
    }
@@ -1141,11 +1112,11 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
       ArrayResize(cycles,n)!=n || ArrayResize(trends,n)!=n || ArrayResize(rocs,n)!=n ||
       ArrayResize(gt,n)!=n || ArrayResize(ct,n)!=n || ArrayResize(status,n)!=n ||
       ArrayResize(score,n)!=n || ArrayResize(pt,n)!=n)
-   { g_p2[lane].line = ""; return; }
+   { UIClearReading(lane); return; }
    for(int i = 0; i < n; i++) { close[i] = rates[i].close; high[i] = rates[i].high; low[i] = rates[i].low; }
    P2HighPass3(close, 40, hp40);
    if(ArraySize(hp40) != n || !P2Cycles(hp40, cycles))
-   { g_p2[lane].line = ""; return; }
+   { UIClearReading(lane); return; }
    // A separate pair of causal filters for each possible adaptive period.
    for(int cycle = 14; cycle <= 36; cycle++)
    {
@@ -1155,7 +1126,7 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
       P2HighPass3(close, l1, hp1);
       P2HighPass3(close, cycle, hp2);
       if(ArraySize(hp1) != n || ArraySize(hp2) != n)
-      { g_p2[lane].line = ""; return; }
+      { UIClearReading(lane); return; }
       for(int i = 1; i < n; i++)
       {
          if(cycles[i] != cycle) continue;
@@ -1191,15 +1162,9 @@ void P2Evaluate(int lane, ENUM_TIMEFRAMES tf, datetime latest)
       if(h != EMPTY_VALUE && MathIsValidNumber(h))
          rg = h > 0.55 ? "STEADY" : (h < 0.45 ? "CHOPPY" : "MIXED");
    }
-   string ptext = pt[last] == P2_WAIT ? "--" : P2CountdownText(lane, false, g_p2[lane].pt, pt, rates, lane == 2 ? 29 : P2_WARMUP, last);
-   string stext = score[last] == P2_WAIT ? "--%L" : P2CountdownText(lane, true, g_p2[lane].score, score, rates, P2_WARMUP, last);
-   string tfname = lane == 0 ? "M5" : (lane == 1 ? "M15" : "M30");
-   string scoreText = "WAIT";
-   if(score[last] != P2_WAIT)
-      scoreText = (score[last] > 0 ? "+" : "") + IntegerToString(score[last]) + "/3 (" + stext + ")";
-   g_p2[lane].line = tfname + " | GT: " + P2StateText(gt[last]) + " | CT: " + P2StateText(ct[last]) +
-                     " | ST: " + P2StateText(status[last]) + " | RG: " + rg + " | PT: " + ptext +
-                     " | SC: " + scoreText;
+   string ptext = pt[last] == P2_WAIT ? UIFormatCountdown(false, false, 0, 0) : P2CountdownText(lane, false, g_p2[lane].pt, pt, rates, lane == 2 ? 29 : P2_WARMUP, last);
+   string stext = score[last] == P2_WAIT ? UIFormatCountdown(true, false, 0, 0) : P2CountdownText(lane, true, g_p2[lane].score, score, rates, P2_WARMUP, last);
+   UISetReadings(lane,gt[last],ct[last],status[last],rg,ptext,score[last],stext);
    g_p2[lane].lastBar = latest;
    P3Remember(lane,gt[last],ct[last],status[last],score[last],rg,latest,rates,score,gt,ct,status);
    // Request deeper history if needed, up to the terminal's own limit.

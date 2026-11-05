@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real MT_Panel.mqh against chart/font stubs, not an MT5 renderer."""
-import pathlib, re, subprocess, tempfile
+import os, pathlib, re, subprocess, tempfile
 root = pathlib.Path(__file__).resolve().parents[1]
 main_source = (root / 'MT.mq5').read_text()
 panel_source = (root / 'MT_Panel.mqh').read_text()
@@ -8,6 +8,8 @@ assert '#include "MT_Panel.mqh"' in main_source
 # Rendering belongs to the module; the EA only owns lifecycle calls and its trading gate.
 assert not re.search(r'\b(?:ObjectCreate|ObjectSetInteger|ObjectSetString|ObjectDelete|ObjectsDeleteAll|TextGetSize|MakeLabel|MakeRect|MakeTextLine)\b', main_source)
 assert 'bool ChartSupported()' in main_source
+assert not re.search(r'\b(?:P2Line|P2StateText|UISetReadings)\s*\([^;{}]*\)\s*\{', main_source)
+assert 'GT: ' not in main_source and 'g_p2[lane].line' not in main_source
 # MQL color literals become deterministic C++ test colors.
 panel_cpp = re.sub(r"C'(\d+),(\d+),(\d+)'", lambda m: str(int(m[1]) + 256*int(m[2]) + 65536*int(m[3])), panel_source)
 stubs = r'''
@@ -20,6 +22,7 @@ stubs = r'''
 #include <string>
 using namespace std;
 using datetime=long long;using uint=unsigned int;using color=int;using ENUM_TIMEFRAMES=int;
+#define P2_WAIT 99
 #define PERIOD_M5 5
 #define PERIOD_M15 15
 #define PERIOD_M30 30
@@ -71,7 +74,7 @@ string EnumToString(int){return "PERIOD_H1";} string IntegerToString(int x){retu
 int StringLen(const string &s){return int(s.size());}
 int StringFind(const string &s,const string &v,int start=0){auto p=s.find(v,start);return p==string::npos?-1:int(p);}
 string StringSubstr(const string &s,int start,int len=-1){if(start>=int(s.size()))return "";return s.substr(start,len<0?string::npos:size_t(len));}
-template<class T> T MathMax(T a,T b){return max(a,b);} template<class T> T MathMin(T a,T b){return min(a,b);} double MathCeil(double x){return ceil(x);}
+template<class T> T MathMax(T a,T b){return max(a,b);} template<class T> T MathMin(T a,T b){return min(a,b);} double MathCeil(double x){return ceil(x);} double MathRound(double x){return round(x);}
 bool TextSetFont(string,int size,uint){fontSize=-size/10;return !measureFailure;}
 bool TextGetSize(string t,uint &w,uint &h){w=uint(t.size()*fontSize*0.8);h=uint(t.find("tallglyph")!=string::npos?40:fontSize+4);return true;}
 struct Obj {int type=0,x=0,y=0,w=0,h=0,size=0,ink=0,bg=0,order=0;string text,tip;};
@@ -83,13 +86,13 @@ bool ObjectSetString(int,string n,int prop,string v){auto &o=objects[n];if(prop=
 bool ObjectDelete(int,string n){objects.erase(n);return true;}
 void ObjectsDeleteAll(int,string prefix){clearCount++;for(auto it=objects.begin();it!=objects.end();)if(it->first.find(prefix)==0)it=objects.erase(it);else ++it;}
 void ChartRedraw(){}
-void P2Update(){}
+void P2Update();
 string lanes[3]={"M5 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: ~8b | SC: -3/3 (33%L)","M15 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: 0b+ | SC: -3/3 (50%L)","M30 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~8b | SC: -3/3 (50%L)"};
 string plans[3]={"M5 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12306 (-1.10 USD) | TP: 1.12135 (+0.61 USD)","M15 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12367 (-1.71 USD) | TP: 1.11999 (+1.97 USD)","M30 | Signal: SELL | Volume: OK | MARKET Entry: 1.12194 | Lot: 0.01 | SL: 1.12336 (-1.42 USD) | TP: 1.12136 (+0.58 USD)"};
 string autos[3]={"M5 | Auto: ON | SELL OPEN | Entry 1.12204 | Lot 0.01 | SL 1.12306 (-1.02 USD) | TP 1.12148 (+0.56 USD)","M15 | Auto: ON | SELL OPEN | Entry 1.12196 | Lot 0.01 | SL -- (-- USD) | TP 1.11999 (+1.97 USD) | Position NO SL (unprotected)","M30 | Auto: ON | SELL OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)"};
 string diaries[3]={"M5 | Trades Today S 2 W 0 L 0 BE 0 | All S 2 W 0 L 0 BE 0","M15 | Trades Today S 2 W 0 L 0 BE 0 | All S 2 W 0 L 0 BE 0","M30 | Trades Today S 3 W 0 L 0 BE 0 | All S 3 W 0 L 0 BE 0"};
 string tips[3]={"M5 broker tooltip","M15 broker tooltip","M30 broker tooltip"}; string timer="Timer: OFF";
-string P2Line(int i){return lanes[i];} string P3PlanLine(int i){return plans[i];} string P4Line(int i){return autos[i];} string P4Tooltip(int i){return tips[i];}
+string P3PlanLine(int i){return plans[i];} string P4Line(int i){return autos[i];} string P4Tooltip(int i){return tips[i];}
 string P5Summary(int i,datetime){return diaries[i];} string P5Detail(int i){return "M"+to_string(i)+" | Pending 1 | Open 1 | Review 0 | Unfilled 2 | Last: SELL OPEN | Net: -- | CSV unavailable";}
 string P4ScheduleText(){return timer;}
 string Label(string name){string s;for(int j=0;objects.count("MT_"+name+"_"+to_string(j));j++)s+=objects["MT_"+name+"_"+to_string(j)].text;return s;}
@@ -98,9 +101,15 @@ string AutoText(int lane){string s;for(int j=0;j<g_uiAutoParts[lane];j++){if(j)s
 string NoSpaces(string s){s.erase(remove(s.begin(),s.end(),' '),s.end());return s;}
 '''
 # AutoText references module globals and is appended after the module.
-start=stubs.index('string AutoText('); auto_helper=stubs[start:];stubs=stubs[:start]
+start=stubs.index('string AutoText('); auto_helper='void P2Update(){for(int i=0;i<3;i++) g_uiReadings[i]=lanes[i];}\n'+stubs[start:];stubs=stubs[:start]
 main = r'''
 int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL "<<msg<<"\n";fails++;}};
+ check(UIFormatCountdown(false,false,0,0)=="--" && UIFormatCountdown(true,true,-1,4)=="past est." && UIFormatCountdown(false,true,-1,4)=="0b+","countdown formatting belongs to panel");
+ UISetReadings(0,1,-1,2,"MIXED","~8b",3,"33%L");
+ check(P2Line(0)=="M5 | GT: UP | CT: DOWN | ST: CONFLICT | RG: MIXED | PT: ~8b | SC: +3/3 (33%L)","reading formatting belongs to panel");
+ UISetReadings(1,-1,P2_WAIT,P2_WAIT,"WAIT","--",P2_WAIT,"");
+ check(P2Line(1)=="M15 | GT: DOWN | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT","partial reading formatting preserved");
+ UIClearReading(0);check(P2Line(0)=="M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT","cleared reading fallback");
  BuildPanel(); Obj bg=objects["MT_bg"];
  check(bg.x+bg.w<=chartWidth && bg.y+bg.h<=750,"screenshot-sized chart fits normal active three-lane panel");
  check(Label("symbol")=="EURUSDm" && Label("stateText")=="OPEN" && Label("bidText")=="Bid: 1.12194" && Label("askText")=="Ask: 1.12202","live market header");
@@ -117,7 +126,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   for(int j=3;j<UIPartCount(autos[i]);j++) check(text.find(UIPart(autos[i],j))!=string::npos,"auto field and note retained");
   for(int j=0;j<g_uiAutoParts[i];j++)check(objects["MT_autoText"+n+"_"+to_string(j)+"_0"].tip==tips[i],"auto tooltip on every field");
  }
- check(Label("planValue0_0")=="1.12196" && Label("planValue0_1")=="0.01" && Label("planValue0_2")=="1.12306" && Wrapped("planMoney0_2_")=="-1.10 USD" && Label("planValue0_3")=="1.12135" && Wrapped("planMoney0_3_")=="+0.61 USD","full plan levels and amounts, with separate SL and TP");
+ check(Label("planValue0_0")=="1.12196" && Label("planValue0_1")=="0.01" && Label("planValue0_2")=="1.12306" && Wrapped("planMoneyRows0_2_")=="(-1.10 USD)" && Label("planValue0_3")=="1.12135" && Wrapped("planMoneyRows0_3_")=="(+0.61 USD)","full plan levels and amounts, with separate SL and TP");
  check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL (unprotected)")!=string::npos,"broker no-SL warning retained");
  check(Label("settingValue6")=="OFF" && AutoText(0).find("SL 1.12306 (-1.02 USD)")!=string::npos,"broker-confirmed SL remains visible when placement is off");
  for(int lane=0;lane<3;lane++) for(int col=0;col<4;col++){
@@ -129,6 +138,54 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(objects["MT_card0"].y+objects["MT_card0"].h<=objects["MT_autoTitle_0"].y && objects["MT_autoRow2"].y+objects["MT_autoRow2"].h<=bg.y+bg.h,"compact plan and auto sections fit panel");
  int rectOrder=objects["MT_autoStyle2"].order;check(rectOrder<objects["MT_brandText_0"].order,"all backgrounds created before labels");
  for(auto &pair:objects){auto o=pair.second;if(o.type==OBJ_LABEL)check(o.x>=bg.x && o.x+int(o.text.size()*o.size*0.8)<=bg.x+bg.w && o.y>=bg.y && o.y+o.size+4<=bg.y+bg.h,"all labels fit background");}
+ // Both rows use the whole settings box while every label and badge remains separate.
+ auto checkSettings=[&](){
+  Obj box=objects["MT_settings"];int first[9]={0,1,4,5,6,7,10,11,14},last[9]={0,3,4,5,6,9,10,13,14};
+  check(objects["MT_settingKey0_0"].x==box.x+10 && objects["MT_settingKey5_0"].x==box.x+10,"settings rows start at padded left edge");
+  for(int g=0;g<9;g++){
+   Obj key=objects["MT_settingKey"+to_string(g)+"_0"];
+   Obj firstBadge=objects["MT_settingBadge"+to_string(first[g])];
+   Obj lastBadge=objects["MT_settingBadge"+to_string(last[g])];
+   check(key.x+int(key.text.size()*key.size*0.8)<=firstBadge.x,"setting key and badge do not overlap");
+   for(int k=first[g];k<last[g];k++)check(objects["MT_settingBadge"+to_string(k)].x+objects["MT_settingBadge"+to_string(k)].w<objects["MT_settingBadge"+to_string(k+1)].x,"lane badges separated");
+   if(g==4 || g==8) check(lastBadge.x+lastBadge.w==box.x+box.w-10,"settings row spans padded width");
+   else {
+    Obj next=objects["MT_settingKey"+to_string(g+1)+"_0"], divider=objects["MT_settingDivider"+to_string(g)];
+    check(lastBadge.x+lastBadge.w<divider.x && divider.x<next.x,"settings groups and dividers are separated");
+   }
+  }
+ };
+ checkSettings();check(objects["MT_settingKey0_0"].size==9,"narrow chart uses compact readable setting font");
+ chartWidth=1290;UpdatePanel();checkSettings();
+ check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue14_0"].size==11,"screenshot-width chart uses larger setting font");
+ check(objects["MT_bg"].x+objects["MT_bg"].w<=chartWidth,"compact panel fits a wide chart");
+ check(Label("planMoney0_2")=="(-1.10 USD)" && Wrapped("planMoneyRows0_2_").empty(),"wide plan uses inline cash and removes stacked cash");
+ for(int lane=0;lane<3;lane++) for(int col=2;col<4;col++){
+  string n=to_string(lane)+"_"+to_string(col);Obj value=objects["MT_planValue"+n+"_0"],money=objects["MT_planMoney"+n+"_0"],cell=objects["MT_cardCell"+n];
+  check(money.y==value.y && money.x>=value.x+int(value.text.size()*value.size*0.8) && money.x+int(money.text.size()*money.size*0.8)<=cell.x+cell.w,"inline amounts align with prices and fit their own cells");
+ }
+ chartWidth=1500;UpdatePanel();checkSettings();
+ check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue14_0"].size==11,"wide chart uses larger setting font");
+ check(objects["MT_settingKey4_0"].x>objects["MT_settings"].x+objects["MT_settings"].w*3/4,"wide settings do not bunch at left");
+ // Match the supplied mock: two idle cards flank one active card, with the
+ // active lane wide enough for its own fields rather than widening all lanes.
+ int threeActiveWidth=objects["MT_bg"].w;
+ string savedPlan0=plans[0],savedPlan2=plans[2];plans[0]="M5 | Signal: NONE";plans[2]="M30 | Signal: NONE";UpdatePanel();checkSettings();
+ check(objects["MT_bg"].w<threeActiveWidth && objects["MT_bg"].w<chartWidth-100,"one-active plan layout keeps the panel compact on a wide chart");
+ check(Label("cardSignalText0")=="NONE" && Label("cardSignalText2")=="NONE" && Label("planValue0_0").empty() && Label("planMoney0_2").empty(),"idle cards center NONE and clear old plan data");
+ check(objects["MT_card1"].w>objects["MT_card0"].w && objects["MT_card1"].w>objects["MT_card2"].w && Label("planMoney1_2")=="(-1.71 USD)" && Label("planMoney1_3")=="(+1.97 USD)","active card has room for live prices and inline SL/TP amounts");
+ check(objects["MT_card0"].x+objects["MT_card0"].w<objects["MT_card1"].x && objects["MT_card1"].x+objects["MT_card1"].w<objects["MT_card2"].x && objects["MT_card2"].x+objects["MT_card2"].w==objects["MT_settings"].x+objects["MT_settings"].w,"three cards are separated and span the panel");
+ plans[0]=savedPlan0;plans[2]=savedPlan2;UpdatePanel();
+ against[1]=false; choices[0]=P3_FOLLOW_CT;percentages[1]=0;InpAutoTrading=false;
+ timer="Timer: CLOCK UNAVAILABLE | New entries blocked";UpdatePanel();checkSettings();
+ check(Label("settingValue0")=="OFF" && Label("settingValue2")=="M15 OFF" && Label("settingValue7")=="M5 CT" && Label("settingValue12")=="M15 INVALID" && Label("settingValue14")=="CLOCK UNAVAILABLE" && Wrapped("timerDetail")==timer,"settings display actual values and retain complete timer warning");
+ against[1]=true;choices[0]=P3_AUTO;percentages[1]=85;InpAutoTrading=true;timer="Timer: OFF";
+ chartWidth=850;UpdatePanel();checkSettings();check(Wrapped("timerDetail").empty(),"stale timer detail cleared after resize and refresh");
+ check(Label("planMoney0_2").empty() && Wrapped("planMoneyRows0_2_")=="(-1.10 USD)","narrow fallback wraps complete cash and clears inline amount");
+ string unusualCash="(-123.45 "+string(100,'X')+")", savedPlan=plans[0];
+ plans[0]="M5 | Signal: BUY | MARKET Entry: 1.20000 | Lot: 0.01 | SL: 1.10000 "+unusualCash+" | TP: 1.30000 (+2.00 USD) | Bars: Last/unknown proxy";
+ UpdatePanel();check(Wrapped("planMoneyRows0_2_")==unusualCash && Wrapped("planNote0_")=="Bars: Last/unknown proxy","long cash and plan warning survive narrow layout");
+ plans[0]=savedPlan;UpdatePanel();check(Wrapped("planMoneyRows0_2_")=="(-1.10 USD)" && Wrapped("planNote0_").empty(),"long cash and notes clear on plan refresh");
  string savedAuto=autos[0];autos[0]+=" | tallglyph";UpdatePanel();
  check(objects["MT_reading1_0_0"].y-objects["MT_reading0_0_0"].y>=46,"row height accounts for unusually tall displayed text");
  autos[0]=savedAuto;UpdatePanel();
@@ -165,5 +222,6 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
 '''
 with tempfile.TemporaryDirectory() as tmp:
     p=pathlib.Path(tmp); (p/'test.cpp').write_text(stubs+panel_cpp+auto_helper+main)
-    subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-misleading-indentation',str(p/'test.cpp'),'-o',str(p/'test')],check=True)
+    flags = ['-fsanitize=undefined', '-fno-omit-frame-pointer'] if os.getenv('MT_TEST_SANITIZERS') else []
+    subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-misleading-indentation'] + flags + [str(p/'test.cpp'),'-o',str(p/'test')],check=True)
     subprocess.run([str(p/'test')],check=True)

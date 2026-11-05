@@ -5,7 +5,6 @@
 #define UI_PREFIX "MT_"
 #define UI_FONT "Consolas"
 #define UI_SIZE 10
-#define UI_SETTING_SIZE 9
 #define UI_X 12
 #define UI_Y 24
 #define UI_BG C'17,24,39'
@@ -17,6 +16,47 @@
 #define UI_RED C'91,40,48'
 #define UI_AMBER C'96,70,28'
 #define UI_TITLE C'94,205,233'
+
+// The numerical Phase 2 engine passes readings here; formatting stays in the panel.
+string g_uiReadings[3]={"","",""};
+string P2StateText(int state)
+{
+   if(state==1) return("UP");
+   if(state==-1) return("DOWN");
+   if(state==0) return("FLAT");
+   if(state==2) return("CONFLICT");
+   if(state==3) return("MIXED");
+   return("WAIT");
+}
+string UIFormatCountdown(bool score, bool available, int left, int total)
+{
+   if(!available) return(score?"--%L":"--");
+   if(score)
+   {
+      if(left<0) return("past est.");
+      if(left==0) return("~0%L");
+      int percent=(int)MathRound(100.0*left/total);
+      if(percent==0) return("<1%L");
+      return(IntegerToString(percent)+"%L");
+   }
+   if(left<0) return("0b+");
+   return("~"+IntegerToString(left)+"b");
+}
+void UIClearReading(int lane) { g_uiReadings[lane]=""; }
+void UISetReadings(int lane, int gt, int ct, int st, const string rg,
+                   const string prediction, int score, const string scoreLife)
+{
+   string tf=lane==0?"M5":(lane==1?"M15":"M30"), scoreText="WAIT";
+   if(score!=P2_WAIT) scoreText=(score>0?"+":"")+IntegerToString(score)+"/3 ("+scoreLife+")";
+   g_uiReadings[lane]=tf+" | GT: "+P2StateText(gt)+" | CT: "+P2StateText(ct)+
+                      " | ST: "+P2StateText(st)+" | RG: "+rg+" | PT: "+prediction+" | SC: "+scoreText;
+}
+string P2Line(int lane)
+{
+   if(g_uiReadings[lane]!="") return(g_uiReadings[lane]);
+   string tf=lane==0?"M5":(lane==1?"M15":"M30");
+   return(tf+" | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT");
+}
 
 bool g_uiBuilt=false, g_uiSupported=false;
 int g_uiAutoParts[3]={0,0,0}, g_uiPlanNotes[3]={0,0,0};
@@ -212,14 +252,6 @@ void UILevel(const string text, string &level, string &cash)
    if(p<0) { level=text; cash=""; }
    else { level=StringSubstr(text,0,p); cash=StringSubstr(text,p+1); }
 }
-// Parentheses in the source line are decoration; keep the signed amount and currency.
-string UIAmount(const string cash)
-{
-   int n=StringLen(cash);
-   if(n>=2 && StringSubstr(cash,0,1)=="(" && StringSubstr(cash,n-1,1)==")")
-      return(StringSubstr(cash,1,n-2));
-   return(cash);
-}
 void UIReadPlan(const string line, const string tf, UIPlan &p)
 {
    p.tf=tf; p.signal=""; p.style=""; p.volume=""; p.entry=""; p.lot="";
@@ -379,28 +411,65 @@ void UpdatePanel()
       UIGrowStep(readings[i],UI_SIZE,step); UIGrowStep(planText[i],UI_SIZE,step);
       UIGrowStep(autos[i],UI_SIZE,step); UIGrowStep(diaries[i],UI_SIZE,step); UIGrowStep(details[i],UI_SIZE,step);
    }
-   for(int i=0;i<15;i++) UIGrowStep(values[i],UI_SETTING_SIZE,step);
-   int groupW[9],badgeW[15],settingsRow[2]={0,0};
-   for(int g=0;g<9;g++)
+   // Use the largest readable setting font that fits the available chart width.
+   // If even the smallest size does not fit, the panel expands as before.
+   int chartW=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0);
+   int settingSize=11,groupW[9],badgeW[15],settingsRow[2];
+   int settingGap=18,settingLabelPad=8,settingBadgePad=12,settingChipGap=4;
+   for(int pass=0;pass<4;pass++)
    {
-      groupW[g]=UIWidth(groups[g],UI_SETTING_SIZE)+4;
-      for(int j=0;j<count[g];j++) { int k=start[g]+j; badgeW[k]=UIWidth(values[k],UI_SETTING_SIZE)+8; groupW[g]+=badgeW[k]+2; }
-      groupW[g]+=4; settingsRow[g<5?0:1]+=groupW[g];
+      settingSize=pass<3?11-pass:9;
+      // Tight charts retain the compact minimum; wider charts get roomier groups.
+      settingGap=pass==3?4:18; settingLabelPad=pass==3?4:8;
+      settingBadgePad=pass==3?8:12; settingChipGap=pass==3?2:4;
+      settingsRow[0]=4*settingGap; settingsRow[1]=3*settingGap;
+      for(int g=0;g<9;g++)
+      {
+         groupW[g]=UIWidth(groups[g],settingSize)+settingLabelPad;
+         for(int j=0;j<count[g];j++)
+         {
+            int k=start[g]+j; badgeW[k]=UIWidth(values[k],settingSize)+settingBadgePad;
+            groupW[g]+=badgeW[k]+(j>0?settingChipGap:0);
+         }
+         settingsRow[g<5?0:1]+=groupW[g];
+      }
+      if((int)MathMax(settingsRow[0],settingsRow[1])+20<=chartW-2*UI_X-2*pad || pass==3) break;
    }
-   int planCol[4]; string planHead[4]={"Entry","Lot","SL","TP"};
-   for(int c=0;c<4;c++) planCol[c]=UIWidth(planHead[c])+12;
-   int maxPlanHead=0;
-   for(int i=0;i<3;i++)
+   for(int g=0;g<9;g++) UIGrowStep(groups[g],settingSize,step);
+   for(int i=0;i<15;i++) UIGrowStep(values[i],settingSize,step);
+   // Each lane gets only the width its own plan needs. SL/TP cash amounts
+   // share the price row, as in the mock, rather than adding extra rows.
+   int planCol[3][4],planMin[3],planTotal=0;
+   bool inlineCash=true;
+   string planHead[4]={"Entry","Lot","SL","TP"};
+   // On a narrow chart, put cash under its price instead of forcing the
+   // three cards wider than the screen. No amount is shortened or omitted.
+   for(int pass=0;pass<2;pass++)
    {
-      planCol[0]=(int)MathMax(planCol[0],UIWidth(plan[i].entry)+12);
-      planCol[1]=(int)MathMax(planCol[1],UIWidth(plan[i].lot)+12);
-      planCol[2]=(int)MathMax(planCol[2],UIWidth(plan[i].sl)+12);
-      planCol[3]=(int)MathMax(planCol[3],UIWidth(plan[i].tp)+12);
-      int head=UIWidth("M30")+16+6+UIWidth(plan[i].signal)+12+UIWidth(plan[i].style)+12+
-               UIWidth("VOL "+plan[i].volume)+14;
-      maxPlanHead=(int)MathMax(maxPlanHead,head);
+      inlineCash=(pass==0); planTotal=0;
+      for(int i=0;i<3;i++)
+      {
+         string data[4];
+         data[0]=plan[i].entry; data[1]=plan[i].lot; data[2]=plan[i].sl; data[3]=plan[i].tp;
+         for(int c=0;c<4;c++)
+         {
+            int content=UIWidth(data[c]);
+            string cash=c==2?plan[i].slCash:(c==3?plan[i].tpCash:"");
+            if(cash!="")
+            {
+               int cashWidth=UIWidth(cash,UI_SIZE-2);
+               if(inlineCash) content+=4+cashWidth;
+            }
+            planCol[i][c]=(int)MathMax(UIWidth(planHead[c]),content)+12;
+         }
+         int head=UIWidth("M30")+16+6+UIWidth(plan[i].signal)+12+UIWidth(plan[i].style)+12+
+                  (plan[i].volume==""?0:UIWidth("VOL "+plan[i].volume)+14);
+         int fields=plan[i].entry==""?0:planCol[i][0]+planCol[i][1]+planCol[i][2]+planCol[i][3]+8;
+         planMin[i]=(int)MathMax(UIWidth("000000000000000000000")+20,(int)MathMax(head,fields));
+         planTotal+=planMin[i];
+      }
+      if(planTotal+2*gap<=chartW-2*UI_X-2*pad || pass==1) break;
    }
-   int planMin=(int)MathMax(maxPlanHead,planCol[0]+planCol[1]+planCol[2]+planCol[3]+8);
    int tfW=UIWidth("M30")+16, statW=UIWidth("000")+8;
    for(int i=0;i<3;i++) if(statsOK[i]) for(int j=0;j<4;j++)
    {
@@ -412,11 +481,10 @@ void UpdatePanel()
    int leftHead=UIWidth("MT V1.00")+UIWidth(g_symbol,UI_SIZE+2)+UIWidth(g_type)+UIWidth(state)+60;
    int rightHead=UIWidth("Bid: "+bid)+UIWidth("Ask: "+ask)+UIWidth(clock)+40;
    int minW=(int)MathMax(leftHead+rightHead+gap,(int)MathMax(settingsRow[0],settingsRow[1])+20);
-   minW=(int)MathMax(minW,3*planMin+2*gap);
+   minW=(int)MathMax(minW,planTotal+2*gap);
    minW=(int)MathMax(minW,diaryMin+autoLead+120+gap);
-   int chartW=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0);
-   int inner=(int)MathMax(minW,chartW-2*UI_X-2*pad);
-   int panelWidth=inner+2*pad,cardW=(inner-2*gap)/3;
+   int inner=minW;
+   int panelWidth=inner+2*pad;
    int diaryW=(int)MathMax(diaryMin,(inner-gap)*38/100),autoW=inner-gap-diaryW;
    statW=(int)MathMax(statW,(diaryW-tfW-20)/8);
    int readW[7]; string cols[7]={"TF","GT","CT","ST","RG","PT","SC"}; int sum=0;
@@ -427,20 +495,23 @@ void UpdatePanel()
       { string val=""; if(c==0) val=tf[i]; else UIReadingField(readings[i],cols[c],val); readW[c]=(int)MathMax(readW[c],UIWidth(val)+14); }
       sum+=readW[c];
    }
-   if(sum>inner-20) { inner=sum+20; panelWidth=inner+2*pad; cardW=(inner-2*gap)/3; diaryW=(int)MathMax(diaryMin,(inner-gap)*38/100); autoW=inner-gap-diaryW; statW=(int)MathMax(statW,(diaryW-tfW-20)/8); }
+   if(sum>inner-20) { inner=sum+20; panelWidth=inner+2*pad; diaryW=(int)MathMax(diaryMin,(inner-gap)*38/100); autoW=inner-gap-diaryW; statW=(int)MathMax(statW,(diaryW-tfW-20)/8); }
    int spare=inner-20-sum;
    for(int c=0;c<7;c++) readW[c]+=spare/7+(c<spare%7?1:0);
+   int cardW[3],planSpare=inner-2*gap-planTotal;
+   for(int i=0;i<3;i++) cardW[i]=planMin[i]+planSpare/3+(i<planSpare%3?1:0);
    int marketRows=UIWrappedRows(g_marketDetail,inner),timerRows=timerDetail?UIWrappedRows(timer,inner-20):0;
-   int readRows[3],readTotal=0,planNoteRows=0,moneyRows=1,autoRows[3],autoTotal=0,diaryRows[3],diaryTotal=2,detailTotal=0;
-   for(int i=0;i<3;i++)
+   int cashExtra=0;
+   if(!inlineCash) for(int i=0;i<3;i++)
    {
-      moneyRows=(int)MathMax(moneyRows,UIWrappedRows(UIAmount(plan[i].slCash),planCol[2]-10,UI_SIZE-2));
-      moneyRows=(int)MathMax(moneyRows,UIWrappedRows(UIAmount(plan[i].tpCash),planCol[3]-10,UI_SIZE-2));
+      cashExtra=(int)MathMax(cashExtra,UIWrappedRows(plan[i].slCash,planCol[i][2]-12,UI_SIZE-2));
+      cashExtra=(int)MathMax(cashExtra,UIWrappedRows(plan[i].tpCash,planCol[i][3]-12,UI_SIZE-2));
    }
+   int readRows[3],readTotal=0,planNoteRows=0,autoRows[3],autoTotal=0,diaryRows[3],diaryTotal=2,detailTotal=0;
    for(int i=0;i<3;i++)
    {
       readRows[i]=readingOK[i]?1:(int)MathMax(1,UIWrappedRows(readings[i],inner-20)); readTotal+=readRows[i];
-      planNoteRows=(int)MathMax(planNoteRows,UIWrappedRows(plan[i].notes,cardW-20));
+      planNoteRows=(int)MathMax(planNoteRows,UIWrappedRows(plan[i].notes,cardW[i]-20));
       autoRows[i]=UIAutoFlow(autos[i],i,0,0,autoW,autoLead,step,false,""); autoTotal+=autoRows[i]*step+4;
       diaryRows[i]=statsOK[i]?1:(int)MathMax(1,UIWrappedRows(diaries[i],diaryW-20)); diaryTotal+=diaryRows[i];
       if(InpShowDetails) detailTotal+=UIWrappedRows(details[i],diaryW-20);
@@ -448,7 +519,7 @@ void UpdatePanel()
    int headerH=step+6,marketY=y+headerH,settingsY=marketY+marketRows*step+gap;
    int settingsH=(3+timerRows)*step+10,readTitleY=settingsY+settingsH+gap,readHeaderY=readTitleY+step;
    int readY=readHeaderY+step,planTitleY=readY+readTotal*step+gap,cardsY=planTitleY+step;
-   int cardH=(3+moneyRows+planNoteRows)*step+12, bottomTitleY=cardsY+cardH+gap,bottomY=bottomTitleY+step;
+   int cardH=(3+cashExtra+planNoteRows)*step+12, bottomTitleY=cardsY+cardH+gap,bottomY=bottomTitleY+step;
    int bottomH=(int)MathMax(autoTotal+4,(diaryTotal+detailTotal)*step+12);
    int panelHeight=bottomY-UI_Y+bottomH+pad;
 
@@ -467,15 +538,23 @@ void UpdatePanel()
    for(int g=0;g<9;g++)
    {
       if(g==5) sx=x+10;
-      settingX[g]=sx; int cy=settingsY+step+4+(g<5?0:step);
-      int chipX=sx+UIWidth(groups[g],UI_SETTING_SIZE)+4;
+      int row=g<5?0:1, gapCount=row==0?4:3, gapIndex=row==0?g:g-5;
+      int extra=inner-20-settingsRow[row];
+      settingX[g]=sx; int cy=settingsY+step+4+(row==0?0:step);
+      int chipX=sx+UIWidth(groups[g],settingSize)+settingLabelPad;
       for(int j=0;j<count[g];j++)
       {
          int k=start[g]+j; badgeX[k]=chipX;
          UIBox("settingBadge"+IntegerToString(k),chipX,cy-2,badgeW[k],step,UIChipFill(values[k]),UI_BORDER);
-         chipX+=badgeW[k]+2;
+         chipX+=badgeW[k]+settingChipGap;
       }
       sx+=groupW[g];
+      if(gapIndex<gapCount)
+      {
+         int between=settingGap+extra/gapCount+(gapIndex<extra%gapCount?1:0);
+         UIBox("settingDivider"+IntegerToString(g),sx+between/2,cy,1,step-4,UI_BORDER,UI_BORDER);
+         sx+=between;
+      }
    }
    int rx=x+10;
    for(int c=0;c<7;c++)
@@ -490,11 +569,12 @@ void UpdatePanel()
       }
       rx+=readW[c];
    }
-   int cardX[3];
+   int cardX[3],nextCardX=x;
    for(int i=0;i<3;i++)
    {
-      string n=IntegerToString(i); cardX[i]=x+i*(cardW+gap);
-      UIBox("card"+n,cardX[i],cardsY,cardW,cardH,UI_SURFACE,UI_BORDER);
+      string n=IntegerToString(i); cardX[i]=nextCardX; nextCardX+=cardW[i]+gap;
+      color planBorder=plan[i].signal=="BUY"?UI_GREEN:(plan[i].signal=="SELL"?UI_RED:UI_BORDER);
+      UIBox("card"+n,cardX[i],cardsY,cardW[i],cardH,UI_SURFACE,planBorder);
       UIBox("cardTF"+n,cardX[i]+6,cardsY+4,tfW-6,step,UI_BADGE,UI_BORDER);
       int sigX=cardX[i]+tfW+6,sigW=UIWidth(plan[i].signal)+10,styleW=UIWidth(plan[i].style)+10;
       UIBox("cardSignal"+n,sigX,cardsY+4,sigW,step,plan[i].signal=="NONE" || plan[i].signal=="WAIT"?UI_SURFACE:UIChipFill(plan[i].signal),UI_SURFACE);
@@ -503,8 +583,8 @@ void UpdatePanel()
       int colX=cardX[i]+4;
       for(int c=0;c<4;c++)
       {
-         int cw=c==3?cardX[i]+cardW-4-colX:planCol[c];
-         UIBox("cardCell"+n+"_"+IntegerToString(c),colX,cardsY+step+7,cw,(2+moneyRows)*step,UI_SURFACE,plan[i].entry==""?UI_SURFACE:UI_BORDER);
+         int cw=c==3?cardX[i]+cardW[i]-4-colX:planCol[i][c];
+         UIBox("cardCell"+n+"_"+IntegerToString(c),colX,cardsY+step+7,cw,(2+cashExtra)*step,UI_SURFACE,plan[i].entry==""?UI_SURFACE:UI_BORDER);
          colX+=cw;
       }
    }
@@ -541,8 +621,8 @@ void UpdatePanel()
    for(int g=0;g<9;g++)
    {
       int cy=settingsY+step+4+(g<5?0:step); string tip=g<5?settingsTip:(g==8?timerTip:trendTip);
-      UIText("settingKey"+IntegerToString(g),settingX[g],cy,groups[g],clrSilver,UI_SETTING_SIZE,tip);
-      for(int j=0;j<count[g];j++) { int k=start[g]+j; UIText("settingValue"+IntegerToString(k),badgeX[k]+4,cy,values[k],clrWhite,UI_SETTING_SIZE,tip); }
+      UIText("settingKey"+IntegerToString(g),settingX[g],cy,groups[g],clrSilver,settingSize,tip);
+      for(int j=0;j<count[g];j++) { int k=start[g]+j; UIText("settingValue"+IntegerToString(k),badgeX[k]+settingBadgePad/2,cy,values[k],clrWhite,settingSize,tip); }
    }
    UIWrapped("timerDetail",x+10,settingsY+3*step+4,timerDetail?timer:"",inner-20,step,clrSilver,timerTip,g_uiTimerNotes);
    UIText("readTitle",x,readTitleY,"MARKET READINGS",UI_MUTED,UI_SIZE);
@@ -571,7 +651,7 @@ void UpdatePanel()
       UIText("cardTFText"+n,cardX[i]+10,cardsY+6,plan[i].recognized?tf[i]:"",clrWhite,UI_SIZE,planTip);
       bool idle=plan[i].signal=="NONE" || plan[i].signal=="WAIT";
       int sigX=cardX[i]+tfW+11;
-      if(idle) sigX=cardX[i]+(cardW-UIWidth(plan[i].signal,UI_SIZE+2))/2;
+      if(idle) sigX=cardX[i]+(cardW[i]-UIWidth(plan[i].signal,UI_SIZE+2))/2;
       int sigY=idle?cardsY+(cardH-step)/2:cardsY+6;
       UIText("cardSignalText"+n,sigX,sigY,plan[i].signal,UIValueColor(plan[i].signal),idle?UI_SIZE+2:UI_SIZE,planTip);
       int styleX=cardX[i]+tfW+6+UIWidth(plan[i].signal)+12;
@@ -587,12 +667,13 @@ void UpdatePanel()
          UIText("planValue"+id,colX,cardsY+2*step+9,data[c],clrWhite,UI_SIZE,planTip);
          if(c==2 || c==3)
          {
-            string money=UIAmount(c==2?plan[i].slCash:plan[i].tpCash);
-            UIWrapped("planMoney"+id+"_",colX,cardsY+3*step+9,money,planCol[c]-10,step,c==2?clrTomato:clrLime,planTip,g_uiCashRows[i][c-2],UI_SIZE-2);
+            string money=c==2?plan[i].slCash:plan[i].tpCash;
+            UIText("planMoney"+id,colX+UIWidth(data[c])+4,cardsY+2*step+9,inlineCash?money:"",c==2?clrTomato:clrLime,UI_SIZE-2,planTip);
+            UIWrapped("planMoneyRows"+id+"_",colX,cardsY+3*step+9,inlineCash?"":money,planCol[i][c]-12,step,c==2?clrTomato:clrLime,planTip,g_uiCashRows[i][c-2],UI_SIZE-2);
          }
-         colX+=planCol[c];
+         colX+=planCol[i][c];
       }
-      UIWrapped("planNote"+n+"_",cardX[i]+10,cardsY+(3+moneyRows)*step+9,plan[i].notes,cardW-20,step,clrOrange,planTip,g_uiPlanNotes[i]);
+      UIWrapped("planNote"+n+"_",cardX[i]+10,cardsY+(3+cashExtra)*step+9,plan[i].notes,cardW[i]-20,step,clrOrange,planTip,g_uiPlanNotes[i]);
    }
    autoY=bottomY+6;
    for(int i=0;i<3;i++)
