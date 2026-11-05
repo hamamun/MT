@@ -3,7 +3,7 @@
 from pathlib import Path
 import re, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
-s=(root/'MT_AutoRuntime.mqh').read_text().replace('#include "MT_AutoPolicy.mqh"','')
+s=(root/'MT_AutoRuntime.mqh').read_text().replace('#include "MT_AutoPolicy.mqh"','').replace('#include "MT_TradeDiaryRuntime.mqh"','')
 s=re.sub(r'^input ', '', s,flags=re.M)
 stubs=r'''
 #include <algorithm>
@@ -11,6 +11,7 @@ stubs=r'''
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -19,7 +20,7 @@ stubs=r'''
 #include <string>
 #include <vector>
 using namespace std;
-using datetime=long; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
+using datetime=long; using ushort=unsigned short; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
 #define EMPTY_VALUE numeric_limits<double>::max()
 #define INVALID_HANDLE -1
 #define FILE_READ 1
@@ -132,12 +133,18 @@ int P3Timeframe(int lane){return lane;}
 datetime iTime(string,int tf,int shift){auto &b=laneBars[tf];return b.size()>(size_t)shift?b[b.size()-1-shift]:0;}
 int iBarShift(string,int tf,datetime t,bool){auto &b=laneBars[tf];for(int i=0;i<(int)b.size();i++)if(b[i]==t)return (int)b.size()-1-i;return -1;}
 bool connected=true, permission=true, hedging=true, diskFail=false, checkOk=true, calcOk=true, tester=false;
-long terminalTime=1700000000; unsigned long uptime=10000;
+long terminalTime=1700000000, localTime=1700035200; unsigned long uptime=10000;
+struct MqlDateTime{int year,mon,day,hour,min,sec;};
+datetime TimeLocal(){return localTime;}
+bool TimeToStruct(datetime t,MqlDateTime &d){time_t x=t;tm *v=gmtime(&x);if(!v)return false;d={v->tm_year+1900,v->tm_mon+1,v->tm_mday,v->tm_hour,v->tm_min,v->tm_sec};return true;}
+datetime StructToTime(MqlDateTime d){tm x={};x.tm_year=d.year-1900;x.tm_mon=d.mon-1;x.tm_mday=d.day;x.tm_hour=d.hour;x.tm_min=d.min;x.tm_sec=d.sec;return timegm(&x);}
 long TerminalInfoInteger(int p){return p==TERMINAL_CONNECTED?connected:permission;}
 long MQLInfoInteger(int p){return p==MQL_TESTER?tester:permission;}
 long AccountInfoInteger(int p){if(p==ACCOUNT_MARGIN_MODE)return hedging?ACCOUNT_MARGIN_MODE_RETAIL_HEDGING:0;return permission;}
 string accountCurrency="USD"; string AccountInfoString(int){return accountCurrency;}
 bool MathIsValidNumber(double x){return isfinite(x);} double MathMin(double a,double b){return min(a,b);} double MathMax(double a,double b){return max(a,b);} double MathFloor(double x){return floor(x);} double MathAbs(double x){return abs(x);}
+void StringTrimLeft(string &s){auto i=s.find_first_not_of(" \t\r\n");s=i==string::npos?"":s.substr(i);}
+void StringTrimRight(string &s){auto i=s.find_last_not_of(" \t\r\n");s=i==string::npos?"":s.substr(0,i+1);}
 int StringLen(string s){return int(s.size());} unsigned short StringGetCharacter(string s,int i){return s[i];}
 int StringFind(string s,string part){auto n=s.find(part);return n==string::npos?-1:int(n);}
 string DoubleToString(double x,int n){ostringstream o;o<<fixed<<setprecision(n)<<x;return o.str();}
@@ -219,6 +226,11 @@ bool OrderSend(MqlTradeRequest &r,MqlTradeResult &out){
  return true;
 }
 '''
+diary_stubs=r'''
+int P5Begin(int, const P3Plan&, const MqlTick&){return -1;}
+void P5SendResult(int,ulong,uint,bool){}
+void P5Track(int,int,int,ulong,ulong,datetime,long){}
+'''
 main=r'''
 // Reference the pre-status-change price gate to detect accidental trading-rule changes.
 bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
@@ -236,7 +248,7 @@ bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
- g_marketState=MARKET_OPEN;uptime=10000;sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
+ g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
  for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
  InpAutoTrading=false;P4Init();
 }
@@ -691,6 +703,6 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
 }
 '''
 with tempfile.TemporaryDirectory() as t:
- p=Path(t);(p/'x.cpp').write_text(stubs+s+main)
+ p=Path(t);(p/'x.cpp').write_text(stubs+diary_stubs+s+main)
  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-I',str(root),str(p/'x.cpp'),'-o',str(p/'x')],check=True)
  subprocess.run([str(p/'x')],check=True)
