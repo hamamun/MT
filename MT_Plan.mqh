@@ -9,6 +9,7 @@ struct P3Geometry
    double entry;
    double stop;
    double barrier;
+   double secondBarrier;
    double fallbackMove;
 };
 
@@ -59,7 +60,7 @@ int P3VolumeState(const MqlRates &rates[], int last)
 bool P3GeometryAt(const MqlRates &rates[], int last, int lane, int dir, bool market,
                   double bid, double ask, double tick, double minDistance, P3Geometry &out)
 {
-   out.entry = 0.0; out.stop = 0.0; out.barrier = 0.0; out.fallbackMove = 0.0;
+   out.entry = 0.0; out.stop = 0.0; out.barrier = 0.0; out.secondBarrier = 0.0; out.fallbackMove = 0.0;
    if(last < 3 || last >= ArraySize(rates) || lane < 0 || lane > 2 ||
       (dir != 1 && dir != -1) || !P3Positive(bid) || !P3Positive(ask) ||
       ask < bid || !P3Positive(tick) || !MathIsValidNumber(minDistance) || minDistance < 0.0)
@@ -127,22 +128,37 @@ bool P3GeometryAt(const MqlRates &rates[], int last, int lane, int dir, bool mar
    if(!P3Positive(stop) || (dir > 0 && stop >= entry) || (dir < 0 && stop <= entry)) return(false);
    out.stop = stop;
    // Nearest confirmed opposing pivot, expressed on the exit quote side.
-   double barrier = 0.0;
+   double barrier = 0.0, secondBarrier = 0.0;
    for(int k = first; k < last; k++)
    {
       if(dir > 0 && rates[k].high > rates[k-1].high && rates[k].high >= rates[k+1].high)
       {
          double p = P3Down(rates[k].high, tick);
-         if(p > entry && (barrier <= 0.0 || p < barrier)) barrier = p;
+         if(p > entry)
+         {
+            if(barrier <= 0.0 || p < barrier) { secondBarrier=barrier; barrier=p; }
+            else if(p > barrier && (secondBarrier <= 0.0 || p < secondBarrier)) secondBarrier=p;
+         }
       }
       if(dir < 0 && rates[k].low < rates[k-1].low && rates[k].low <= rates[k+1].low)
       {
          double p = P3Up(rates[k].low + spread, tick);
-         if(p < entry && p > 0.0 && (barrier <= 0.0 || p > barrier)) barrier = p;
+         if(p < entry && p > 0.0)
+         {
+            if(barrier <= 0.0 || p > barrier) { secondBarrier=barrier; barrier=p; }
+            else if(p < barrier && (secondBarrier <= 0.0 || p > secondBarrier)) secondBarrier=p;
+         }
       }
    }
-   out.entry = entry; out.stop = stop; out.barrier = barrier; out.fallbackMove = move;
+   out.entry = entry; out.stop = stop; out.barrier = barrier; out.secondBarrier = secondBarrier; out.fallbackMove = move;
    return(true);
+}
+
+// Caller supplies a positive sample count. The legacy upper median is kept
+// exactly; wider mode uses the nearest-rank 70th percentile.
+int P3TargetIndex(int samples, bool widerTarget)
+{
+   return(widerTarget ? (int)MathCeil(0.70 * samples) - 1 : samples / 2);
 }
 
 // Replay completed matching-score analogues, using only bars available at
@@ -153,7 +169,7 @@ double P3ObservedTargetR(const MqlRates &rates[], const int &scores[], const int
                          const int &cts[], const int &statuses[], int n, int lane,
                          int score, P3_TREND_CHOICE choice, bool allowAgainst,
                          double tick, double point, double minDistance,
-                         double spreadFallback, int &samples)
+                         double spreadFallback, int &samples, bool widerTarget=false)
 {
    samples = 0;
    int horizon = lane == 0 ? 4 : (lane == 1 ? 6 : 8);
@@ -201,7 +217,9 @@ double P3ObservedTargetR(const MqlRates &rates[], const int &scores[], const int
    samples = ArraySize(values);
    if(samples == 0) return( 0.0 );
    ArraySort(values);
-   return(values[samples / 2]);
+   // Nearest-rank 70th percentile; legacy mode preserves its upper median.
+   int index = P3TargetIndex(samples,widerTarget && lane > 0);
+   return(values[index]);
 }
 
 #endif

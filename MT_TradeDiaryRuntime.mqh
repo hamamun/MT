@@ -210,7 +210,7 @@ int P5Begin(int lane, const P3Plan &plan, const MqlTick &quote)
    r.regime=g_p3[lane].regime=="STEADY"?1:(g_p3[lane].regime=="CHOPPY"?2:(g_p3[lane].regime=="MIXED"?0:99));
    r.volumeState=g_p3[lane].volumeState; r.market=plan.market?1:0;
    r.choice=(int)P3Choice(lane); r.against=P3Against(lane)?1:0;
-   r.bypass=InpBypassRisk?1:0; r.minimum=InpMinimumLot?1:0; r.strategy=30004; r.barProxy=plan.barProxy?1:0;
+   r.bypass=InpBypassRisk?1:0; r.minimum=InpMinimumLot?1:0; r.strategy=P3Strategy(lane); r.barProxy=plan.barProxy?1:0;
    r.state=0; r.accepted=0; r.exitReason=-1; r.bar=(long)plan.bar; r.requestMs=quote.time_msc;
    r.planEntry=plan.entry; r.planStop=plan.stop; r.planTarget=plan.target; r.lot=plan.lot;
    r.bid=quote.bid; r.ask=quote.ask; r.equity=AccountInfoDouble(ACCOUNT_EQUITY); r.balance=AccountInfoDouble(ACCOUNT_BALANCE);

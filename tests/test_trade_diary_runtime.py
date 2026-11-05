@@ -22,7 +22,7 @@ int FileOpen(string n,int f,int){return FileOpen(n,f);}
 template<class... T> void FileWrite(int,T...){ }
 double AccountInfoDouble(int){return 10000;}
 bool HistoryOrderGetString(ulong id,int,string &x){if(readFailure || !history.count(id))return false;x=history[id].symbol;return true;}
-int P3Choice(int){return 0;} bool P3Against(int){return true;}
+int P3Choice(int){return 0;} bool P3Against(int){return true;} int P3Strategy(int){return 30004;}
 '''
 kernel=(root/'MT_TradeDiary.mqh').read_text().replace('#include "MT_Phase3.mqh"','')
 kernel=re.sub(r'const P5Deal &(\w+)\[\]',r'const vector<P5Deal> &\1',kernel)
