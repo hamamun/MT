@@ -38,8 +38,11 @@
 // Keep each chart label below the observed 63-character text limit.
 #define LABEL_CHUNK 48
 #define HEADER_ROWS 3
-#define PANEL_BG C'48,48,48'
-#define PANEL_TITLE_COLOR clrWhite
+#define PANEL_BG C'17,24,39'
+#define PANEL_SURFACE C'27,37,54'
+#define PANEL_BORDER C'53,67,87'
+#define PANEL_HEADING C'157,171,190'
+#define PANEL_TITLE_COLOR C'94,205,233'
 #define STALE_SECONDS 1800
 #define SESSION_REFRESH_SECONDS 300
 
@@ -600,7 +603,7 @@ void MakeTextLine(string name, int x, int y, string text, color clr, int size, s
       string part = StringSubstr(text, offset, LABEL_CHUNK);
       string segmentName = name + "_" + IntegerToString(segment);
       MakeLabel(segmentName, x, y, part, clr, size, false);
-      if(tooltip!="") ObjectSetString(0,OBJ_PREFIX+segmentName,OBJPROP_TOOLTIP,tooltip);
+      ObjectSetString(0,OBJ_PREFIX+segmentName,OBJPROP_TOOLTIP,tooltip);
       int w, h;
       Measure(part, size, w, h);
       x += w;
@@ -658,141 +661,297 @@ string HeaderTrendSettings()
           " M15 "+HeaderTPPercent(1)+" M30 "+HeaderTPPercent(2)+" | ");
 }
 
+// Wrap without dropping characters, including long unbroken broker messages.
+int PanelChunk(const string text, int offset, int limit)
+{
+   int left=StringLen(text)-offset;
+   if(left<=limit) return(left);
+   for(int i=limit-1;i>0;i--)
+      if(StringSubstr(text,offset+i,1)==" ") return(i+1);
+   return(limit);
+}
+int PanelRows(const string text, int limit)
+{
+   int count=0;
+   for(int i=0;i<StringLen(text);) { i+=PanelChunk(text,i,limit); count++; }
+   return(count);
+}
+int PanelWidth(const string text, int limit, int &rowH)
+{
+   int width=0;
+   for(int i=0;i<StringLen(text);)
+   {
+      int n=PanelChunk(text,i,limit),w,h;
+      MeasureLine(StringSubstr(text,i,n),PANEL_FONT_SIZE,w,h);
+      width=(int)MathMax(width,w);
+      rowH=(int)MathMax(rowH,h+6); i+=n;
+   }
+   return(width);
+}
+void PanelWrapped(string name, int x, int y, const string text, int limit, int rowH, color clr, string tip="")
+{
+   int row=0;
+   for(int i=0;i<StringLen(text);)
+   {
+      int n=PanelChunk(text,i,limit);
+      MakeTextLine(name+"_r"+IntegerToString(row),x,y+row*rowH,StringSubstr(text,i,n),clr,PANEL_FONT_SIZE,tip);
+      i+=n; row++;
+   }
+   while(ObjectFind(0,OBJ_PREFIX+name+"_r"+IntegerToString(row)+"_0")>=0)
+   {
+      MakeTextLine(name+"_r"+IntegerToString(row),x,y,"",clr,PANEL_FONT_SIZE);
+      row++;
+   }
+}
+string PanelField(const string line, const string key)
+{
+   string marker=" | "+key+": ";
+   int start=StringFind(line,marker);
+   if(start<0) return("");
+   start+=StringLen(marker);
+   int end=StringFind(line," | ",start);
+   return(end<0?StringSubstr(line,start):StringSubstr(line,start,end-start));
+}
+bool PanelReadingsValid(const string line, const string tf)
+{
+   string gt=PanelField(line,"GT"),ct=PanelField(line,"CT"),st=PanelField(line,"ST");
+   string rg=PanelField(line,"RG"),pt=PanelField(line,"PT"),sc=PanelField(line,"SC");
+   if(gt=="" || ct=="" || st=="" || rg=="" || pt=="" || sc=="") return(false);
+   // Fall back to the complete original line if its format ever changes.
+   return(line==tf+" | GT: "+gt+" | CT: "+ct+" | ST: "+st+
+                " | RG: "+rg+" | PT: "+pt+" | SC: "+sc);
+}
+color PanelValueColor(const string value)
+{
+   if(value=="UP" || (StringFind(value,"/3")>=0 && StringSubstr(value,0,1)=="+")) return(clrLime);
+   if(value=="DOWN" || (StringFind(value,"/3")>=0 && StringSubstr(value,0,1)=="-")) return(clrTomato);
+   if(value=="CONFLICT" || value=="WAIT") return(clrOrange);
+   return(clrSilver);
+}
+color PanelPlanColor(const string line)
+{
+   if(StringFind(line,"Signal: SELL")>=0) return(clrTomato);
+   if(StringFind(line,"Signal: BUY")>=0) return(clrLime);
+   if(StringFind(line,"WAIT")>=0 || StringFind(line,"unavailable")>=0) return(clrOrange);
+   return(clrSilver);
+}
+color PanelAutoColor(const string line)
+{
+   if(StringFind(line,"NO SL (unprotected)")>=0 || StringFind(line,"REVIEW")>=0 ||
+      StringFind(line,"unavailable")>=0 || StringFind(line,"TIMER PAUSED")>=0) return(clrOrange);
+   return(clrSilver);
+}
+bool PanelStatsSplit(const string line, string &today, string &all)
+{
+   today=""; all="";
+   string first=" | Trades Today ", second=" | All ";
+   int begin=StringFind(line,first), end=StringFind(line,second);
+   if(begin<0 || end<0 || end<=begin+StringLen(first)) return(false);
+   today=StringSubstr(line,begin+StringLen(first),end-begin-StringLen(first));
+   all=StringSubstr(line,end+StringLen(second));
+   return(today!="" && all!="");
+}
+void PanelDeleteBox(string name)
+{
+   ObjectDelete(0,OBJ_PREFIX+name);
+}
+
 void UpdatePanel()
 {
    if(!g_built) return;
-   datetime now = ServerNow();
-   UpdateState(now);
-   bool supported = ChartSupported();
+   datetime now=ServerNow(); UpdateState(now);
+   bool supported=ChartSupported();
    if(supported) P2Update();
-   string plans[3], autoLines[3], diaryLines[3], diaryDetails[3];
-   string quoteLine = "";
+   string plans[3], autos[3], diaries[3], details[3], readings[3], today[3], all[3];
+   bool readingOK[3], statsOK[3];
+   string quoteLine="";
    if(supported)
    {
       for(int i=0;i<3;i++)
       {
-         plans[i]=P3PlanLine(i);
-         autoLines[i]=P4Line(i);
-         diaryLines[i]=P5Summary(i,now);
-         diaryDetails[i]=InpShowDetails ? P5Detail(i) : "";
+         string tf=i==0?"M5":(i==1?"M15":"M30");
+         readings[i]=P2Line(i); readingOK[i]=PanelReadingsValid(readings[i],tf);
+         plans[i]=P3PlanLine(i); autos[i]=P4Line(i); diaries[i]=P5Summary(i,now);
+         details[i]=InpShowDetails?P5Detail(i):"";
+         statsOK[i]=StringFind(diaries[i],tf+" | Trades Today ")==0 &&
+                    PanelStatsSplit(diaries[i],today[i],all[i]);
       }
       MqlTick quote;
       if(SymbolInfoTick(_Symbol,quote) && quote.bid>0 && quote.ask>=quote.bid)
       {
          int dg=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
-         quoteLine="Bid: "+DoubleToString(quote.bid,dg)+" | Ask: "+DoubleToString(quote.ask,dg);
+         quoteLine=" | Bid: "+DoubleToString(quote.bid,dg)+" | Ask: "+DoubleToString(quote.ask,dg);
       }
-      else quoteLine="Bid: -- | Ask: --";
+      else quoteLine=" | Bid: -- | Ask: --";
    }
-   string state = "";
-   string last = "";
-   color stateColor = clrWhite;
+   string state="",last=""; color stateColor=clrWhite;
    switch(g_marketState)
    {
-      case MARKET_OPEN: state = "OPEN"; stateColor = clrLime;
-         last = now > 0 ? FormatClock(now) : "--"; break;
-      case MARKET_CLOSED: state = "close"; stateColor = clrTomato;
-         last = g_nextOpen > 0 ? "Open at " + FormatClock(g_nextOpen) : "Open at --"; break;
-      case MARKET_STALE: state = "OPEN - STALE QUOTE"; stateColor = clrOrange; break;
-      case MARKET_OFFLINE: state = "DISCONNECTED"; stateColor = clrTomato; break;
-      case MARKET_UNAVAILABLE: state = "TRADING UNAVAILABLE"; stateColor = clrOrange; break;
-      default: state = "MARKET STATUS UNKNOWN"; stateColor = clrOrange; break;
+      case MARKET_OPEN: state="OPEN"; stateColor=clrLime; last=now>0?FormatClock(now):"--"; break;
+      case MARKET_CLOSED: state="close"; stateColor=clrTomato; last=g_nextOpen>0?"Open at "+FormatClock(g_nextOpen):"Open at --"; break;
+      case MARKET_STALE: state="OPEN - STALE QUOTE"; stateColor=clrOrange; break;
+      case MARKET_OFFLINE: state="DISCONNECTED"; stateColor=clrTomato; break;
+      case MARKET_UNAVAILABLE: state="TRADING UNAVAILABLE"; stateColor=clrOrange; break;
+      default: state="MARKET STATUS UNKNOWN"; stateColor=clrOrange; break;
    }
-
-   string prefix = " | " + g_symbol + " | " + g_type + " | ";
-   string suffix = last == "" ? "" : " | " + last;
+   string prefix=" | "+g_symbol+" | "+g_type+" | ";
+   string suffix=last==""?"":" | "+last;
    if(!supported)
    {
-      string tf = EnumToString((ENUM_TIMEFRAMES)_Period);
-      if(StringFind(tf, "PERIOD_") == 0) tf = StringSubstr(tf, 7);
-      prefix = " | " + g_symbol + " | " + tf;
-      state = "";
-      suffix = "";
+      string tf=EnumToString((ENUM_TIMEFRAMES)_Period);
+      if(StringFind(tf,"PERIOD_")==0) tf=StringSubstr(tf,7);
+      prefix=" | "+g_symbol+" | "+tf; state=""; suffix="";
    }
-   string detail = supported ? g_marketDetail : "Incompatible chart. Switch to M5/M15/M30.";
-   string timerLine = supported ? P4ScheduleText() : "";
-   string settingsLine = supported ? (detail==""?"":" | ")+HeaderSettings() : "";
-   string trendLine = supported ? HeaderTrendSettings() : "";
-   int titleW, titleH, prefixW, prefixH, stateW, stateH, suffixW, suffixH, detailW, detailH, timerW, timerH;
-   int settingsW, settingsH, trendW, trendH;
-   MeasureLine(PANEL_TITLE, PANEL_FONT_SIZE + 1, titleW, titleH);
-   MeasureLine(prefix, PANEL_FONT_SIZE, prefixW, prefixH);
-   MeasureLine(state, PANEL_FONT_SIZE, stateW, stateH);
-   MeasureLine(suffix, PANEL_FONT_SIZE, suffixW, suffixH);
-   MeasureLine(detail, supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, detailW, detailH);
-   MeasureLine(timerLine, PANEL_FONT_SIZE, timerW, timerH);
-   MeasureLine(settingsLine, PANEL_FONT_SIZE, settingsW, settingsH);
-   MeasureLine(trendLine, PANEL_FONT_SIZE, trendW, trendH);
-   int pad = 10;
-   int headerH = (int)MathMax(MathMax(titleH, prefixH), MathMax(stateH, suffixH));
-   int headerW = titleW + prefixW + stateW + suffixW;
-   int width = (int)MathMax(MathMax(headerW, detailW+settingsW), trendW+timerW) + 2 * pad + 4;
-   int rowH = (int)MathMax(MathMax(headerH, detailH),MathMax(timerH,MathMax(settingsH,trendH))) + 6;
+   string detail=supported?g_marketDetail:"Incompatible chart. Switch to M5/M15/M30.";
+   string settingsLine=supported?(detail==""?"":" | ")+HeaderSettings():"";
+   string trendLine=supported?HeaderTrendSettings():"";
+   string timerLine=supported?P4ScheduleText():"";
+   int tw,th,pw,ph,sw,sh,uw,uh,dw,dh,fw,fh,rw,rh,qw,qh;
+   MeasureLine(PANEL_TITLE,PANEL_FONT_SIZE+1,tw,th); MeasureLine(prefix,PANEL_FONT_SIZE,pw,ph);
+   MeasureLine(state,PANEL_FONT_SIZE,sw,sh); MeasureLine(suffix,PANEL_FONT_SIZE,uw,uh);
+   MeasureLine(detail,supported?PANEL_FONT_SIZE:PANEL_FONT_SIZE+1,dw,dh);
+   MeasureLine(settingsLine,PANEL_FONT_SIZE,fw,fh); MeasureLine(trendLine,PANEL_FONT_SIZE,rw,rh);
+   MeasureLine(quoteLine,PANEL_FONT_SIZE,qw,qh);
+   int timerW,timerH; MeasureLine(timerLine,PANEL_FONT_SIZE,timerW,timerH);
+   int pad=10, gap=10;
+   int rowH=(int)MathMax(MathMax(MathMax(th,ph),MathMax(sh,uh)),MathMax(MathMax(dh,fh),MathMax(rh,MathMax(qh,timerH))))+6;
+   int width=(int)MathMax(MathMax(tw+pw+sw+uw+qw,dw+fw),rw+timerW)+2*pad+4;
+   int x=PANEL_X+pad, y=PANEL_Y+pad;
+
+   string columns[7]={"TF","GT","CT","ST","RG","PT","SC"};
+   int colWidth[7]; int tableWidth=0;
+   for(int c=0;c<7;c++)
+   {
+      int w,h; MeasureLine(columns[c],PANEL_FONT_SIZE,w,h); colWidth[c]=w;
+      rowH=(int)MathMax(rowH,h+6);
+      if(supported) for(int i=0;i<3;i++) if(readingOK[i])
+      {
+         string value=c==0?(i==0?"M5":(i==1?"M15":"M30")):PanelField(readings[i],columns[c]);
+         MeasureLine(value,PANEL_FONT_SIZE,w,h); colWidth[c]=(int)MathMax(colWidth[c],w);
+         rowH=(int)MathMax(rowH,h+6);
+      }
+      colWidth[c]+=24; tableWidth+=colWidth[c];
+   }
+   int cardWidth=0,cardRows=1,autoWidth=0,autoRows=0,diaryWidth=0,diaryRows=1;
+   int todayW=0,allW=0,tfW=0,readingRows[3]={1,1,1},readingTotal=0;
    if(supported)
    {
-      for(int i = 0; i < 3; i++)
+      int w,h;
+      MeasureLine("MARKET READINGS TRADING PLANS AUTO EXECUTION TRADE STATISTICS",PANEL_FONT_SIZE,w,h);
+      rowH=(int)MathMax(rowH,h+6);
+      MeasureLine("M30",PANEL_FONT_SIZE,w,h); tfW=w+16;
+      MeasureLine("TODAY",PANEL_FONT_SIZE,w,h); todayW=w;
+      MeasureLine("ALL",PANEL_FONT_SIZE,w,h); allW=w;
+      MeasureLine("AUTO EXECUTION",PANEL_FONT_SIZE,w,h); autoWidth=w+20;
+      MeasureLine("TRADE STATISTICS",PANEL_FONT_SIZE,w,h); diaryWidth=w+20;
+      MeasureLine("M30 | Signal: NONE",PANEL_FONT_SIZE,w,h); cardWidth=w+20;
+      for(int i=0;i<3;i++)
       {
-         int rw, rh;
-         MeasureLine(P2Line(i), PANEL_FONT_SIZE, rw, rh);
-         width = (int)MathMax(width, rw + 2 * pad + 4);
-         rowH = (int)MathMax(rowH, rh + 6);
-         MeasureLine(plans[i], PANEL_FONT_SIZE, rw, rh);
-         width = (int)MathMax(width, rw + 2 * pad + 4);
-         rowH = (int)MathMax(rowH, rh + 6);
-         MeasureLine(autoLines[i],PANEL_FONT_SIZE,rw,rh);
-         width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
-         MeasureLine(diaryLines[i],PANEL_FONT_SIZE,rw,rh);
-         width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
+         cardWidth=(int)MathMax(cardWidth,PanelWidth(plans[i],38,rowH)+20);
+         cardRows=(int)MathMax(cardRows,PanelRows(plans[i],38));
+         autoWidth=(int)MathMax(autoWidth,PanelWidth(autos[i],64,rowH)+20);
+         autoRows+=(int)MathMax(1,PanelRows(autos[i],64));
+         if(!readingOK[i])
+         {
+            tableWidth=(int)MathMax(tableWidth,PanelWidth(readings[i],64,rowH)+20);
+            readingRows[i]=(int)MathMax(1,PanelRows(readings[i],64));
+         }
+         readingTotal+=readingRows[i];
+         if(statsOK[i])
+         {
+            todayW=(int)MathMax(todayW,PanelWidth(today[i],38,rowH));
+            allW=(int)MathMax(allW,PanelWidth(all[i],38,rowH));
+            diaryRows+=(int)MathMax(1,MathMax(PanelRows(today[i],38),PanelRows(all[i],38)));
+         }
+         else
+         {
+            diaryWidth=(int)MathMax(diaryWidth,PanelWidth(diaries[i],38,rowH)+20);
+            diaryRows+=(int)MathMax(1,PanelRows(diaries[i],38));
+         }
          if(InpShowDetails)
          {
-            MeasureLine(diaryDetails[i],PANEL_FONT_SIZE,rw,rh);
-            width=(int)MathMax(width,rw+2*pad+4); rowH=(int)MathMax(rowH,rh+6);
+            diaryWidth=(int)MathMax(diaryWidth,PanelWidth(details[i],38,rowH)+20);
+            diaryRows+=PanelRows(details[i],38);
          }
       }
-      int qw,qh; MeasureLine(quoteLine,PANEL_FONT_SIZE,qw,qh);
-      width=(int)MathMax(width,qw+2*pad+4); rowH=(int)MathMax(rowH,qh+6);
+      diaryWidth=(int)MathMax(diaryWidth,tfW+todayW+allW+40);
+      width=(int)MathMax(width,tableWidth+2*pad+20);
+      width=(int)MathMax(width,3*cardWidth+2*gap+2*pad);
+      width=(int)MathMax(width,autoWidth+diaryWidth+gap+2*pad);
    }
-   // Supported charts reserve three header rows, then the three lanes.
-   // Row 2 carries settings and any market detail; row 3 carries trend settings and the timer.
-   int height = 2 * pad + (supported ? (HEADER_ROWS + 13 + (InpShowDetails ? 3 : 0)) : 2) * rowH;
-
-   MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
-   int x = PANEL_X + pad;
-   int y = PANEL_Y + pad;
-   MakeTextLine("title", x, y, PANEL_TITLE, PANEL_TITLE_COLOR, PANEL_FONT_SIZE + 1);
-   x += titleW;
-   MakeTextLine("prefix", x, y, prefix, clrSilver, PANEL_FONT_SIZE);
-   x += prefixW;
-   MakeTextLine("state", x, y, state, stateColor, PANEL_FONT_SIZE);
-   x += stateW;
-   MakeTextLine("suffix", x, y, suffix, clrWhite, PANEL_FONT_SIZE);
-   MakeTextLine("detail", PANEL_X + pad, y + rowH, detail,
-                supported ? clrSilver : clrTomato,
-                supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1);
-   MakeTextLine("settings",PANEL_X + pad+detailW,y+rowH,settingsLine,clrSilver,PANEL_FONT_SIZE,
+   int readingTitleY=y+HEADER_ROWS*rowH, readingHeaderY=readingTitleY+rowH;
+   int readingY=readingHeaderY+rowH, planTitleY=readingY+readingTotal*rowH;
+   int cardsY=planTitleY+rowH, cardH=cardRows*rowH+12;
+   int bottomTitleY=cardsY+cardH+gap, bottomY=bottomTitleY+rowH;
+   int bottomH=(int)MathMax(autoRows,diaryRows)*rowH+12;
+   int height=supported?bottomY-PANEL_Y+bottomH+pad:2*pad+2*rowH;
+   MakeRect("bg",PANEL_X,PANEL_Y,width,height,PANEL_BG,PANEL_BORDER);
+   if(supported)
+   {
+      MakeRect("readingsBox",x,readingHeaderY-3,width-2*pad,(1+readingTotal)*rowH+6,PANEL_SURFACE,PANEL_BORDER);
+      for(int i=0;i<3;i++)
+         MakeRect("planBox"+IntegerToString(i),x+i*(cardWidth+gap),cardsY,cardWidth,cardH,PANEL_SURFACE,PANEL_BORDER);
+      MakeRect("autoBox",x,bottomY,autoWidth,bottomH,PANEL_SURFACE,PANEL_BORDER);
+      MakeRect("diaryBox",x+autoWidth+gap,bottomY,diaryWidth,bottomH,PANEL_SURFACE,PANEL_BORDER);
+   }
+   else
+   {
+      PanelDeleteBox("readingsBox"); PanelDeleteBox("autoBox"); PanelDeleteBox("diaryBox");
+      for(int i=0;i<3;i++) PanelDeleteBox("planBox"+IntegerToString(i));
+   }
+   MakeTextLine("title",x,y,PANEL_TITLE,PANEL_TITLE_COLOR,PANEL_FONT_SIZE+1);
+   MakeTextLine("prefix",x+tw,y,prefix,clrSilver,PANEL_FONT_SIZE);
+   MakeTextLine("state",x+tw+pw,y,state,stateColor,PANEL_FONT_SIZE);
+   MakeTextLine("suffix",x+tw+pw+sw,y,suffix,clrWhite,PANEL_FONT_SIZE);
+   MakeTextLine("quotes",x+tw+pw+sw+uw,y,supported?quoteLine:"",clrSilver,PANEL_FONT_SIZE);
+   MakeTextLine("detail",x,y+rowH,detail,supported?clrSilver:clrTomato,supported?PANEL_FONT_SIZE:PANEL_FONT_SIZE+1);
+   MakeTextLine("settings",x+dw,y+rowH,settingsLine,clrSilver,PANEL_FONT_SIZE,
                 supported?"Input settings only. Allow Against Trend controls alignment, not whether a timeframe is enabled. SL Placement OFF sends new orders without a broker stop loss. Other trading and broker rules still apply.":"");
-   MakeTextLine("trendSettings",PANEL_X + pad,y + 2*rowH,trendLine,clrSilver,PANEL_FONT_SIZE,
+   MakeTextLine("trendSettings",x,y+2*rowH,trendLine,clrSilver,PANEL_FONT_SIZE,
                 supported?"Trend to Follow is the selected input. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane. Diary Details controls display only.":"");
-   MakeTextLine("timer",PANEL_X + pad+trendW,y + 2*rowH,timerLine,clrSilver,PANEL_FONT_SIZE,
+   MakeTextLine("timer",x+rw,y+2*rowH,timerLine,clrSilver,PANEL_FONT_SIZE,
                 supported?"The daily timer uses the PC/VPS local clock and gates new entries, not open positions.":"");
-   for(int i = 0; i < 3; i++)
+   MakeTextLine("readingTitle",x,readingTitleY,supported?"MARKET READINGS":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   MakeTextLine("planTitle",x,planTitleY,supported?"TRADING PLANS":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   MakeTextLine("autoTitle",x,bottomTitleY,supported?"AUTO EXECUTION":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   MakeTextLine("diaryTitle",x+autoWidth+gap,bottomTitleY,supported?"TRADE STATISTICS":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   int cx=x+10;
+   for(int c=0;c<7;c++)
    {
-      string name = "lane" + IntegerToString(i);
-      MakeTextLine(name, PANEL_X + pad, y + rowH * (HEADER_ROWS + i),
-                   supported ? P2Line(i) : "", clrSilver, PANEL_FONT_SIZE);
+      MakeTextLine("col"+IntegerToString(c),cx,readingHeaderY,supported?columns[c]:"",PANEL_HEADING,PANEL_FONT_SIZE);
+      for(int i=0;i<3;i++)
+      {
+         string val="";
+         if(supported && readingOK[i]) val=c==0?(i==0?"M5":(i==1?"M15":"M30")):PanelField(readings[i],columns[c]);
+         int laneY=readingY;
+         for(int j=0;j<i;j++) laneY+=readingRows[j]*rowH;
+         MakeTextLine("cell"+IntegerToString(i)+"_"+IntegerToString(c),cx,laneY,val,PanelValueColor(val),PANEL_FONT_SIZE);
+      }
+      cx+=colWidth[c];
    }
-   for(int i=0;i<3;i++)
-      MakeTextLine("plan"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+3+i),
-                   supported?plans[i]:"",clrSilver,PANEL_FONT_SIZE);
-   MakeTextLine("quotes",PANEL_X+pad,y+rowH*(HEADER_ROWS+6),supported?quoteLine:"",clrSilver,PANEL_FONT_SIZE);
+   int ay=bottomY+6, sy=bottomY+6;
+   int dx=x+autoWidth+gap+10;
+   MakeTextLine("statsHeader",dx,sy,supported?"TF":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   MakeTextLine("todayHeader",dx+tfW,sy,supported?"TODAY":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   MakeTextLine("allHeader",dx+tfW+todayW+16,sy,supported?"ALL":"",PANEL_HEADING,PANEL_FONT_SIZE);
+   sy+=rowH;
+   int laneY=readingY;
    for(int i=0;i<3;i++)
    {
-      MakeTextLine("auto"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+7+i),
-                   supported?autoLines[i]:"",clrSilver,PANEL_FONT_SIZE,supported?P4Tooltip(i):"");
-      MakeTextLine("diary"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+10+i),
-                   supported?diaryLines[i]:"",clrSilver,PANEL_FONT_SIZE);
-      MakeTextLine("history"+IntegerToString(i),PANEL_X+pad,y+rowH*(HEADER_ROWS+13+i),
-                   supported && InpShowDetails?diaryDetails[i]:"",clrSilver,PANEL_FONT_SIZE);
+      string n=IntegerToString(i);
+      PanelWrapped("readingFallback"+n,x+10,laneY,supported && !readingOK[i]?readings[i]:"",64,rowH,clrSilver);
+      laneY+=readingRows[i]*rowH;
+      PanelWrapped("plan"+n,x+i*(cardWidth+gap)+10,cardsY+6,supported?plans[i]:"",38,rowH,supported?PanelPlanColor(plans[i]):clrSilver,
+                   "Frozen plan, not necessarily the broker order. SL shown here is a sizing reference when SL placement is off.");
+      PanelWrapped("auto"+n,x+10,ay,supported?autos[i]:"",64,rowH,supported?PanelAutoColor(autos[i]):clrSilver,supported?P4Tooltip(i):"");
+      if(supported) ay+=(int)MathMax(1,PanelRows(autos[i],64))*rowH;
+      MakeTextLine("statsTF"+n,dx,sy,supported && statsOK[i]?(i==0?"M5":(i==1?"M15":"M30")):"",clrWhite,PANEL_FONT_SIZE);
+      PanelWrapped("statsToday"+n,dx+tfW,sy,supported && statsOK[i]?today[i]:"",38,rowH,clrSilver);
+      PanelWrapped("statsAll"+n,dx+tfW+todayW+16,sy,supported && statsOK[i]?all[i]:"",38,rowH,clrSilver);
+      PanelWrapped("statsFallback"+n,dx,sy,supported && !statsOK[i]?diaries[i]:"",38,rowH,clrSilver);
+      if(supported) sy+=(int)MathMax(1,statsOK[i]?MathMax(PanelRows(today[i],38),PanelRows(all[i],38)):PanelRows(diaries[i],38))*rowH;
+      PanelWrapped("history"+n,dx,sy,supported && InpShowDetails?details[i]:"",38,rowH,clrSilver);
+      if(supported && InpShowDetails) sy+=PanelRows(details[i],38)*rowH;
    }
    ChartRedraw();
 }

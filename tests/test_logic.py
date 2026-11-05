@@ -6,7 +6,7 @@ import pathlib, re, subprocess, tempfile
 source = (pathlib.Path(__file__).resolve().parents[1] / 'MT.mq5').read_text()
 
 def function(name):
-    match = re.search(r'\b(?:void|bool|int|datetime|string)\s+' + name + r'\s*\([^)]*\)\s*\{', source)
+    match = re.search(r'\b(?:void|bool|int|datetime|string|color)\s+' + name + r'\s*\([^)]*\)\s*\{', source)
     if not match:
         raise RuntimeError('function not found: ' + name)
     depth = 1
