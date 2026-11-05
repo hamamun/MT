@@ -43,6 +43,9 @@ int main(){int fails=0;auto check=[&](bool v,const char*s){if(!v){cerr<<"FAIL "<
  check(P3VolumeState(bars,999)==-1,"missing baseline is unavailable");
  check(P3MarketStyle(3,-1) && P3MarketStyle(-3,1) && !P3MarketStyle(3,0) && !P3MarketStyle(-2,1),"order style by volume and score");
  for(auto &b:bars)b.tick_volume=0;
+ check(P3TargetIndex(20,false)==10 && P3TargetIndex(20,true)==13 &&
+       P3TargetIndex(21,false)==10 && P3TargetIndex(21,true)==14 &&
+       P3TargetIndex(1,true)==0,"median and nearest-rank percentile indices");
  P3Geometry g{};
  check(P3GeometryAt(bars,999,0,1,true,120.0,120.02,0.01,0.05,g),"market buy geometry");
  check(g.entry==120.02 && g.stop<g.entry && g.stop<=119.95,"market buy stop side/distance");
@@ -59,6 +62,12 @@ int main(){int fails=0;auto check=[&](bool v,const char*s){if(!v){cerr<<"FAIL "<
  double r2=P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,true,0.01,0.01,0.05,0.02,count2);
  check(count1>0 && count1==count2 && r1==r2,"historical replay cannot see future outside window");
  check(isfinite(r1) && r1>=0,"historical result finite");
+ int wider5=0, median15=0, wider15=0;
+ double r5=P3ObservedTargetR(bars,scores,gts,cts,status,900,0,3,P3_AUTO,true,0.01,0.01,0.05,0.02,wider5,true);
+ double m15=P3ObservedTargetR(bars,scores,gts,cts,status,900,1,3,P3_AUTO,true,0.01,0.01,0.05,0.02,median15,false);
+ double w15=P3ObservedTargetR(bars,scores,gts,cts,status,900,1,3,P3_AUTO,true,0.01,0.01,0.05,0.02,wider15,true);
+ check(wider5==count1 && r5==r1,"wider option cannot alter M5 replay");
+ check(median15>0 && median15==wider15 && w15>=m15,"wider replay preserves samples and cannot lower historical target");
  // Historical targets must use the same score-3 market/limit style as today.
  for(int i=0;i<900;i++){bars[i].tick_volume=100;scores[i]=3;}
  bars[899].tick_volume=49;int weakOnly=0;

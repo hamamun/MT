@@ -10,6 +10,7 @@ input bool InpAgainstM15 = true;                   // Allow against trend M15
 input bool InpAgainstM30 = true;                   // Allow against trend M30
 input bool InpBypassRisk = false;                   // Bypass risk
 input bool InpMinimumLot = false;                  // Minimum lot use
+input bool InpWiderTP = false;                    // Wider TP for M15/M30
 input bool InpShowDetails = false;                 // Show diary details
 
 struct P3LaneData
@@ -45,6 +46,16 @@ bool P3Against(int lane)
    return(lane == 0 ? InpAgainstM5 : (lane == 1 ? InpAgainstM15 : InpAgainstM30));
 }
 
+bool P3WiderTP(int lane)
+{
+   return(InpWiderTP && (lane==1 || lane==2));
+}
+
+int P3Strategy(int lane)
+{
+   return(P3WiderTP(lane)?30005:30004);
+}
+
 // MT5 bars can be based on Bid or Last. The historical replay below uses
 // Bid OHLC; Last bars must not be silently treated as historical Bid quotes.
 bool P3HasBidBars()
@@ -70,7 +81,7 @@ void P3Remember(int lane, int gt, int ct, int st, int score, string regime,
    double stopDistance=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*point;
    g_p3[lane].targetR=P3ObservedTargetR(rates,scores,gts,cts,statuses,ArraySize(rates),lane,score,
                                        P3Choice(lane),P3Against(lane),tick,point,
-                                       stopDistance,q.ask-q.bid,g_p3[lane].samples);
+                                       stopDistance,q.ask-q.bid,g_p3[lane].samples,P3WiderTP(lane));
 }
 
 struct P3Plan
@@ -153,10 +164,11 @@ bool P3MakePlanAt(int lane, const MqlTick &q, P3Plan &plan)
    // Respect executable quote-side broker minimum and the entry price.
    double floorDistance=MathMax(tick,minDist);
    double target=plan.signal>0 ? P3Down(geo.entry+distance,tick) : P3Up(geo.entry-distance,tick);
-   if(geo.barrier>0.0)
+   double barrier=(P3WiderTP(lane) && geo.secondBarrier>0.0) ? geo.secondBarrier : geo.barrier;
+   if(barrier>0.0)
    {
-      if(plan.signal>0 && geo.barrier>geo.entry && geo.barrier<target) target=geo.barrier;
-      if(plan.signal<0 && geo.barrier<geo.entry && geo.barrier>target) target=geo.barrier;
+      if(plan.signal>0 && barrier>geo.entry && barrier<target) target=barrier;
+      if(plan.signal<0 && barrier<geo.entry && barrier>target) target=barrier;
    }
    double base=plan.market ? (plan.signal>0?q.bid:q.ask) : geo.entry;
    if(plan.signal>0) target=P3Up(MathMax(target,MathMax(geo.entry+tick,base+floorDistance)),tick);

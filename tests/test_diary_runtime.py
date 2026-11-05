@@ -82,7 +82,7 @@ int FileReadInteger(int h,int){return readVal<int>(h);} long FileReadLong(int h)
 struct P3Plan{int signal=99;bool valid=false,market=false;double entry=0,stop=0,target=0,lot=0;datetime bar=0; bool priced=true,barProxy=false;};
 struct Lane{int score=2,gt=1,ct=1,st=1;string regime="MIXED";}; Lane g_p3[3];
 P3Plan plans[3]; bool P3MakePlan(int i,P3Plan&p){p=plans[i];return p.valid;}
-P3_TREND_CHOICE P3Choice(int){return P3_AUTO;} bool P3Against(int){return true;}
+P3_TREND_CHOICE P3Choice(int){return P3_AUTO;} bool P3Against(int){return true;} int P3Strategy(int){return 30004;}
 '''
 main=r'''
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
