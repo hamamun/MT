@@ -48,11 +48,17 @@ string DoubleToString(double x,int){return to_string(x);}
 string P3PlanLine(int i){return string("plan ")+to_string(i)+string(80,'x');}
 string autos[3]={"auto 0"+string(90,'z'),"auto 1"+string(90,'z'),"auto 2"+string(90,'z')};
 string P4Line(int i){return autos[i];}
+string timerText="Timer: OFF"; string P4ScheduleText(){return timerText;}
 string tips[3]={"tip 0", "tip 1", "tip 2"};
 string P4Tooltip(int i){return tips[i];}
-bool InpShowDetails=false;
-string P3DiarySummary(int i,datetime){return "diary "+to_string(i);}
-string P3DiaryDetail(int i){return "detail "+to_string(i);}
+bool InpShowDetails=false,InpAutoTrading=false,InpMinimumLot=false,InpBypassRisk=false;
+enum P3_TREND_CHOICE {P3_AUTO=0,P3_FOLLOW_CT=1,P3_FOLLOW_GT=2,P3_FOLLOW_ST=3};
+P3_TREND_CHOICE choices[3]={P3_AUTO,P3_AUTO,P3_AUTO};
+bool against[3]={true,true,true};
+P3_TREND_CHOICE P3Choice(int i){return choices[i];}
+bool P3Against(int i){return against[i];}
+string P5Summary(int i,datetime){return "diary "+to_string(i);}
+string P5Detail(int i){return "detail "+to_string(i);}
 int _Period=5;
 enum MARKET_STATE {MARKET_OPEN, MARKET_CLOSED, MARKET_STALE, MARKET_UNKNOWN, MARKET_OFFLINE, MARKET_UNAVAILABLE};
 MARKET_STATE g_marketState=MARKET_OPEN;
@@ -90,13 +96,25 @@ string lanes[3]={"M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | S
 string P2Line(int i){return lanes[i];}
 string Combined(string name){string out;for(int i=0;labels.count(name+"_"+to_string(i));i++)out+=labels[name+"_"+to_string(i)].text;return out;}
 '''
-functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','UpdatePanel'])
+functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','HeaderOnOff','HeaderTrendChoice','HeaderSettings','HeaderTrendSettings','UpdatePanel'])
 main = r'''
 int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAIL "<<n<<"\n";failures++;}};
  UpdatePanel(); int openW=boxW,openH=boxH;
  check(Combined("state")=="OPEN","open header");
  check(Combined("suffix").find("2026.11.02")!=string::npos,"open clock");
- check(Combined("detail").empty(),"open detail and second row blank");
+ check(Combined("detail").empty(),"no market detail while open");
+ check(Combined("settings")=="Auto Trading: OFF | Allow Against Trend: M5 ON M15 ON M30 ON | Minimum Lot: OFF | Bypass Risk: OFF","default input settings in header");
+ check(Combined("trendSettings")=="Trend to Follow: M5 AUTO M15 AUTO M30 AUTO | Diary Details: OFF | ","default trend choices and details");
+ check(tooltips["settings_0"].find("not whether a timeframe is enabled")!=string::npos,"against-trend input is not mislabeled as lane enable");
+ InpAutoTrading=true;InpMinimumLot=true;InpBypassRisk=true;against[0]=false;against[2]=false;
+ choices[0]=P3_FOLLOW_CT;choices[1]=P3_FOLLOW_GT;choices[2]=P3_FOLLOW_ST;UpdatePanel();
+ check(Combined("settings")=="Auto Trading: ON | Allow Against Trend: M5 OFF M15 ON M30 OFF | Minimum Lot: ON | Bypass Risk: ON","changed inputs display correctly");
+ check(Combined("trendSettings")=="Trend to Follow: M5 CT M15 GT M30 ST | Diary Details: OFF | ","trend inputs display choices, not invented booleans");
+ InpAutoTrading=false;InpMinimumLot=false;InpBypassRisk=false;against[0]=true;against[2]=true;
+ choices[0]=choices[1]=choices[2]=P3_AUTO;UpdatePanel();
+ check(Combined("timer")=="Timer: OFF" && tooltips["timer_0"].find("PC/VPS")!=string::npos,"timer appears in third header row with tooltip");
+ timerText="Timer: PAUSED "+string(200,'t');UpdatePanel();check(Combined("timer")==timerText && boxW>openW,"long timer is segmented and expands panel");
+ timerText="Timer: OFF";UpdatePanel();check(boxW==openW && !labels.count("timer_1"),"timer shrinking removes stale segments");
  check(Combined("plan0").find("plan 0")==0 && Combined("quotes").find("Bid:")==0,"phase 3 plan and quote rows");
  check(Combined("auto0")=="auto 0"+string(90,'z') && Combined("diary0")=="diary 0" && Combined("history0").empty(),"auto rows, diary summary and hidden details");
  check(labels.count("auto0_1") && labels["auto0_1"].text.size()<=48,"long auto rows are segmented");
@@ -108,7 +126,7 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("auto1")==autos[1] && !labels.count("auto1_1") && !tooltips.count("auto1_1") && tooltips["auto1_0"]==tips[1],"shrinking auto row clears stale segments and updates tooltip");
  autos[1]="auto 1"+string(90,'z');UpdatePanel();
  check(labels["auto0_0"].y<labels["diary0_0"].y,"auto rows appear above diary");
- InpShowDetails=true;UpdatePanel();check(Combined("history0")=="detail 0" && boxH>openH,"details increase height");
+ InpShowDetails=true;UpdatePanel();check(Combined("history0")=="detail 0" && boxH>openH && Combined("trendSettings").find("Diary Details: ON")!=string::npos,"details input and rows reflect ON");
  InpShowDetails=false;UpdatePanel();check(Combined("history0").empty() && boxH==openH,"details removed");
  check(labels.count("lane0_0") && labels.count("lane1_0") && labels.count("lane2_0"),"three lanes shown");
  int rowH=labels["lane1_0"].y-labels["lane0_0"].y;
@@ -135,6 +153,8 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("detail")==g_marketDetail,"long closed detail is not truncated");
  check(boxW>openW,"width grows for longer detail");check(boxH==openH,"closed detail uses reserved header row");
  check(labels["detail_0"].y==labels["title_0"].y+rowH && labels["lane0_0"].y==labels["title_0"].y+3*rowH,"detail does not displace lanes");
+ check(Combined("settings").find(" | Auto Trading: OFF")==0 && labels["settings_0"].x>=labels["detail_0"].x+int(g_marketDetail.size())*10,"market detail and input settings fit without overlap");
+ check(labels["timer_0"].x>=labels["trendSettings_0"].x+int(Combined("trendSettings").size())*10,"trend settings and timer do not overlap");
  for(int j=0;labels.count("detail_"+to_string(j));j++){auto z=labels["detail_"+to_string(j)];check(z.x+int(z.text.size())*z.size < 12+boxW,"detail fits");}
  g_marketDetail="Closed";UpdatePanel();check(Combined("detail")=="Closed" && !labels.count("detail_1"),"short detail removes stale segments");
  _Period=60;UpdatePanel();check(Combined("detail")=="Incompatible chart. Switch to M5/M15/M30.","unsupported notice");
@@ -142,9 +162,10 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(Combined("state").empty() && Combined("suffix").empty(),"unsupported suppresses market fields");
  check(boxH<openH,"unsupported notice height shrinks");
  check(Combined("lane0").empty() && Combined("lane2").empty(),"unsupported removes all lane segments");
+ check(Combined("settings").empty() && Combined("trendSettings").empty() && Combined("timer").empty(),"unsupported removes settings and timer");
  check(Combined("plan0").empty() && Combined("quotes").empty() && Combined("auto0").empty(),"unsupported removes plan, quote and auto segments");
  _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();
- check(Combined("detail").empty(),"notice removed after supported chart");
+ check(Combined("detail").empty() && Combined("settings").find("Auto Trading: OFF")==0,"notice removed and settings restored after supported chart");
  check(boxW==openW && boxH==openH,"panel resizes back");
  g_symbol=string(150,'X');UpdatePanel();
  check(Combined("prefix")==" | "+g_symbol+" | Metal | ","long symbol in header not truncated");

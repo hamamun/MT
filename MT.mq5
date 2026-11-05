@@ -15,11 +15,11 @@
 //| Appearance follows SimpleEA/SimpleAdvisor.mq5: Consolas 10 pt,   |
 //| background C'48,48,48', title 11 pt in clrWhite.                  |
 //|                                                                  |
-//| Auto Trading defaults off. Diary outcomes use observed quotes.    |
+//| Auto Trading defaults off. Main diary uses broker trade results.    |
 //+------------------------------------------------------------------+
 #property copyright "MT"
 #property version   "1.00"
-#property description "MT - Master Trade. Plans, observed-price diary and optional auto trading."
+#property description "MT - Master Trade. Plans, broker trade diary and optional auto trading."
 
 //---
 //  Prefix for every object this EA creates. Keeping it in one place
@@ -132,6 +132,7 @@ void OnDeinit(const int reason)
 {
    EventKillTimer();
    P3DiaryClose();
+   P5Close();
    P4Close();
    ObjectsDeleteAll(0, OBJ_PREFIX);
    ChartRedraw();
@@ -194,8 +195,8 @@ void Rebuild()
    P2Reset();
    P3Reset();
    P3ResetSnapshots();
-   if(ChartSupported()) { P3DiaryInit(); P4Init(); }
-   else { P3DiaryClose(); P4Close(); }
+   if(ChartSupported()) { P3DiaryInit(); P5Init(); P4Init(); }
+   else { P3DiaryClose(); P5Close(); P4Close(); }
 
    ScanSessions();
    BuildPanel();
@@ -546,7 +547,6 @@ void UpdateState(datetime now)
                                          (int)(age / 60));
       return;
    }
-   // Row 2 is reserved for future content during normal market hours.
    g_marketState = MARKET_OPEN;
 }
 
@@ -626,6 +626,30 @@ void BuildPanel()
    UpdatePanel();
 }
 
+string HeaderOnOff(bool enabled) { return(enabled?"ON":"OFF"); }
+
+string HeaderTrendChoice(P3_TREND_CHOICE choice)
+{
+   if(choice==P3_AUTO) return("AUTO");
+   if(choice==P3_FOLLOW_CT) return("CT");
+   if(choice==P3_FOLLOW_GT) return("GT");
+   if(choice==P3_FOLLOW_ST) return("ST");
+   return("--");
+}
+
+// These are input settings, not claims that a new order is permitted.
+string HeaderSettings()
+{
+   return("Auto Trading: "+HeaderOnOff(InpAutoTrading)+
+          " | Allow Against Trend: M5 "+HeaderOnOff(P3Against(0))+" M15 "+HeaderOnOff(P3Against(1))+" M30 "+HeaderOnOff(P3Against(2))+
+          " | Minimum Lot: "+HeaderOnOff(InpMinimumLot)+" | Bypass Risk: "+HeaderOnOff(InpBypassRisk));
+}
+string HeaderTrendSettings()
+{
+   return("Trend to Follow: M5 "+HeaderTrendChoice(P3Choice(0))+" M15 "+HeaderTrendChoice(P3Choice(1))+
+          " M30 "+HeaderTrendChoice(P3Choice(2))+" | Diary Details: "+HeaderOnOff(InpShowDetails)+" | ");
+}
+
 void UpdatePanel()
 {
    if(!g_built) return;
@@ -641,8 +665,8 @@ void UpdatePanel()
       {
          plans[i]=P3PlanLine(i);
          autoLines[i]=P4Line(i);
-         diaryLines[i]=P3DiarySummary(i,now);
-         diaryDetails[i]=InpShowDetails ? P3DiaryDetail(i) : "";
+         diaryLines[i]=P5Summary(i,now);
+         diaryDetails[i]=InpShowDetails ? P5Detail(i) : "";
       }
       MqlTick quote;
       if(SymbolInfoTick(_Symbol,quote) && quote.bid>0 && quote.ask>=quote.bid)
@@ -678,17 +702,24 @@ void UpdatePanel()
       suffix = "";
    }
    string detail = supported ? g_marketDetail : "Incompatible chart. Switch to M5/M15/M30.";
-   int titleW, titleH, prefixW, prefixH, stateW, stateH, suffixW, suffixH, detailW, detailH;
+   string timerLine = supported ? P4ScheduleText() : "";
+   string settingsLine = supported ? (detail==""?"":" | ")+HeaderSettings() : "";
+   string trendLine = supported ? HeaderTrendSettings() : "";
+   int titleW, titleH, prefixW, prefixH, stateW, stateH, suffixW, suffixH, detailW, detailH, timerW, timerH;
+   int settingsW, settingsH, trendW, trendH;
    MeasureLine(PANEL_TITLE, PANEL_FONT_SIZE + 1, titleW, titleH);
    MeasureLine(prefix, PANEL_FONT_SIZE, prefixW, prefixH);
    MeasureLine(state, PANEL_FONT_SIZE, stateW, stateH);
    MeasureLine(suffix, PANEL_FONT_SIZE, suffixW, suffixH);
    MeasureLine(detail, supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1, detailW, detailH);
+   MeasureLine(timerLine, PANEL_FONT_SIZE, timerW, timerH);
+   MeasureLine(settingsLine, PANEL_FONT_SIZE, settingsW, settingsH);
+   MeasureLine(trendLine, PANEL_FONT_SIZE, trendW, trendH);
    int pad = 10;
    int headerH = (int)MathMax(MathMax(titleH, prefixH), MathMax(stateH, suffixH));
    int headerW = titleW + prefixW + stateW + suffixW;
-   int width = (int)MathMax(headerW, detail == "" ? 0 : detailW) + 2 * pad + 4;
-   int rowH = (int)MathMax(headerH, detailH) + 6;
+   int width = (int)MathMax(MathMax(headerW, detailW+settingsW), trendW+timerW) + 2 * pad + 4;
+   int rowH = (int)MathMax(MathMax(headerH, detailH),MathMax(timerH,MathMax(settingsH,trendH))) + 6;
    if(supported)
    {
       for(int i = 0; i < 3; i++)
@@ -714,7 +745,7 @@ void UpdatePanel()
       width=(int)MathMax(width,qw+2*pad+4); rowH=(int)MathMax(rowH,qh+6);
    }
    // Supported charts reserve three header rows, then the three lanes.
-   // On a closed or abnormal market row 2 carries the market detail.
+   // Row 2 carries settings and any market detail; row 3 carries trend settings and the timer.
    int height = 2 * pad + (supported ? (HEADER_ROWS + 13 + (InpShowDetails ? 3 : 0)) : 2) * rowH;
 
    MakeRect("bg", PANEL_X, PANEL_Y, width, height, PANEL_BG, clrDimGray);
@@ -730,6 +761,12 @@ void UpdatePanel()
    MakeTextLine("detail", PANEL_X + pad, y + rowH, detail,
                 supported ? clrSilver : clrTomato,
                 supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1);
+   MakeTextLine("settings",PANEL_X + pad+detailW,y+rowH,settingsLine,clrSilver,PANEL_FONT_SIZE,
+                supported?"Input settings only. Allow Against Trend controls alignment, not whether a timeframe is enabled. Other trading and broker rules still apply.":"");
+   MakeTextLine("trendSettings",PANEL_X + pad,y + 2*rowH,trendLine,clrSilver,PANEL_FONT_SIZE,
+                supported?"Trend to Follow is the selected input: AUTO, CT, GT or ST; Diary Details controls display only.":"");
+   MakeTextLine("timer",PANEL_X + pad+trendW,y + 2*rowH,timerLine,clrSilver,PANEL_FONT_SIZE,
+                supported?"The daily timer uses the PC/VPS local clock and gates new entries, not open positions.":"");
    for(int i = 0; i < 3; i++)
    {
       string name = "lane" + IntegerToString(i);
