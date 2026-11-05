@@ -26,10 +26,13 @@ using color=int;
 #define PANEL_SURFACE 7
 #define PANEL_BORDER 8
 #define PANEL_HEADING 9
+#define PANEL_BADGE 10
+#define PANEL_GREEN 11
+#define PANEL_RED 12
+#define PANEL_AMBER 13
 #define PANEL_X 12
 #define PANEL_Y 24
 #define LABEL_CHUNK 48
-#define HEADER_ROWS 3
 #define OBJ_PREFIX string("MT_")
 #define TERMINAL_SCREEN_DPI 1
 #define clrWhite 1
@@ -50,7 +53,7 @@ long SymbolInfoInteger(string,int){return 2;}
 string DoubleToString(double x,int){return to_string(x);}
 string plans[3]={"M5 | Signal: NONE","M15 | Signal: SELL | LIMIT Entry: 4130.819 | Lot: 0.01 | SL: 4131.649 (-0.83 USD) | TP: 4126.426 (+4.39 USD)","M30 | Signal: NONE"};
 string P3PlanLine(int i){return plans[i];}
-string autos[3]={"auto 0"+string(90,'z'),"auto 1"+string(90,'z'),"auto 2"+string(90,'z')};
+string autos[3]={"M5 | Auto: OFF", "M15 | Auto: OFF", "M30 | Auto: OFF"};
 string P4Line(int i){return autos[i];}
 string timerText="Timer: OFF"; string P4ScheduleText(){return timerText;}
 string tips[3]={"tip 0", "tip 1", "tip 2"};
@@ -93,8 +96,9 @@ string FormatClock(datetime t){return t==100?"2026.11.02 10:00:00":"2026.11.02 1
 struct Rect {int x,y,w,h;};map<string,Rect> rects;
 void MakeRect(string name,int x,int y,int w,int h,color,color){rects[name]={x,y,w,h};if(name=="bg"){boxW=w;boxH=h;}}
 void MakeLabel(string name,int x,int y,string text,color,int size,bool){labels[name]={x,y,size,text.substr(0,63)};}
-int ObjectFind(int,string name){return labels.count(name.substr(3))?0:-1;}
+int ObjectFind(int,string name){return labels.count(name.substr(3))||rects.count(name.substr(3))?0:-1;}
 void ObjectDelete(int,string name){labels.erase(name.substr(3));tooltips.erase(name.substr(3));rects.erase(name.substr(3));}
+void ObjectsDeleteAll(int,string){labels.clear();tooltips.clear();rects.clear();}
 void ChartRedraw(){}
 void P2Update(){}
 string lanes[3]={"M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | SC: +3/3 (50%L)",
@@ -104,95 +108,99 @@ string P2Line(int i){return lanes[i];}
 string Combined(string name){string out;for(int i=0;labels.count(name+"_"+to_string(i));i++)out+=labels[name+"_"+to_string(i)].text;return out;}
 string Wrapped(string name){string out;for(int i=0;labels.count(name+"_r"+to_string(i)+"_0");i++)out+=Combined(name+"_r"+to_string(i));return out;}
 '''
-functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','HeaderOnOff','HeaderTrendChoice','HeaderSettings','HeaderTPPercent','HeaderTrendSettings','PanelChunk','PanelRows','PanelWidth','PanelWrapped','PanelField','PanelReadingsValid','PanelValueColor','PanelPlanColor','PanelAutoColor','PanelStatsSplit','PanelDeleteBox','UpdatePanel'])
+functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','HeaderOnOff','HeaderTrendChoice','HeaderSettings','HeaderTPPercent','HeaderTrendSettings','PanelChunk','PanelRows','PanelWidth','PanelWrapped','PanelField','PanelReadingsValid','PanelValueColor','PanelPlanColor','PanelAutoColor','PanelStatsSplit','PanelPart','PanelPartCount','PanelTail','PanelKey','PanelSettingValue','PanelWord','PanelCountsValid','PanelBadgeColor','PanelPlanValid','PanelSignalText','PanelPlanFieldColor','PanelPlanCellRows','PanelPlanCellWidth','PanelPlanCell','PanelAutoValid','UpdatePanel'])
 main = r'''
 int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAIL "<<n<<"\n";failures++;}};
- UpdatePanel(); int openW=boxW,openH=boxH;
- check(Combined("state")=="OPEN" && Combined("suffix").find("2026.11.02")!=string::npos,"market header");
- check(Combined("quotes").find("Bid:")!=string::npos && Combined("quotes").find("Ask:")!=string::npos,"quotes in market header");
- check(Combined("detail").empty(),"no market detail while open");
- check(Combined("settings").find("Auto Trading: OFF")!=string::npos && Combined("settings").find("SL Placement: ON")!=string::npos,"input settings preserved");
- check(Combined("trendSettings").find("TP %: M5 85% M15 85% M30 85%")!=string::npos && Combined("timer")=="Timer: OFF","TP and timer preserved");
- check(Combined("readingTitle")=="MARKET READINGS" && Combined("planTitle")=="TRADING PLANS" && Combined("autoTitle")=="AUTO EXECUTION" && Combined("diaryTitle")=="TRADE STATISTICS","four clearly labelled sections");
- check(rects.count("readingsBox") && rects.count("planBox0") && rects.count("planBox1") && rects.count("planBox2") && rects.count("autoBox") && rects.count("diaryBox"),"section backgrounds exist");
- check(Combined("col0")=="TF" && Combined("col1")=="GT" && Combined("col6")=="SC","reading column headings");
- check(Combined("cell0_0")=="M5" && Combined("cell0_1")=="FLAT" && Combined("cell0_2")=="DOWN" && Combined("cell0_6")=="+3/3 (50%L)","first reading retains all values");
- check(Combined("cell1_0")=="M15" && Combined("cell1_3")=="DOWN" && Combined("cell1_5")=="~6b" && Combined("cell1_6")=="-2/3 (--%L)","M15 reading stays in its own row");
- check(Combined("cell2_0")=="M30" && Combined("cell2_3")=="CONFLICT" && Combined("cell2_6")=="-3/3 (past est.)","conflict and past estimate retained");
- check(!PanelReadingsValid(lanes[0]+" | New field: VALUE","M5") && !PanelReadingsValid(lanes[0],"M15"),"unexpected reading fields or lane use full fallback");
- for(auto &pair:labels) {auto &v=pair.second;check(v.x>=PANEL_X && v.x+(int)v.text.size()*10<=PANEL_X+boxW && v.y>=PANEL_Y && v.y+20<=PANEL_Y+boxH,"label within dynamically sized background");}
+ UpdatePanel(); int openW=boxW;
+ check(Combined("title")=="MT V1.00" && Combined("symbol")==g_symbol && Combined("type")==g_type && Combined("state")=="OPEN" && Combined("clock").find("2026.11.02")!=string::npos,"market header has live values");
+ check(Combined("bid").find("Bid:")==0 && Combined("ask").find("Ask:")==0,"separate live bid/ask");
+ check(rects.count("brandBox") && rects.count("typeBox") && rects.count("stateBox") && rects.count("bidBox") && rects.count("askBox"),"header badges");
+ check(Combined("settingsTitle")=="SETTINGS" && rects.count("settingsBox"),"settings section");
+ check(Combined("setKey0")=="Auto Trading" && Combined("setVal0")=="OFF" && Combined("setVal4")=="ON","settings values shown");
+ check(Combined("setKey1")=="Allow Against Trend" && Combined("setVal1")=="M5 ON M15 ON M30 ON","three against-trend inputs shown");
+ check(Combined("setKey5")=="Trend to Follow" && Combined("setVal5").find("M15 AUTO")!=string::npos && Combined("setVal7")=="M5 85% M15 85% M30 85%" && Combined("setVal8")=="OFF","trend, TP and timer settings shown");
+ check(tooltips["setKey0_0"].find("without a broker stop loss")!=string::npos && tooltips["setVal7_0"].find("INVALID uses original")!=string::npos,"input tooltips preserved");
+ check(Combined("readingTitle")=="MARKET READINGS" && Combined("planTitle")=="TRADING PLANS" && Combined("autoTitle")=="AUTO EXECUTION" && Combined("diaryTitle")=="TRADE STATISTICS","section titles");
+ check(rects.count("readingsBox") && rects.count("planBox0") && rects.count("planBox1") && rects.count("planBox2") && rects.count("autoRow0") && rects.count("autoRow1") && rects.count("autoRow2") && rects.count("diaryBox"),"distinct cards and auto rows");
+ check(Combined("col0")=="TF" && Combined("col6")=="SC" && Combined("cell0_1")=="FLAT" && Combined("cell1_3")=="DOWN" && Combined("cell2_3")=="CONFLICT" && Combined("cell2_6")=="-3/3 (past est.)","readings matrix preserves values");
+ check(rects.count("readBadge0_1") && rects.count("readBadge2_3"),"reading badges");
+ check(rects["planBox0"].w==rects["planBox1"].w && rects["planBox1"].w==rects["planBox2"].w && rects["planBox0"].x+rects["planBox0"].w<=rects["planBox1"].x,"equal spaced plan cards");
  for(int i=0;i<3;i++){
-   string n=to_string(i);check(Wrapped("plan"+n)==plans[i],"full plan survives wrapping");
-   check(Wrapped("auto"+n)==autos[i],"full broker auto status survives wrapping");
-   for(int j=0;labels.count("auto"+n+"_r"+to_string(j)+"_0");j++)
-      check(tooltips["auto"+n+"_r"+to_string(j)+"_0"]==tips[i],"own lane tooltip on every auto line");
+  string n=to_string(i);check(Combined("planTF"+n)==PanelPart(plans[i],0) && Combined("planSignal"+n)==PanelSignalText(plans[i]),"plan identity and signal");
+  for(int j=2;j<PanelPartCount(plans[i]);j++){
+    string field=PanelPart(plans[i],j),name="plan"+n+"f"+to_string(j);
+    check(Wrapped(name)==(field.find(": ")!=string::npos?PanelSettingValue(field):field),"every plan field value preserved");
+    check(Wrapped(name+"Key")==(field.find(": ")!=string::npos?PanelKey(field):""),"every plan field label preserved");
+    check(tooltips[name+"_r0_0"].find("Frozen plan")!=string::npos,"plan field tooltip preserved");
+  }
+  check(Combined("autoTF"+n)==PanelPart(autos[i],0) && Combined("autoKey"+n)=="Auto" && Combined("autoMode"+n)==PanelSettingValue(PanelPart(autos[i],1)) && Wrapped("auto"+n)==PanelTail(autos[i],2),"auto lane identity, mode and full tail");
+  check(tooltips["autoTF"+n+"_0"]==tips[i] && tooltips["autoMode"+n+"_0"]==tips[i],"own lane auto tooltip");
  }
- check(Combined("statsTF0")=="M5" && Wrapped("statsToday0")=="S 6 W 0 L 0 BE 0" && Wrapped("statsAll0")=="S 6 W 0 L 0 BE 0","M5 diary today/all");
- check(Combined("statsTF1")=="M15" && Wrapped("statsToday1")=="S 1 W 0 L 0 BE 0" && Wrapped("statsAll1")=="S 1 W 0 L 0 BE 0","M15 diary today/all");
- check(Combined("statsTF2")=="M30" && Wrapped("statsToday2")=="S 0 W 0 L 0 BE 0","M30 diary");
- string savedAuto=autos[1];autos[1]+=" | tallglyph";UpdatePanel();
- check(labels["cell1_0_0"].y-labels["cell0_0_0"].y>=46,"row height accounts for tall status text, not just header font");
- check(Wrapped("auto1")==autos[1],"tall status text remains intact");
- autos[1]=savedAuto;UpdatePanel();
- check(rects["autoBox"].x+rects["autoBox"].w<=rects["diaryBox"].x,"auto and statistics do not overlap");
- check(rects["planBox0"].x+rects["planBox0"].w<=rects["planBox1"].x && rects["planBox1"].x+rects["planBox1"].w<=rects["planBox2"].x,"plan cards do not overlap");
- check(labels["readingTitle_0"].y>labels["trendSettings_0"].y && labels["planTitle_0"].y>labels["cell2_0_0"].y && labels["autoTitle_0"].y>=rects["planBox0"].y+rects["planBox0"].h,"sections follow header and do not overlap");
+ check(Combined("todayHeader")=="TODAY" && Combined("allHeader")=="ALL" && Combined("statLabelT0")=="S" && Combined("statLabelT3")=="BE","grouped statistics headings");
+ check(Combined("statsTF0")=="M5" && Combined("statsT0_0")=="6" && Combined("statsA0_0")=="6" && Combined("statsT1_0")=="1" && Combined("statsT2_0")=="0","individual today/all counts");
+ check(rects["autoBox"].x+rects["autoBox"].w<=rects["diaryBox"].x && rects["diaryBox"].x+rects["diaryBox"].w==PANEL_X+boxW-10,"bottom sections fill width");
+ for(auto &pair:labels){auto v=pair.second;check(v.x>=PANEL_X && v.x+(int)v.text.size()*v.size<=PANEL_X+boxW && v.y>=PANEL_Y && v.y+v.size+4<=PANEL_Y+boxH,"all initial text within panel");}
  int rowH=labels["cell1_0_0"].y-labels["cell0_0_0"].y;
- check(labels["readingTitle_0"].y==labels["title_0"].y+3*rowH,"three header rows retained");
- // Vary long and unbroken messages to exercise card bounds, wrapping and shrink cleanup.
- string oldPlan=plans[2],oldAuto=autos[1],oldDiary=diaries[1];
+ check(labels["setKey5_0"].y-labels["setKey0_0"].y==rowH,"two structured settings rows");
+ check(!PanelReadingsValid(lanes[0]+" | extra: yes","M5") && !PanelCountsValid("S 1 W 0 L 0 BE 0 | extra"),"unexpected reading and diary formats fall back");
+ // Stress changing card lengths and unbroken broker messages; every fragment stays in its own box.
+ string savedPlan=plans[2],savedAuto=autos[1],savedDiary=diaries[1];
  auto inBox=[&](const string &prefix,const string &box){
-   Rect r=rects[box];
-   for(auto &pair:labels) if(pair.first.find(prefix)==0){auto v=pair.second;
-      if(v.x<r.x || v.x+(int)v.text.size()*10>r.x+r.w || v.y<r.y || v.y+v.size+4>r.y+r.h)return false;}
-   return true;
+  Rect r=rects[box];for(auto &pair:labels) if(pair.first.find(prefix)==0){auto v=pair.second;
+   if(v.x<r.x || v.x+(int)v.text.size()*v.size>r.x+r.w || v.y<r.y || v.y+v.size+4>r.y+r.h)return false;}
+  return true;
  };
  for(int k=0;k<24;k++){
-   plans[2]="M30 | Signal: BUY | Volume: LOW | "+string(k*11,'P')+" | Bars: Last/unknown proxy";
-   autos[1]="M15 | Auto: ON | REVIEW | "+string((23-k)*13,'E')+" | NO SL (unprotected)";
-   diaries[1]="M15 | Trade diary: unavailable "+string(k*7,'D');
-   UpdatePanel();
-   check(Wrapped("plan2")==plans[2] && Wrapped("auto1")==autos[1] && Wrapped("statsFallback1")==diaries[1],"variable-length fields remain complete");
-   check(inBox("plan2_r","planBox2") && inBox("auto1_r","autoBox") && inBox("statsFallback1_r","diaryBox"),"variable-length fields remain within their section boxes");
+  plans[2]="M30 | Signal: BUY | Entry: "+string(k*11,'P')+" | "+string(k,'K')+"long unusual field label: "+string(k*3,'V')+" | Bars: Last/unknown proxy";
+  autos[1]="M15 | Auto: OFF | REVIEW | "+string((23-k)*13,'E')+" | NO SL (unprotected)";
+  diaries[1]="M15 | Trade diary: unavailable "+string(k*7,'D');
+  UpdatePanel();
+  check(Wrapped("plan2f2")==PanelSettingValue(PanelPart(plans[2],2)) && Wrapped("plan2f3Key")==PanelKey(PanelPart(plans[2],3)) && Wrapped("plan2f3")==PanelSettingValue(PanelPart(plans[2],3)),"long plan field labels and values retained");
+  check(Wrapped("auto1")==PanelTail(autos[1],2) && Wrapped("statsFallback1")==diaries[1],"long broker and unavailable-diary text retained");
+  check(inBox("plan2f","planBox2") && inBox("auto1_r","autoBox") && inBox("statsFallback1_r","diaryBox"),"long fields stay within their section boxes");
  }
- plans[2]=oldPlan;autos[1]=oldAuto;diaries[1]=oldDiary;UpdatePanel();
- InpAutoTrading=true;InpMinimumLot=true;InpBypassRisk=true;InpPlaceStopLoss=false;against[0]=false;choices[1]=P3_FOLLOW_GT;tpPercent[1]=101;UpdatePanel();
- check(Combined("settings").find("Auto Trading: ON")!=string::npos && Combined("settings").find("SL Placement: OFF")!=string::npos && Combined("settings").find("M5 OFF")!=string::npos,"changed settings visible");
- check(Combined("trendSettings").find("M15 GT")!=string::npos && Combined("trendSettings").find("M15 INVALID")!=string::npos,"trend and invalid percentile visible");
- check(tooltips["settings_0"].find("without a broker stop loss")!=string::npos && tooltips["trendSettings_0"].find("INVALID uses original")!=string::npos,"settings tooltip explains behavior");
- InpAutoTrading=false;InpMinimumLot=false;InpBypassRisk=false;InpPlaceStopLoss=true;against[0]=true;choices[1]=P3_AUTO;tpPercent[1]=85;UpdatePanel();
+ plans[2]="M30 | Signal: BUY |  | Extra: keep this";UpdatePanel();
+ check(Wrapped("plan2f3")=="keep this","nonempty field after an empty field is visible");
+ plans[2]="M30 | Signal: NONE";UpdatePanel();
+ check(Wrapped("plan2f3").empty() && Wrapped("plan2f3Key").empty(),"shorter plan clears old fields even after a gap");
+ plans[2]=savedPlan;autos[1]=savedAuto;diaries[1]=savedDiary;UpdatePanel();
+ InpAutoTrading=true;InpMinimumLot=true;InpBypassRisk=true;InpPlaceStopLoss=false;against[0]=false;choices[1]=P3_FOLLOW_GT;tpPercent[1]=101;timerText="Timer: PAUSED 08:00-17:00 | Opens in 2h00m (PC/VPS local)";UpdatePanel();
+ check(Combined("setVal0")=="ON" && Combined("setVal4")=="OFF" && Combined("setVal1").find("M5 OFF")!=string::npos,"changed settings visible");
+ check(Combined("setVal5").find("M15 GT")!=string::npos && Combined("setVal7").find("M15 INVALID")!=string::npos && Combined("setVal8").find("Opens in 2h00m")!=string::npos,"invalid percentage and full timer preserved");
+ InpAutoTrading=false;InpMinimumLot=false;InpBypassRisk=false;InpPlaceStopLoss=true;against[0]=true;choices[1]=P3_AUTO;tpPercent[1]=85;timerText="Timer: OFF";
  tips[1]="updated reason";autos[1]="M15 | Auto: OFF | REVIEW | "+string(180,'z');UpdatePanel();
- check(Wrapped("auto1")==autos[1] && tooltips["auto1_r0_0"]==tips[1] && tooltips["auto0_r0_0"]==tips[0],"long changed broker reason and isolated tooltips");
- check(PanelAutoColor(autos[1])==clrOrange,"review warning highlighted");
+ check(Combined("autoMode1")=="OFF" && Wrapped("auto1")==PanelTail(autos[1],2) && tooltips["auto1_r0_0"]==tips[1] && PanelAutoColor(autos[1])==clrOrange,"review and long reason stay in correct lane");
+ int tallH=boxH;autos[1]="M15 | Auto: OFF";UpdatePanel();check(Wrapped("auto1").empty() && !labels.count("auto1_r1_0") && boxH<tallH,"shorter status removes old fragments");
  InpPlaceStopLoss=false;
  autos[1]="M15 | Auto: ON | SELL LIMIT | Entry 4130.819 (distance 1.100) | Lot 0.01 | SL 4131.649 (-0.83 USD) | TP 4126.426 (+4.39 USD)";
  autos[2]="M30 | Auto: ON | BUY OPEN | Entry 4127.200 | Lot 0.01 | SL -- (-- USD) | TP 4132.000 (+4.80 USD) | NO SL (unprotected)";
- UpdatePanel();check(Wrapped("auto1")==autos[1] && Wrapped("auto1").find("SL 4131.649")!=string::npos,"existing broker SL retained while SL placement is off");
- check(Wrapped("auto2")==autos[2] && PanelAutoColor(autos[2])==clrOrange,"unprotected order warning retained and highlighted");
- int tallH=boxH;autos[1]="M15 | Auto: OFF";autos[2]="M30 | Auto: OFF";InpPlaceStopLoss=true;UpdatePanel();
- check(Wrapped("auto1")==autos[1] && !labels.count("auto1_r1_0") && boxH<tallH,"shorter auto removes stale lines and shrinks");
+ UpdatePanel();check(Wrapped("auto1")==PanelTail(autos[1],2) && Wrapped("auto1").find("SL 4131.649")!=string::npos,"existing broker stop retained even when placement off");
+ check(Wrapped("auto2")==PanelTail(autos[2],2) && PanelAutoColor(autos[2])==clrOrange && Combined("autoMode2")=="ON","unprotected order is highlighted without changing mode");
+ for(int j=0;labels.count("auto2_r"+to_string(j)+"_0");j++)check(tooltips["auto2_r"+to_string(j)+"_0"]==tips[2],"tooltip covers every wrapped auto fragment");
  plans[0]="M5 | Signal: BUY | Volume: LOW | Entry: -- | Plan data unavailable | Bars: Last/unknown proxy";
- autos[0]="M5 | Auto: OFF | TIMER PAUSED | WAIT | NO SL (unprotected) | broker warning";
- InpShowDetails=true;UpdatePanel();check(Wrapped("history0")==P5Detail(0) && boxH>openH,"optional long details preserved and height grows");
- check(Wrapped("plan0")==plans[0] && Wrapped("auto0")==autos[0],"plan extras, timer, wait and unprotected warning retained");
- InpShowDetails=false;UpdatePanel();check(Wrapped("history0").empty(),"optional details removed");
- diaries[1]="M15 | Trade diary: unavailable";UpdatePanel();
- check(Wrapped("statsFallback1")==diaries[1] && Wrapped("statsToday1").empty() && Combined("statsTF1").empty(),"unavailable diary is not replaced by zero counts");
+ InpShowDetails=true;UpdatePanel();check(Wrapped("history0")==P5Detail(0),"optional complete diary details");
+ for(int j=2;j<PanelPartCount(plans[0]);j++){
+  string field=PanelPart(plans[0],j),name="plan0f"+to_string(j);
+  check(Wrapped(name)==(field.find(": ")!=string::npos?PanelSettingValue(field):field),"volume and unavailable plan values retained");
+  check(Wrapped(name+"Key")==PanelKey(field) || field.find(": ")==string::npos,"volume and unavailable plan labels retained");
+ }
+ InpShowDetails=false;plans[0]="M5 | Signal: NONE";UpdatePanel();check(Wrapped("history0").empty() && Wrapped("plan0f2").empty() && Wrapped("plan0f4").empty() && Wrapped("plan0f2Key").empty(),"details and stale plan fields cleared");
+ diaries[1]="M15 | Trade diary: unavailable";UpdatePanel();check(Wrapped("statsFallback1")==diaries[1] && Combined("statsT1_0").empty(),"unavailable diary never becomes zero");
  diaries[1]="M15 | Trades Today S 1 W 0 L 0 BE 0 | All S 1 W 0 L 0 BE 0";
- lanes[0]="M5 | unexpected "+string(180,'x');UpdatePanel();
- check(Wrapped("readingFallback0")==lanes[0] && Combined("cell0_0").empty() && labels["cell1_0_0"].y>labels["readingFallback0_r2_0"].y,"unexpected long reading preserved without overlap");
+ lanes[0]="M5 | unexpected "+string(180,'x');UpdatePanel();check(Wrapped("readingFallback0")==lanes[0] && Combined("cell0_0").empty() && labels["cell1_0_0"].y>labels["readingFallback0_r2_0"].y,"long unexpected reading retained and does not overlap next lane");
  lanes[0]="M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | SC: +3/3 (50%L)";
- g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open " + string(100,'x');UpdatePanel();
- check(Combined("state")=="close" && Combined("suffix").find("Open at")!=string::npos && Combined("detail")==g_marketDetail,"closed status and long detail retained");
- check(labels["settings_0"].x>=labels["detail_0"].x+int(g_marketDetail.size())*10,"closed detail does not overlap settings");
- _Period=60;UpdatePanel();check(Combined("detail")=="Incompatible chart. Switch to M5/M15/M30." && Combined("prefix").find("H1")!=string::npos,"unsupported notice");
- check(!rects.count("readingsBox") && !rects.count("planBox0") && !rects.count("autoBox") && !rects.count("diaryBox"),"unsupported removes section boxes");
- check(Combined("cell0_0").empty() && Wrapped("plan0").empty() && Wrapped("auto0").empty() && Wrapped("statsToday0").empty() && Combined("quotes").empty(),"unsupported clears all sections");
- _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();
- check(Combined("cell0_1")=="FLAT" && Wrapped("plan0")==plans[0],"sections restored on supported timeframe");
- g_symbol=string(150,'X');UpdatePanel();check(Combined("prefix")==" | "+g_symbol+" | Metal | " && boxW>openW,"long symbol expands header");
- measureFailure=true;UpdatePanel();check(Wrapped("plan1")==plans[1] && labels["auto0_r0_0"].y+20<PANEL_Y+boxH,"font measurement fallback preserves content and bounds");
- if(failures)return 1;cout<<"Organized MT panel regression checks passed.\n";return 0;}
+ plans[0]="future plan "+string(90,'x');autos[0]="unexpected auto "+string(100,'y');UpdatePanel();
+ check(Wrapped("planFallback0")==plans[0] && Wrapped("auto0")==autos[0] && Combined("planTF0").empty() && Combined("autoTF0").empty(),"unknown plan and broker formats fall back without loss");
+ plans[0]="M5 | Signal: NONE";autos[0]="M5 | Auto: OFF";
+ g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(100,'x');UpdatePanel();
+ check(Combined("state")=="close" && Combined("clock").find("Open at")!=string::npos && Wrapped("detail")==g_marketDetail,"closed market detail and opening retained");
+ check(labels["settingsTitle_0"].y>labels["detail_r1_0"].y,"long closure detail does not overlap settings");
+ _Period=60;UpdatePanel();check(Combined("unsupportedNotice")=="Incompatible chart. Switch to M5/M15/M30." && Combined("unsupportedTitle").find("H1")!=string::npos,"unsupported notice");
+ check(!rects.count("settingsBox") && !rects.count("planBox0") && !rects.count("diaryBox") && Combined("cell0_0").empty(),"unsupported clears supported objects");
+ _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();check(Combined("cell0_1")=="FLAT" && Combined("planTF0")=="M5" && Combined("unsupportedNotice").empty(),"supported layout restores");
+ g_symbol=string(150,'X');UpdatePanel();check(Combined("symbol")==g_symbol && boxW>openW,"long symbol expands header without truncation");
+ measureFailure=true;UpdatePanel();check(Combined("planTF1")=="M15" && labels["autoTF0_0"].y+20<PANEL_Y+boxH,"font fallback retains content and bounds");
+ if(failures)return 1;cout<<"Structured MT panel regression checks passed.\n";return 0;}
 '''
 
 with tempfile.TemporaryDirectory() as tmp:
