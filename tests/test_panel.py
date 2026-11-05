@@ -1,209 +1,169 @@
 #!/usr/bin/env python3
-"""Exercise actual panel functions with simulated MT5 font/object APIs.
-The label stub truncates text at 63 characters, as observed in MT5.
-This is not an MQL compiler or a substitute for a live chart test.
-"""
+"""Exercise the real MT_Panel.mqh against chart/font stubs, not an MT5 renderer."""
 import pathlib, re, subprocess, tempfile
-from test_logic import function
-
-source = (pathlib.Path(__file__).resolve().parents[1] / 'MT.mq5').read_text()
-assert '#include "MT_PlanRuntime.mqh"' in source
+root = pathlib.Path(__file__).resolve().parents[1]
+main_source = (root / 'MT.mq5').read_text()
+panel_source = (root / 'MT_Panel.mqh').read_text()
+assert '#include "MT_Panel.mqh"' in main_source
+# Rendering belongs to the module; the EA only owns lifecycle calls and its trading gate.
+assert not re.search(r'\b(?:ObjectCreate|ObjectSetInteger|ObjectSetString|ObjectDelete|ObjectsDeleteAll|TextGetSize|MakeLabel|MakeRect|MakeTextLine)\b', main_source)
+assert 'bool ChartSupported()' in main_source
+# MQL color literals become deterministic C++ test colors.
+panel_cpp = re.sub(r"C'(\d+),(\d+),(\d+)'", lambda m: str(int(m[1]) + 256*int(m[2]) + 65536*int(m[3])), panel_source)
 stubs = r'''
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <string>
 using namespace std;
-using datetime=long long;
-using uint=unsigned int;
-using color=int;
-#define PANEL_FONT "Consolas"
-#define PANEL_FONT_SIZE 10
-#define PANEL_TITLE "MT V1.00"
-#define PANEL_TITLE_COLOR 1
-#define PANEL_BG 2
-#define PANEL_SURFACE 7
-#define PANEL_BORDER 8
-#define PANEL_HEADING 9
-#define PANEL_BADGE 10
-#define PANEL_GREEN 11
-#define PANEL_RED 12
-#define PANEL_AMBER 13
-#define PANEL_X 12
-#define PANEL_Y 24
-#define LABEL_CHUNK 48
-#define OBJ_PREFIX string("MT_")
-#define TERMINAL_SCREEN_DPI 1
-#define clrWhite 1
-#define clrLime 2
-#define clrTomato 3
-#define clrOrange 4
-#define clrSilver 5
-#define clrDimGray 6
+using datetime=long long;using uint=unsigned int;using color=int;using ENUM_TIMEFRAMES=int;
 #define PERIOD_M5 5
 #define PERIOD_M15 15
 #define PERIOD_M30 30
-using ENUM_TIMEFRAMES=int;
-#define SYMBOL_DIGITS 90
-string _Symbol="XAUUSDm";
-struct MqlTick {double bid=100,ask=100.1;};
-bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{}; return true;}
-long SymbolInfoInteger(string,int){return 2;}
-string DoubleToString(double x,int){return to_string(x);}
-string plans[3]={"M5 | Signal: NONE","M15 | Signal: SELL | LIMIT Entry: 4130.819 | Lot: 0.01 | SL: 4131.649 (-0.83 USD) | TP: 4126.426 (+4.39 USD)","M30 | Signal: NONE"};
-string P3PlanLine(int i){return plans[i];}
-string autos[3]={"M5 | Auto: OFF", "M15 | Auto: OFF", "M30 | Auto: OFF"};
-string P4Line(int i){return autos[i];}
-string timerText="Timer: OFF"; string P4ScheduleText(){return timerText;}
-string tips[3]={"tip 0", "tip 1", "tip 2"};
-string P4Tooltip(int i){return tips[i];}
-bool InpShowDetails=false,InpAutoTrading=false,InpMinimumLot=false,InpBypassRisk=false,InpPlaceStopLoss=true;
-int tpPercent[3]={85,85,85};int P3TPPercentInput(int i){return tpPercent[i];}
+#define CHART_WIDTH_IN_PIXELS 1
+#define TERMINAL_SCREEN_DPI 2
+#define SYMBOL_DIGITS 3
+#define OBJ_LABEL 1
+#define OBJ_RECTANGLE_LABEL 2
+#define OBJPROP_CORNER 1
+#define OBJPROP_XDISTANCE 2
+#define OBJPROP_YDISTANCE 3
+#define OBJPROP_COLOR 4
+#define OBJPROP_FONTSIZE 5
+#define OBJPROP_SELECTABLE 6
+#define OBJPROP_HIDDEN 7
+#define OBJPROP_BACK 8
+#define OBJPROP_ANCHOR 9
+#define OBJPROP_XSIZE 10
+#define OBJPROP_YSIZE 11
+#define OBJPROP_BGCOLOR 12
+#define OBJPROP_BORDER_TYPE 13
+#define OBJPROP_WIDTH 14
+#define OBJPROP_FONT 15
+#define OBJPROP_TEXT 16
+#define OBJPROP_TOOLTIP 17
+#define CORNER_LEFT_UPPER 0
+#define ANCHOR_LEFT_UPPER 0
+#define BORDER_FLAT 0
+#define clrWhite 1001
+#define clrLime 1002
+#define clrTomato 1003
+#define clrOrange 1004
+#define clrSilver 1005
+string _Symbol="EURUSDm",g_symbol="EURUSDm",g_type="Forex",g_marketDetail="";
+int _Period=5,chartWidth=850, fontSize=10; bool measureFailure=false;
+bool InpAutoTrading=true,InpMinimumLot=false,InpBypassRisk=false,InpPlaceStopLoss=false,InpShowDetails=false;
+bool against[3]={true,true,true}; int percentages[3]={85,85,85};
 enum P3_TREND_CHOICE {P3_AUTO=0,P3_FOLLOW_CT=1,P3_FOLLOW_GT=2,P3_FOLLOW_ST=3};
 P3_TREND_CHOICE choices[3]={P3_AUTO,P3_AUTO,P3_AUTO};
-bool against[3]={true,true,true};
-P3_TREND_CHOICE P3Choice(int i){return choices[i];}
-bool P3Against(int i){return against[i];}
-string diaries[3]={"M5 | Trades Today S 6 W 0 L 0 BE 0 | All S 6 W 0 L 0 BE 0", "M15 | Trades Today S 1 W 0 L 0 BE 0 | All S 1 W 0 L 0 BE 0", "M30 | Trades Today S 0 W 0 L 0 BE 0 | All S 0 W 0 L 0 BE 0"};
-string P5Summary(int i,datetime){return diaries[i];}
-string P5Detail(int i){return "detail "+to_string(i)+string(80,'d');}
-int _Period=5;
-enum MARKET_STATE {MARKET_OPEN, MARKET_CLOSED, MARKET_STALE, MARKET_UNKNOWN, MARKET_OFFLINE, MARKET_UNAVAILABLE};
-MARKET_STATE g_marketState=MARKET_OPEN;
-string g_symbol="XAUUSDm",g_type="Metal",g_marketDetail="";
-datetime g_nextOpen=200, now=100;
-bool g_built=true, measureFailure=false;
-int fontSize=10, boxW=0,boxH=0;
-struct Label {int x,y,size; string text;};
-map<string,Label> labels;
-map<string,string> tooltips;
-#define OBJPROP_TOOLTIP 77
-bool ObjectSetString(int,string name,int,string value){tooltips[name.substr(3)]=value;return true;}
-long TerminalInfoInteger(int){return 96;}
+bool P3Against(int i){return against[i];} P3_TREND_CHOICE P3Choice(int i){return choices[i];} int P3TPPercentInput(int i){return percentages[i];}
+enum MARKET_STATE {MARKET_OPEN,MARKET_CLOSED,MARKET_STALE,MARKET_UNKNOWN,MARKET_OFFLINE,MARKET_UNAVAILABLE};
+MARKET_STATE g_marketState=MARKET_OPEN; datetime g_nextOpen=200, now=100;
+datetime ServerNow(){return now;} void UpdateState(datetime){} bool ChartSupported(){return _Period==5||_Period==15||_Period==30;}
+string FormatClock(datetime t){return t==100?"2026.11.05 11:45:53":"2026.11.06 08:00:00";}
+struct MqlTick {double bid=1.12194,ask=1.12202;}; bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{};return true;}
+long SymbolInfoInteger(string,int){return 5;} long TerminalInfoInteger(int){return 96;} long ChartGetInteger(int,int,int){return chartWidth;}
+string DoubleToString(double v,int digits){ostringstream o;o<<fixed<<setprecision(digits)<<v;return o.str();}
+string EnumToString(int){return "PERIOD_H1";} string IntegerToString(int x){return to_string(x);}
+int StringLen(const string &s){return int(s.size());}
+int StringFind(const string &s,const string &v,int start=0){auto p=s.find(v,start);return p==string::npos?-1:int(p);}
+string StringSubstr(const string &s,int start,int len=-1){if(start>=int(s.size()))return "";return s.substr(start,len<0?string::npos:size_t(len));}
+template<class T> T MathMax(T a,T b){return max(a,b);} template<class T> T MathMin(T a,T b){return min(a,b);} double MathCeil(double x){return ceil(x);}
 bool TextSetFont(string,int size,uint){fontSize=-size/10;return !measureFailure;}
-bool TextGetSize(string text,uint &w,uint &h){w=uint(text.size()*fontSize);h=uint(text.find("tallglyph")!=string::npos ? 40 : fontSize+4);return true;}
-int StringLen(string s){return int(s.size());}
-int StringFind(string s,string v,int start=0){auto n=s.find(v,start);return n==string::npos?-1:int(n);}
-string StringSubstr(string s,int n,int length=-1){return s.substr(n,length<0?string::npos:size_t(length));}
-string EnumToString(int){return "PERIOD_H1";}
-string IntegerToString(int i){return to_string(i);}
-double MathCeil(double x){return ceil(x);}
-template<typename T> T MathMax(T a,T b){return max(a,b);}
-datetime ServerNow(){return now;}
-void UpdateState(datetime){}
-string FormatClock(datetime t){return t==100?"2026.11.02 10:00:00":"2026.11.02 12:00:00";}
-struct Rect {int x,y,w,h;};map<string,Rect> rects;
-void MakeRect(string name,int x,int y,int w,int h,color,color){rects[name]={x,y,w,h};if(name=="bg"){boxW=w;boxH=h;}}
-void MakeLabel(string name,int x,int y,string text,color,int size,bool){labels[name]={x,y,size,text.substr(0,63)};}
-int ObjectFind(int,string name){return labels.count(name.substr(3))||rects.count(name.substr(3))?0:-1;}
-void ObjectDelete(int,string name){labels.erase(name.substr(3));tooltips.erase(name.substr(3));rects.erase(name.substr(3));}
-void ObjectsDeleteAll(int,string){labels.clear();tooltips.clear();rects.clear();}
+bool TextGetSize(string t,uint &w,uint &h){w=uint(t.size()*fontSize*0.8);h=uint(t.find("tallglyph")!=string::npos?40:fontSize+4);return true;}
+struct Obj {int type=0,x=0,y=0,w=0,h=0,size=0,ink=0,bg=0,order=0;string text,tip;};
+map<string,Obj> objects;int created=0,clearCount=0;
+int ObjectFind(int,string n){return objects.count(n)?0:-1;}
+bool ObjectCreate(int,string n,int type,int,int,int){objects[n].type=type;objects[n].order=++created;return true;}
+bool ObjectSetInteger(int,string n,int prop,long v){auto &o=objects[n];if(prop==OBJPROP_XDISTANCE)o.x=int(v);if(prop==OBJPROP_YDISTANCE)o.y=int(v);if(prop==OBJPROP_XSIZE)o.w=int(v);if(prop==OBJPROP_YSIZE)o.h=int(v);if(prop==OBJPROP_FONTSIZE)o.size=int(v);if(prop==OBJPROP_COLOR)o.ink=int(v);if(prop==OBJPROP_BGCOLOR)o.bg=int(v);return true;}
+bool ObjectSetString(int,string n,int prop,string v){auto &o=objects[n];if(prop==OBJPROP_TEXT)o.text=v.substr(0,63);if(prop==OBJPROP_TOOLTIP)o.tip=v;return true;}
+bool ObjectDelete(int,string n){objects.erase(n);return true;}
+void ObjectsDeleteAll(int,string prefix){clearCount++;for(auto it=objects.begin();it!=objects.end();)if(it->first.find(prefix)==0)it=objects.erase(it);else ++it;}
 void ChartRedraw(){}
 void P2Update(){}
-string lanes[3]={"M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | SC: +3/3 (50%L)",
- "M15 | GT: DOWN | CT: DOWN | ST: DOWN | RG: STEADY | PT: ~6b | SC: -2/3 (--%L)",
- "M30 | GT: UP | CT: DOWN | ST: CONFLICT | RG: STEADY | PT: ~10b | SC: -3/3 (past est.)"};
-string P2Line(int i){return lanes[i];}
-string Combined(string name){string out;for(int i=0;labels.count(name+"_"+to_string(i));i++)out+=labels[name+"_"+to_string(i)].text;return out;}
-string Wrapped(string name){string out;for(int i=0;labels.count(name+"_r"+to_string(i)+"_0");i++)out+=Combined(name+"_r"+to_string(i));return out;}
+string lanes[3]={"M5 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: ~8b | SC: -3/3 (33%L)","M15 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: 0b+ | SC: -3/3 (50%L)","M30 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~8b | SC: -3/3 (50%L)"};
+string plans[3]={"M5 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12306 (-1.10 USD) | TP: 1.12135 (+0.61 USD)","M15 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12367 (-1.71 USD) | TP: 1.11999 (+1.97 USD)","M30 | Signal: SELL | Volume: OK | MARKET Entry: 1.12194 | Lot: 0.01 | SL: 1.12336 (-1.42 USD) | TP: 1.12136 (+0.58 USD)"};
+string autos[3]={"M5 | Auto: ON | SELL OPEN | Entry 1.12204 | Lot 0.01 | SL 1.12306 (-1.02 USD) | TP 1.12148 (+0.56 USD)","M15 | Auto: ON | SELL OPEN | Entry 1.12196 | Lot 0.01 | SL -- (-- USD) | TP 1.11999 (+1.97 USD) | Position NO SL (unprotected)","M30 | Auto: ON | SELL OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)"};
+string diaries[3]={"M5 | Trades Today S 2 W 0 L 0 BE 0 | All S 2 W 0 L 0 BE 0","M15 | Trades Today S 2 W 0 L 0 BE 0 | All S 2 W 0 L 0 BE 0","M30 | Trades Today S 3 W 0 L 0 BE 0 | All S 3 W 0 L 0 BE 0"};
+string tips[3]={"M5 broker tooltip","M15 broker tooltip","M30 broker tooltip"}; string timer="Timer: OFF";
+string P2Line(int i){return lanes[i];} string P3PlanLine(int i){return plans[i];} string P4Line(int i){return autos[i];} string P4Tooltip(int i){return tips[i];}
+string P5Summary(int i,datetime){return diaries[i];} string P5Detail(int i){return "M"+to_string(i)+" | Pending 1 | Open 1 | Review 0 | Unfilled 2 | Last: SELL OPEN | Net: -- | CSV unavailable";}
+string P4ScheduleText(){return timer;}
+string Label(string name){string s;for(int j=0;objects.count("MT_"+name+"_"+to_string(j));j++)s+=objects["MT_"+name+"_"+to_string(j)].text;return s;}
+string Wrapped(string name){string s;for(int j=0;objects.count("MT_"+name+to_string(j)+"_0");j++)s+=Label(name+to_string(j));return s;}
+string AutoText(int lane){string s;for(int j=0;j<g_uiAutoParts[lane];j++){if(j)s+=" ";s+=Label("autoText"+to_string(lane)+"_"+to_string(j));}return s;}
+string NoSpaces(string s){s.erase(remove(s.begin(),s.end(),' '),s.end());return s;}
 '''
-functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','HeaderOnOff','HeaderTrendChoice','HeaderSettings','HeaderTPPercent','HeaderTrendSettings','PanelChunk','PanelRows','PanelWidth','PanelWrapped','PanelField','PanelReadingsValid','PanelValueColor','PanelPlanColor','PanelAutoColor','PanelStatsSplit','PanelPart','PanelPartCount','PanelTail','PanelKey','PanelSettingValue','PanelWord','PanelCountsValid','PanelBadgeColor','PanelPlanValid','PanelSignalText','PanelPlanFieldColor','PanelPlanCellRows','PanelPlanCellWidth','PanelPlanCell','PanelAutoValid','UpdatePanel'])
+# AutoText references module globals and is appended after the module.
+start=stubs.index('string AutoText('); auto_helper=stubs[start:];stubs=stubs[:start]
 main = r'''
-int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAIL "<<n<<"\n";failures++;}};
- UpdatePanel(); int openW=boxW;
- check(Combined("title")=="MT V1.00" && Combined("symbol")==g_symbol && Combined("type")==g_type && Combined("state")=="OPEN" && Combined("clock").find("2026.11.02")!=string::npos,"market header has live values");
- check(Combined("bid").find("Bid:")==0 && Combined("ask").find("Ask:")==0,"separate live bid/ask");
- check(rects.count("brandBox") && rects.count("typeBox") && rects.count("stateBox") && rects.count("bidBox") && rects.count("askBox"),"header badges");
- check(Combined("settingsTitle")=="SETTINGS" && rects.count("settingsBox"),"settings section");
- check(Combined("setKey0")=="Auto Trading" && Combined("setVal0")=="OFF" && Combined("setVal4")=="ON","settings values shown");
- check(Combined("setKey1")=="Allow Against Trend" && Combined("setVal1")=="M5 ON M15 ON M30 ON","three against-trend inputs shown");
- check(Combined("setKey5")=="Trend to Follow" && Combined("setVal5").find("M15 AUTO")!=string::npos && Combined("setVal7")=="M5 85% M15 85% M30 85%" && Combined("setVal8")=="OFF","trend, TP and timer settings shown");
- check(tooltips["setKey0_0"].find("without a broker stop loss")!=string::npos && tooltips["setVal7_0"].find("INVALID uses original")!=string::npos,"input tooltips preserved");
- check(Combined("readingTitle")=="MARKET READINGS" && Combined("planTitle")=="TRADING PLANS" && Combined("autoTitle")=="AUTO EXECUTION" && Combined("diaryTitle")=="TRADE STATISTICS","section titles");
- check(rects.count("readingsBox") && rects.count("planBox0") && rects.count("planBox1") && rects.count("planBox2") && rects.count("autoRow0") && rects.count("autoRow1") && rects.count("autoRow2") && rects.count("diaryBox"),"distinct cards and auto rows");
- check(Combined("col0")=="TF" && Combined("col6")=="SC" && Combined("cell0_1")=="FLAT" && Combined("cell1_3")=="DOWN" && Combined("cell2_3")=="CONFLICT" && Combined("cell2_6")=="-3/3 (past est.)","readings matrix preserves values");
- check(rects.count("readBadge0_1") && rects.count("readBadge2_3"),"reading badges");
- check(rects["planBox0"].w==rects["planBox1"].w && rects["planBox1"].w==rects["planBox2"].w && rects["planBox0"].x+rects["planBox0"].w<=rects["planBox1"].x,"equal spaced plan cards");
+int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL "<<msg<<"\n";fails++;}};
+ BuildPanel(); Obj bg=objects["MT_bg"];
+ check(bg.x+bg.w<=chartWidth && bg.y+bg.h<=750,"screenshot-sized chart fits normal active three-lane panel");
+ check(Label("symbol")=="EURUSDm" && Label("stateText")=="OPEN" && Label("bidText")=="Bid: 1.12194" && Label("askText")=="Ask: 1.12202","live market header");
+ check(Label("settingKey1")=="Allow Against Trend" && Label("settingValue1")=="M5 ON" && Label("settingValue2")=="M15 ON" && Label("settingValue3")=="M30 ON","separate timeframe setting chips");
+ check(Label("settingValue7")=="M5 AUTO" && Label("settingValue8")=="M15 AUTO" && Label("settingValue9")=="M30 AUTO" && Label("settingValue11")=="M5 85%" && Label("settingValue13")=="M30 85%","trend and TP chips");
+ check(Label("settingValue6")=="OFF" && Label("settingValue14")=="OFF","SL placement and timer inputs");
+ check(Label("reading0_1")=="DOWN" && Label("reading2_1")=="FLAT" && Label("reading2_3")=="MIXED" && Label("reading2_6")=="-3/3 (50%L)","reading matrix");
  for(int i=0;i<3;i++){
-  string n=to_string(i);check(Combined("planTF"+n)==PanelPart(plans[i],0) && Combined("planSignal"+n)==PanelSignalText(plans[i]),"plan identity and signal");
-  for(int j=2;j<PanelPartCount(plans[i]);j++){
-    string field=PanelPart(plans[i],j),name="plan"+n+"f"+to_string(j);
-    check(Wrapped(name)==(field.find(": ")!=string::npos?PanelSettingValue(field):field),"every plan field value preserved");
-    check(Wrapped(name+"Key")==(field.find(": ")!=string::npos?PanelKey(field):""),"every plan field label preserved");
-    check(tooltips[name+"_r0_0"].find("Frozen plan")!=string::npos,"plan field tooltip preserved");
-  }
-  check(Combined("autoTF"+n)==PanelPart(autos[i],0) && Combined("autoKey"+n)=="Auto" && Combined("autoMode"+n)==PanelSettingValue(PanelPart(autos[i],1)) && Wrapped("auto"+n)==PanelTail(autos[i],2),"auto lane identity, mode and full tail");
-  check(tooltips["autoTF"+n+"_0"]==tips[i] && tooltips["autoMode"+n+"_0"]==tips[i],"own lane auto tooltip");
+  string n=to_string(i);check(Label("cardSignalText"+n)=="SELL" && Label("cardStyleText"+n)=="MARKET" && Label("cardVolumeText"+n)=="VOL OK","plan header with signal, style, volume");
+  check(Label("planHeading"+n+"_0")=="Entry" && Label("planHeading"+n+"_1")=="Lot" && Label("planHeading"+n+"_2")=="SL" && Label("planHeading"+n+"_3")=="TP","four plan field columns");
+  check(objects["MT_planHeading"+n+"_0_0"].y==objects["MT_planHeading"+n+"_3_0"].y,"plan fields aligned horizontally");
+  check(Label("autoTFText"+n)==UIPart(autos[i],0) && Label("autoModeText"+n)=="ON" && Label("autoTradeText"+n)=="SELL" && Label("autoStyleText"+n)=="OPEN","auto direction and broker status badges");
+  string text=AutoText(i);
+  for(int j=3;j<UIPartCount(autos[i]);j++) check(text.find(UIPart(autos[i],j))!=string::npos,"auto field and note retained");
+  for(int j=0;j<g_uiAutoParts[i];j++)check(objects["MT_autoText"+n+"_"+to_string(j)+"_0"].tip==tips[i],"auto tooltip on every field");
  }
- check(Combined("todayHeader")=="TODAY" && Combined("allHeader")=="ALL" && Combined("statLabelT0")=="S" && Combined("statLabelT3")=="BE","grouped statistics headings");
- check(Combined("statsTF0")=="M5" && Combined("statsT0_0")=="6" && Combined("statsA0_0")=="6" && Combined("statsT1_0")=="1" && Combined("statsT2_0")=="0","individual today/all counts");
- check(rects["autoBox"].x+rects["autoBox"].w<=rects["diaryBox"].x && rects["diaryBox"].x+rects["diaryBox"].w==PANEL_X+boxW-10,"bottom sections fill width");
- for(auto &pair:labels){auto v=pair.second;check(v.x>=PANEL_X && v.x+(int)v.text.size()*v.size<=PANEL_X+boxW && v.y>=PANEL_Y && v.y+v.size+4<=PANEL_Y+boxH,"all initial text within panel");}
- int rowH=labels["cell1_0_0"].y-labels["cell0_0_0"].y;
- check(labels["setKey5_0"].y-labels["setKey0_0"].y==rowH,"two structured settings rows");
- check(!PanelReadingsValid(lanes[0]+" | extra: yes","M5") && !PanelCountsValid("S 1 W 0 L 0 BE 0 | extra"),"unexpected reading and diary formats fall back");
- // Stress changing card lengths and unbroken broker messages; every fragment stays in its own box.
- string savedPlan=plans[2],savedAuto=autos[1],savedDiary=diaries[1];
- auto inBox=[&](const string &prefix,const string &box){
-  Rect r=rects[box];for(auto &pair:labels) if(pair.first.find(prefix)==0){auto v=pair.second;
-   if(v.x<r.x || v.x+(int)v.text.size()*v.size>r.x+r.w || v.y<r.y || v.y+v.size+4>r.y+r.h)return false;}
-  return true;
- };
- for(int k=0;k<24;k++){
-  plans[2]="M30 | Signal: BUY | Entry: "+string(k*11,'P')+" | "+string(k,'K')+"long unusual field label: "+string(k*3,'V')+" | Bars: Last/unknown proxy";
-  autos[1]="M15 | Auto: OFF | REVIEW | "+string((23-k)*13,'E')+" | NO SL (unprotected)";
-  diaries[1]="M15 | Trade diary: unavailable "+string(k*7,'D');
-  UpdatePanel();
-  check(Wrapped("plan2f2")==PanelSettingValue(PanelPart(plans[2],2)) && Wrapped("plan2f3Key")==PanelKey(PanelPart(plans[2],3)) && Wrapped("plan2f3")==PanelSettingValue(PanelPart(plans[2],3)),"long plan field labels and values retained");
-  check(Wrapped("auto1")==PanelTail(autos[1],2) && Wrapped("statsFallback1")==diaries[1],"long broker and unavailable-diary text retained");
-  check(inBox("plan2f","planBox2") && inBox("auto1_r","autoBox") && inBox("statsFallback1_r","diaryBox"),"long fields stay within their section boxes");
+ check(Label("planValue0_0")=="1.12196" && Label("planValue0_1")=="0.01" && Label("planValue0_2")=="1.12306" && Wrapped("planMoney0_2_")=="-1.10 USD" && Label("planValue0_3")=="1.12135" && Wrapped("planMoney0_3_")=="+0.61 USD","full plan levels and amounts, with separate SL and TP");
+ check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL (unprotected)")!=string::npos,"broker no-SL warning retained");
+ check(Label("settingValue6")=="OFF" && AutoText(0).find("SL 1.12306 (-1.02 USD)")!=string::npos,"broker-confirmed SL remains visible when placement is off");
+ for(int lane=0;lane<3;lane++) for(int col=0;col<4;col++){
+  string n=to_string(lane)+"_"+to_string(col);Obj card=objects["MT_cardCell"+n];
+  for(string prefix:{"planHeading","planValue"}){Obj text=objects["MT_"+prefix+n+"_0"];check(text.x>=card.x && text.x+int(text.text.size()*text.size*0.8)<=card.x+card.w && text.y>=card.y && text.y+text.size+4<=card.y+card.h,"aligned plan labels stay inside their columns");}
  }
- plans[2]="M30 | Signal: BUY |  | Extra: keep this";UpdatePanel();
- check(Wrapped("plan2f3")=="keep this","nonempty field after an empty field is visible");
- plans[2]="M30 | Signal: NONE";UpdatePanel();
- check(Wrapped("plan2f3").empty() && Wrapped("plan2f3Key").empty(),"shorter plan clears old fields even after a gap");
- plans[2]=savedPlan;autos[1]=savedAuto;diaries[1]=savedDiary;UpdatePanel();
- InpAutoTrading=true;InpMinimumLot=true;InpBypassRisk=true;InpPlaceStopLoss=false;against[0]=false;choices[1]=P3_FOLLOW_GT;tpPercent[1]=101;timerText="Timer: PAUSED 08:00-17:00 | Opens in 2h00m (PC/VPS local)";UpdatePanel();
- check(Combined("setVal0")=="ON" && Combined("setVal4")=="OFF" && Combined("setVal1").find("M5 OFF")!=string::npos,"changed settings visible");
- check(Combined("setVal5").find("M15 GT")!=string::npos && Combined("setVal7").find("M15 INVALID")!=string::npos && Combined("setVal8").find("Opens in 2h00m")!=string::npos,"invalid percentage and full timer preserved");
- InpAutoTrading=false;InpMinimumLot=false;InpBypassRisk=false;InpPlaceStopLoss=true;against[0]=true;choices[1]=P3_AUTO;tpPercent[1]=85;timerText="Timer: OFF";
- tips[1]="updated reason";autos[1]="M15 | Auto: OFF | REVIEW | "+string(180,'z');UpdatePanel();
- check(Combined("autoMode1")=="OFF" && Wrapped("auto1")==PanelTail(autos[1],2) && tooltips["auto1_r0_0"]==tips[1] && PanelAutoColor(autos[1])==clrOrange,"review and long reason stay in correct lane");
- int tallH=boxH;autos[1]="M15 | Auto: OFF";UpdatePanel();check(Wrapped("auto1").empty() && !labels.count("auto1_r1_0") && boxH<tallH,"shorter status removes old fragments");
- InpPlaceStopLoss=false;
- autos[1]="M15 | Auto: ON | SELL LIMIT | Entry 4130.819 (distance 1.100) | Lot 0.01 | SL 4131.649 (-0.83 USD) | TP 4126.426 (+4.39 USD)";
- autos[2]="M30 | Auto: ON | BUY OPEN | Entry 4127.200 | Lot 0.01 | SL -- (-- USD) | TP 4132.000 (+4.80 USD) | NO SL (unprotected)";
- UpdatePanel();check(Wrapped("auto1")==PanelTail(autos[1],2) && Wrapped("auto1").find("SL 4131.649")!=string::npos,"existing broker stop retained even when placement off");
- check(Wrapped("auto2")==PanelTail(autos[2],2) && PanelAutoColor(autos[2])==clrOrange && Combined("autoMode2")=="ON","unprotected order is highlighted without changing mode");
- for(int j=0;labels.count("auto2_r"+to_string(j)+"_0");j++)check(tooltips["auto2_r"+to_string(j)+"_0"]==tips[2],"tooltip covers every wrapped auto fragment");
- plans[0]="M5 | Signal: BUY | Volume: LOW | Entry: -- | Plan data unavailable | Bars: Last/unknown proxy";
- InpShowDetails=true;UpdatePanel();check(Wrapped("history0")==P5Detail(0),"optional complete diary details");
- for(int j=2;j<PanelPartCount(plans[0]);j++){
-  string field=PanelPart(plans[0],j),name="plan0f"+to_string(j);
-  check(Wrapped(name)==(field.find(": ")!=string::npos?PanelSettingValue(field):field),"volume and unavailable plan values retained");
-  check(Wrapped(name+"Key")==PanelKey(field) || field.find(": ")==string::npos,"volume and unavailable plan labels retained");
- }
- InpShowDetails=false;plans[0]="M5 | Signal: NONE";UpdatePanel();check(Wrapped("history0").empty() && Wrapped("plan0f2").empty() && Wrapped("plan0f4").empty() && Wrapped("plan0f2Key").empty(),"details and stale plan fields cleared");
- diaries[1]="M15 | Trade diary: unavailable";UpdatePanel();check(Wrapped("statsFallback1")==diaries[1] && Combined("statsT1_0").empty(),"unavailable diary never becomes zero");
- diaries[1]="M15 | Trades Today S 1 W 0 L 0 BE 0 | All S 1 W 0 L 0 BE 0";
- lanes[0]="M5 | unexpected "+string(180,'x');UpdatePanel();check(Wrapped("readingFallback0")==lanes[0] && Combined("cell0_0").empty() && labels["cell1_0_0"].y>labels["readingFallback0_r2_0"].y,"long unexpected reading retained and does not overlap next lane");
- lanes[0]="M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | SC: +3/3 (50%L)";
- plans[0]="future plan "+string(90,'x');autos[0]="unexpected auto "+string(100,'y');UpdatePanel();
- check(Wrapped("planFallback0")==plans[0] && Wrapped("auto0")==autos[0] && Combined("planTF0").empty() && Combined("autoTF0").empty(),"unknown plan and broker formats fall back without loss");
- plans[0]="M5 | Signal: NONE";autos[0]="M5 | Auto: OFF";
- g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(100,'x');UpdatePanel();
- check(Combined("state")=="close" && Combined("clock").find("Open at")!=string::npos && Wrapped("detail")==g_marketDetail,"closed market detail and opening retained");
- check(labels["settingsTitle_0"].y>labels["detail_r1_0"].y,"long closure detail does not overlap settings");
- _Period=60;UpdatePanel();check(Combined("unsupportedNotice")=="Incompatible chart. Switch to M5/M15/M30." && Combined("unsupportedTitle").find("H1")!=string::npos,"unsupported notice");
- check(!rects.count("settingsBox") && !rects.count("planBox0") && !rects.count("diaryBox") && Combined("cell0_0").empty(),"unsupported clears supported objects");
- _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();check(Combined("cell0_1")=="FLAT" && Combined("planTF0")=="M5" && Combined("unsupportedNotice").empty(),"supported layout restores");
- g_symbol=string(150,'X');UpdatePanel();check(Combined("symbol")==g_symbol && boxW>openW,"long symbol expands header without truncation");
- measureFailure=true;UpdatePanel();check(Combined("planTF1")=="M15" && labels["autoTF0_0"].y+20<PANEL_Y+boxH,"font fallback retains content and bounds");
- if(failures)return 1;cout<<"Structured MT panel regression checks passed.\n";return 0;}
-'''
 
+ check(Label("todayHeader")=="TODAY" && Label("allHeader")=="ALL" && Label("todayVal0_0")=="2" && Label("allVal2_0")=="3" && Label("allCol3")=="BE","trade statistics matrix");
+ check(objects["MT_card0"].y+objects["MT_card0"].h<=objects["MT_autoTitle_0"].y && objects["MT_autoRow2"].y+objects["MT_autoRow2"].h<=bg.y+bg.h,"compact plan and auto sections fit panel");
+ int rectOrder=objects["MT_autoStyle2"].order;check(rectOrder<objects["MT_brandText_0"].order,"all backgrounds created before labels");
+ for(auto &pair:objects){auto o=pair.second;if(o.type==OBJ_LABEL)check(o.x>=bg.x && o.x+int(o.text.size()*o.size*0.8)<=bg.x+bg.w && o.y>=bg.y && o.y+o.size+4<=bg.y+bg.h,"all labels fit background");}
+ string savedAuto=autos[0];autos[0]+=" | tallglyph";UpdatePanel();
+ check(objects["MT_reading1_0_0"].y-objects["MT_reading0_0_0"].y>=46,"row height accounts for unusually tall displayed text");
+ autos[0]=savedAuto;UpdatePanel();
+ int clears=clearCount;UpdatePanel();check(clearCount==clears,"normal refresh reuses chart objects");
+ autos[0]="M5 | Auto: ON | no active order | No qualifying signal";
+ autos[2]="M30 | Auto: ON | SELL LIMIT | Entry 1.12239 (distance 0.00100) | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)";UpdatePanel();
+ check(AutoText(0).find("no active order")!=string::npos && AutoText(0).find("No qualifying signal")!=string::npos,"idle broker row and real blocker displayed");
+ check(Label("autoTradeText2")=="SELL" && Label("autoStyleText2")=="LIMIT" && NoSpaces(AutoText(2)).find(NoSpaces("Entry 1.12239 (distance 0.00100)"))!=string::npos,"broker limit entry and distance retained");
+ plans[1]="M15 | Signal: NONE";autos[1]="M15 | Auto: OFF";UpdatePanel();
+ check(Label("cardSignalText1")=="NONE" && Label("cardStyleText1").empty() && Label("planValue1_2").empty() && Label("autoModeText1")=="OFF" && Label("autoTradeText1").empty() && AutoText(1).empty(),"stale plan and auto fields cleared");
+ plans[1]="M15 | Signal: BUY | Entry: -- | Plan data unavailable | Bars: Last/unknown proxy";UpdatePanel();
+ check(Label("planValue1_0")=="--" && Wrapped("planNote1_").find("Plan data unavailable")!=string::npos && Wrapped("planNote1_").find("Bars: Last/unknown proxy")!=string::npos,"plan unavailable and proxy warnings visible");
+ plans[1]="M15 | Signal: SELL | LIMIT Entry: 1.20000 | Lot: -- | SL: 1.20050 | TP: 1.19900 | Amounts unavailable";UpdatePanel();
+ check(Label("cardStyleText1")=="LIMIT" && Wrapped("planNote1_")=="Amounts unavailable","limit style and unavailable amounts");
+ autos[1]="M15 | Auto: OFF | REVIEW | "+string(240,'z')+" | NO SL (unprotected)";tips[1]="updated review tooltip";UpdatePanel();
+ check(Label("autoModeText1")=="OFF" && AutoText(1).find("REVIEW")!=string::npos && AutoText(1).find("NO SL (unprotected)")!=string::npos && NoSpaces(AutoText(1)).find(string(240,'z'))!=string::npos,"long REVIEW and OFF remain visible");
+ int tall=objects["MT_bg"].h;autos[1]="M15 | Auto: OFF";UpdatePanel();check(AutoText(1).empty() && objects["MT_bg"].h<tall,"long auto fields cleared and height shrinks");
+ timer="Timer: PAUSED 08:00-17:00 | Opens in 2h00m (PC/VPS local)";UpdatePanel();
+ check(Label("settingValue14")=="PAUSED" && Wrapped("timerDetail")==timer,"complete timer and countdown visible");
+ timer="Timer: INVALID | New entries blocked";UpdatePanel();check(Label("settingValue14")=="INVALID" && Wrapped("timerDetail")==timer,"invalid timer visible");timer="Timer: OFF";
+ InpShowDetails=true;UpdatePanel();check(Wrapped("diaryDetail1_")==P5Detail(1),"optional diary details and CSV warning retained");InpShowDetails=false;UpdatePanel();check(Wrapped("diaryDetail1_").empty(),"hidden diary details removed");
+ diaries[1]="M15 | Trade diary: clock unavailable";UpdatePanel();check(Wrapped("diaryFallback1_")==diaries[1] && Label("todayVal1_0").empty(),"unavailable diary not treated as zero");
+ lanes[0]="M5 | unexpected "+string(180,'x');plans[0]="unexpected plan "+string(120,'p');autos[0]="unexpected order "+string(100,'o');UpdatePanel();
+ check(Wrapped("readFallback0_")==lanes[0] && Wrapped("planNote0_")==plans[0] && AutoText(0).find("unexpected order")!=string::npos,"unexpected formats preserved");
+ g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');UpdatePanel();
+ check(Label("stateText")=="close" && Label("clock").find("Open at")!=string::npos && Wrapped("marketDetail")==g_marketDetail,"full closed-market detail");
+ _Period=60;UpdatePanel();check(Label("unsupportedNotice")=="Incompatible chart. Switch to M5/M15/M30." && !objects.count("MT_card0") && !objects.count("MT_settings"),"unsupported cleanup and notice");
+ _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";lanes[0]="M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT";plans[0]="M5 | Signal: WAIT";autos[0]="M5 | Auto: OFF | Signal WAIT";UpdatePanel();
+ check(Label("reading0_1")=="WAIT" && Label("cardSignalText0")=="WAIT" && AutoText(0).find("Signal WAIT")!=string::npos && Label("unsupportedNotice").empty(),"WAIT and supported restore");
+ g_symbol=string(150,'X');UpdatePanel();check(Label("symbol")==g_symbol && objects["MT_bg"].w>bg.w,"long symbol segments and dynamic width");
+ measureFailure=true;UpdatePanel();check(Label("cardSignalText0")=="WAIT" && objects["MT_bg"].h>0,"font measurement fallback");
+ objects["OTHER_object"].type=OBJ_LABEL;PanelRemove();check(objects.count("OTHER_object") && !objects.count("MT_bg"),"cleanup limited to MT prefix");
+ if(fails)return 1;cout<<"Separate panel layout and content regression checks passed.\n";return 0;}
+'''
 with tempfile.TemporaryDirectory() as tmp:
- p=pathlib.Path(tmp);(p/'test.cpp').write_text(stubs+functions+main)
- subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-misleading-indentation',str(p/'test.cpp'),'-o',str(p/'test')],check=True)
- subprocess.run([str(p/'test')],check=True)
+    p=pathlib.Path(tmp); (p/'test.cpp').write_text(stubs+panel_cpp+auto_helper+main)
+    subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-misleading-indentation',str(p/'test.cpp'),'-o',str(p/'test')],check=True)
+    subprocess.run([str(p/'test')],check=True)
