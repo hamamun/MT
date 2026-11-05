@@ -67,7 +67,7 @@ These corrections override the fixed-size and closed-state descriptions above:
 - On charts other than M5/M15/M30, show SimpleEA's `Incompatible chart. Switch to M5/M15/M30.` notice.
 - Use broker-stamped quote time for the chart's symbol when available and describe extrapolated time honestly; MT5 cannot guarantee a perfectly synchronized clock between ticks.
 
-**Phase 1 status: Done; header content later updated.** On supported charts, preserve three header rows followed by the Phase 2 timeframe rows. Row 1 contains the market header; row 2 shows current input settings and, when needed, closed/abnormal details; row 3 shows trend choices, diary details and timer. The current input display supersedes the earlier blank/reserved rows.
+**Phase 1 status: Done; the original header layout is superseded by the later redesigned market header and settings box.** Input states and any closed/abnormal details remain visible above the Phase 2 readings.
 
 
 ## Phase 2 — final specification
@@ -85,7 +85,7 @@ Timeframe priorities for future use: M5 gives current trend priority, M15 gives 
 
 Use standard internal defaults without user inputs, adapting to the symbol's own recent movement where the chosen mechanisms support it. A future diary may record observations and inform bounded automatic configuration; it is not required for Phase 2 trend readings and must not be treated as already validated or implemented.
 
-### Compact display layout (final)
+### Compact display layout (earlier specification; superseded by redesign)
 
 On supported charts the three header rows remain above the M5, M15 and M30 rows. Size the panel to contain all content, and split long text into short chart labels so the score and market details are not truncated. Unsupported charts retain their two-line notice.
 
@@ -243,7 +243,7 @@ A pre-send context record, durable account/server/symbol-scoped binary snapshot 
 
 MT implements SimpleEA's daily placement window, without the one-time pause. `Use daily trading timer` defaults off; the local PC/VPS start and stop default to 08:00 and 17:00. Start is inclusive, stop exclusive, and overnight windows are supported. Disabling the timer is the 24-hour choice. Invalid or equal times and an unavailable local clock block new entries; MT remains running so it can request cancellation of owned pending orders and continue broker reconciliation. A failed cancellation can race a fill; broker confirmation remains required. The timer does not close or modify open positions. Reopening or attaching/reinitializing during an open enabled window requires the next own-timeframe bar close before a new entry. Disabling the schedule preserves the prior MT behavior.
 
-The dark slate panel groups M5/M15/M30 readings in a table, frozen plans in separate cards, and broker auto-execution and Today/All trade statistics in separate sections. Long messages wrap and unavailable states remain visible; optional diary details remain available. The third header row reports trend choices, diary-details and TP percentage inputs and timer OFF/ON/PAUSED with countdown to window opening, or INVALID/CLOCK UNAVAILABLE. Row 2 shows the Auto Trading, per-lane Allow Against Trend, Minimum Lot, Bypass Risk and SL Placement inputs alongside any market detail. These are settings, not a claim of trade permission; Allow Against Trend is not a per-lane trading switch. Per-lane auto rows preserve ON/OFF and show TIMER PAUSED as well when applicable. PC/VPS clock changes affect the schedule; Strategy Tester uses simulated local time. No pause duration input or one-shot persistence is added. Native compilation and demo-broker testing remain required.
+The dark slate panel groups M5/M15/M30 readings in a table, frozen plans in separate cards, and broker auto-execution and Today/All trade statistics in separate sections. Long messages wrap and unavailable states remain visible; optional diary details remain available. A dedicated settings box reports trend choices, diary-details and TP percentage inputs and timer OFF/ON/PAUSED with countdown to window opening, or INVALID/CLOCK UNAVAILABLE, as well as Auto Trading, per-lane Allow Against Trend, Minimum Lot, Bypass Risk and SL Placement. Market detail appears above the settings when necessary. These are settings, not a claim of trade permission; Allow Against Trend is not a per-lane trading switch. Per-lane auto rows preserve ON/OFF and show TIMER PAUSED as well when applicable. PC/VPS clock changes affect the schedule; Strategy Tester uses simulated local time. No pause duration input or one-shot persistence is added. Native compilation and demo-broker testing remain required.
 
 ## Phase 4 — broker-executed auto trading
 
