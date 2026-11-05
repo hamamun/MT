@@ -77,8 +77,11 @@ int main(){int f=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n
  plans[0]={1,true,false,99.9,99,101,0.05,1000};g_p3[0].score=2;
  P4Process(true);ck(sends==1 && g_p5.size()==1 && g_p5[0].order>0 && g_p5[0].accepted==0,"pre-send snapshot and returned order");
  uptime+=6000;P4Process(false);ck(g_p5[0].state==1 && g_p5[0].accepted==1,"live order reconciled through execution loop");
- P5Close();plans[1]={1,true,false,99.9,99,101,0.05,1000};g_p3[1].score=2;P4Process(true);
- ck(sends==2 && orders.size()==2,"disabled diary does not block execution");
+ InpPlaceStopLoss=false;plans[1]={1,true,false,99.9,99,101,0.05,1000};g_p3[1].score=2;P4Process(true);
+ uptime+=6000;P4Process(false);
+ ck(sends==2 && orders.size()==2 && g_p5.size()==2 && g_p5[1].state==1 && g_p5[1].planStop==99 && g_p5[1].brokerStop==0,"diary distinguishes planned SL from broker no-SL pending");
+ P5Close();plans[2]={1,true,false,99.9,99,101,0.05,1000};g_p3[2].score=2;P4Process(true);
+ ck(sends==3 && orders.size()==3,"disabled diary does not block execution");
  P4Close();if(!f)cout<<"Trade diary and execution integration stub checks passed\n";return f?1:0;}
 '''
 with tempfile.TemporaryDirectory() as t:

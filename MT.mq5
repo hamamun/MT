@@ -642,12 +642,20 @@ string HeaderSettings()
 {
    return("Auto Trading: "+HeaderOnOff(InpAutoTrading)+
           " | Allow Against Trend: M5 "+HeaderOnOff(P3Against(0))+" M15 "+HeaderOnOff(P3Against(1))+" M30 "+HeaderOnOff(P3Against(2))+
-          " | Minimum Lot: "+HeaderOnOff(InpMinimumLot)+" | Bypass Risk: "+HeaderOnOff(InpBypassRisk));
+          " | Minimum Lot: "+HeaderOnOff(InpMinimumLot)+" | Bypass Risk: "+HeaderOnOff(InpBypassRisk)+
+          " | SL Placement: "+HeaderOnOff(InpPlaceStopLoss));
+}
+string HeaderTPPercent(int lane)
+{
+   int value=P3TPPercentInput(lane);
+   return(value>=1 && value<=100 ? IntegerToString(value)+"%" : "INVALID");
 }
 string HeaderTrendSettings()
 {
    return("Trend to Follow: M5 "+HeaderTrendChoice(P3Choice(0))+" M15 "+HeaderTrendChoice(P3Choice(1))+
-          " M30 "+HeaderTrendChoice(P3Choice(2))+" | Diary Details: "+HeaderOnOff(InpShowDetails)+" | ");
+          " M30 "+HeaderTrendChoice(P3Choice(2))+" | Diary Details: "+HeaderOnOff(InpShowDetails)+
+          " | TP %: M5 "+HeaderTPPercent(0)+
+          " M15 "+HeaderTPPercent(1)+" M30 "+HeaderTPPercent(2)+" | ");
 }
 
 void UpdatePanel()
@@ -762,9 +770,9 @@ void UpdatePanel()
                 supported ? clrSilver : clrTomato,
                 supported ? PANEL_FONT_SIZE : PANEL_FONT_SIZE + 1);
    MakeTextLine("settings",PANEL_X + pad+detailW,y+rowH,settingsLine,clrSilver,PANEL_FONT_SIZE,
-                supported?"Input settings only. Allow Against Trend controls alignment, not whether a timeframe is enabled. Other trading and broker rules still apply.":"");
+                supported?"Input settings only. Allow Against Trend controls alignment, not whether a timeframe is enabled. SL Placement OFF sends new orders without a broker stop loss. Other trading and broker rules still apply.":"");
    MakeTextLine("trendSettings",PANEL_X + pad,y + 2*rowH,trendLine,clrSilver,PANEL_FONT_SIZE,
-                supported?"Trend to Follow is the selected input: AUTO, CT, GT or ST; Diary Details controls display only.":"");
+                supported?"Trend to Follow is the selected input. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane. Diary Details controls display only.":"");
    MakeTextLine("timer",PANEL_X + pad+trendW,y + 2*rowH,timerLine,clrSilver,PANEL_FONT_SIZE,
                 supported?"The daily timer uses the PC/VPS local clock and gates new entries, not open positions.":"");
    for(int i = 0; i < 3; i++)

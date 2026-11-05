@@ -154,11 +154,12 @@ bool P3GeometryAt(const MqlRates &rates[], int last, int lane, int dir, bool mar
    return(true);
 }
 
-// Caller supplies a positive sample count. The legacy upper median is kept
-// exactly; wider mode uses the nearest-rank 70th percentile.
-int P3TargetIndex(int samples, bool widerTarget)
+// Caller supplies a positive sample count. Zero or an invalid percentage
+// preserves the legacy upper median; valid percentages use nearest-rank.
+int P3TargetIndex(int samples, int percentile)
 {
-   return(widerTarget ? (int)MathCeil(0.70 * samples) - 1 : samples / 2);
+   if(percentile < 1 || percentile > 100) return(samples / 2);
+   return((int)MathCeil((double)percentile * samples / 100.0) - 1);
 }
 
 // Replay completed matching-score analogues, using only bars available at
@@ -169,7 +170,7 @@ double P3ObservedTargetR(const MqlRates &rates[], const int &scores[], const int
                          const int &cts[], const int &statuses[], int n, int lane,
                          int score, P3_TREND_CHOICE choice, bool allowAgainst,
                          double tick, double point, double minDistance,
-                         double spreadFallback, int &samples, bool widerTarget=false)
+                         double spreadFallback, int &samples, int percentile=0)
 {
    samples = 0;
    int horizon = lane == 0 ? 4 : (lane == 1 ? 6 : 8);
@@ -217,8 +218,8 @@ double P3ObservedTargetR(const MqlRates &rates[], const int &scores[], const int
    samples = ArraySize(values);
    if(samples == 0) return( 0.0 );
    ArraySort(values);
-   // Nearest-rank 70th percentile; legacy mode preserves its upper median.
-   int index = P3TargetIndex(samples,widerTarget && lane > 0);
+   // The original mode retains the upper median, even for an even count.
+   int index = P3TargetIndex(samples,percentile);
    return(values[index]);
 }
 

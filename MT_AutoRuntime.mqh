@@ -5,6 +5,7 @@
 #include "MT_TradeDiaryRuntime.mqh"
 
 input bool InpAutoTrading=false; // Auto Trading
+input bool InpPlaceStopLoss=true; // Stop Loss Placement
 input bool InpUseAutoSchedule=false; // Use daily trading timer (PC/VPS local time)
 input string InpAutoStartTime="08:00"; // Timer start (local HH:MM)
 input string InpAutoEndTime="17:00"; // Timer stop (local HH:MM)
@@ -232,9 +233,9 @@ bool P4Load()
          (g_p4[i].cooldown==0 && g_p4[i].waitDirection!=0) ||
          (g_p4[i].cooldown!=0 && g_p4[i].waitDirection!=1 && g_p4[i].waitDirection!=-1) ||
          (g_p4[i].modifying!=0 && g_p4[i].modifying!=1) ||
-         !MathIsValidNumber(g_p4[i].modEntry) || !MathIsValidNumber(g_p4[i].modSL) ||
+         !MathIsValidNumber(g_p4[i].modEntry) || (g_p4[i].modSL!=0.0 && !P3Positive(g_p4[i].modSL)) ||
          !MathIsValidNumber(g_p4[i].modTP) ||
-         (g_p4[i].modifying!=0 && (!P3Positive(g_p4[i].modEntry) || !P3Positive(g_p4[i].modSL) || !P3Positive(g_p4[i].modTP))) ||
+         (g_p4[i].modifying!=0 && (!P3Positive(g_p4[i].modEntry) || !P3Positive(g_p4[i].modTP))) ||
          (g_p4[i].active==0 && (g_p4[i].direction!=0 || g_p4[i].cancel!=0 || order!=0 || position!=0 || g_p4[i].modifying!=0)))
       { FileClose(h); return(false); }
       // Earlier journals used 1 for same-direction-only expiry waits.
@@ -561,8 +562,8 @@ void P4Refresh(int lane)
    // Cancel it rather than modifying it or assuming the entry is unfilled.
    if(orders>0 && orderPending && ordLot<ordInitial-1e-8 && g_p4[lane].cancel==0)
    { g_p4[lane].cancel=1; changed=true; }
-   // Never knowingly leave an owned pending entry without both planned exits.
-   if(orders>0 && orderPending && (ordSL<=0.0 || ordTP<=0.0) && g_p4[lane].cancel==0)
+   // TP is always required. Missing SL is allowed only while explicitly disabled.
+   if(orders>0 && orderPending && ((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0) && g_p4[lane].cancel==0)
    { g_p4[lane].cancel=1; changed=true; }
    if(changed && !P4Persist()) { v.state=P4_UNCERTAIN; v.note="Journal unavailable"; g_p4View[lane]=v; return; }
    if(orders>0 && !orderPending)
@@ -571,16 +572,20 @@ void P4Refresh(int lane)
    {
       v.state=orders>0?P4_PARTIAL:P4_OPEN; v.direction=posDir; v.position=positionId; v.order=orderTicket;
       v.entry=posEntry; v.sl=posSL; v.tp=posTP; v.lot=posLot;
-      if(posSL<=0.0 || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
-      if(orders>0 && (ordSL<=0.0 || ordTP<=0.0))
+      if((InpPlaceStopLoss && posSL<=0.0) || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
+      else if(posSL<=0.0) v.note="Position NO SL (unprotected)";
+      if(orders>0 && ((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0))
       { if(v.note!="") v.note+="; "; v.note+="Pending SL/TP missing: REVIEW"; }
+      else if(orders>0 && ordSL<=0.0)
+      { if(v.note!="") v.note+="; "; v.note+="Pending NO SL (unprotected)"; }
       if(orders>0) { if(v.note!="") v.note+="; "; v.note+="Entry remainder pending"; }
    }
    else if(orders>0)
    {
       v.state=P4_PENDING; v.direction=orderDir; v.order=orderTicket;
       v.entry=ordEntry; v.sl=ordSL; v.tp=ordTP; v.lot=ordLot;
-      if(ordSL<=0.0 || ordTP<=0.0) v.note="SL/TP missing: REVIEW";
+      if((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0) v.note="SL/TP missing: REVIEW";
+      else if(ordSL<=0.0) v.note="NO SL (unprotected)";
    }
    else if(g_p4[lane].active!=0)
    {
@@ -648,7 +653,8 @@ bool P4ProtectionAllowed(bool market)
       !SymbolInfoInteger(_Symbol,SYMBOL_EXPIRATION_MODE,expiration) ||
       (expiration & SYMBOL_EXPIRATION_GTC)==0 ||
       !SymbolInfoInteger(_Symbol,SYMBOL_ORDER_GTC_MODE,stopLifetime)) return(false);
-   long required=(market?SYMBOL_ORDER_MARKET:SYMBOL_ORDER_LIMIT)|SYMBOL_ORDER_SL|SYMBOL_ORDER_TP;
+   long required=(market?SYMBOL_ORDER_MARKET:SYMBOL_ORDER_LIMIT)|SYMBOL_ORDER_TP;
+   if(InpPlaceStopLoss) required|=SYMBOL_ORDER_SL;
    return((orderMode & required)==required &&
           (stopLifetime==SYMBOL_ORDERS_GTC || stopLifetime==SYMBOL_ORDERS_DAILY_EXCLUDING_STOPS));
 }
@@ -732,7 +738,7 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    request.type=plan.market?(plan.signal>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL):
                             (plan.signal>0?ORDER_TYPE_BUY_LIMIT:ORDER_TYPE_SELL_LIMIT);
    request.price=plan.market?(plan.signal>0?quote.ask:quote.bid):plan.entry;
-   request.sl=plan.stop; request.tp=plan.target; request.deviation=10;
+   request.sl=InpPlaceStopLoss?plan.stop:0.0; request.tp=plan.target; request.deviation=10;
    request.type_filling=fill; request.type_time=ORDER_TIME_GTC; request.comment="MT4-"+P4TF(lane);
    g_p4Attempt[lane]=now;
    ResetLastError();
@@ -831,7 +837,21 @@ void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
    { P4ModifyCancel(lane,"Pending update target does not clear spread; cancel"); return; }
    double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
    if(!P3Positive(tick)) { P4ModifyCancel(lane,"Pending price tick unavailable: cancel"); return; }
-   if(MathAbs(v.entry-plan.entry)<=tick*1e-6 && MathAbs(v.sl-plan.stop)<=tick*1e-6 &&
+   // Never remove a stop already attached to an existing pending order when
+   // this input is switched off. New no-SL orders remain without one.
+   double desiredSL=InpPlaceStopLoss?plan.stop:v.sl;
+   if(!InpPlaceStopLoss && desiredSL>0.0 && MathAbs(v.entry-plan.entry)>tick*1e-6)
+   {
+      // Retaining an old stop at a new entry must not increase planned risk.
+      double retainedLoss=0.0, plannedLoss=0.0;
+      ENUM_ORDER_TYPE side=plan.signal>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+      if(!OrderCalcProfit(side,_Symbol,v.lot,plan.entry,desiredSL,retainedLoss) ||
+         !OrderCalcProfit(side,_Symbol,v.lot,plan.entry,plan.stop,plannedLoss) ||
+         !MathIsValidNumber(retainedLoss) || !MathIsValidNumber(plannedLoss) ||
+         retainedLoss>=0.0 || plannedLoss>=0.0 || retainedLoss<plannedLoss-1e-8)
+      { P4ModifyCancel(lane,"Pending retained SL risk: cancel"); return; }
+   }
+   if(MathAbs(v.entry-plan.entry)<=tick*1e-6 && MathAbs(v.sl-desiredSL)<=tick*1e-6 &&
       MathAbs(v.tp-plan.target)<=tick*1e-6)
    { g_p4[lane].planBar=plan.bar; P4Persist(); return; }
    if(!P4CanTrade()) return;
@@ -842,15 +862,18 @@ void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
    if(!OrderGetString(ORDER_SYMBOL,symbol) || !OrderGetInteger(ORDER_MAGIC,magic) ||
       !OrderGetInteger(ORDER_TYPE,type) || symbol!=_Symbol || magic!=P4Magic(lane) ||
       (type!=ORDER_TYPE_BUY_LIMIT && type!=ORDER_TYPE_SELL_LIMIT)) return;
-   double currentLot=0,initialLot=0; long positionId=0;
+   double currentLot=0,initialLot=0,currentSL=0; long positionId=0;
    if(!OrderGetDouble(ORDER_VOLUME_CURRENT,currentLot) || !OrderGetDouble(ORDER_VOLUME_INITIAL,initialLot) ||
+      !OrderGetDouble(ORDER_SL,currentSL) || !MathIsValidNumber(currentSL) || currentSL<0.0 ||
       !OrderGetInteger(ORDER_POSITION_ID,positionId) || !P3Positive(currentLot) ||
       !P3Positive(initialLot) || positionId<0 || positionId>0 ||
       MathAbs(currentLot-v.lot)>step*1e-7 || currentLot<initialLot-step*1e-7)
    { P4ModifyCancel(lane,"Pending volume/identity uncertain: cancel"); return; }
+   // Refresh rather than act on an SL changed since the broker snapshot.
+   if(MathAbs(currentSL-v.sl)>tick*1e-6) return;
    MqlTradeRequest request={}; MqlTradeCheckResult check={}; MqlTradeResult result={};
    request.action=TRADE_ACTION_MODIFY; request.order=v.order; request.symbol=_Symbol;
-   request.magic=(ulong)P4Magic(lane); request.price=plan.entry; request.sl=plan.stop; request.tp=plan.target;
+   request.magic=(ulong)P4Magic(lane); request.price=plan.entry; request.sl=desiredSL; request.tp=plan.target;
    request.type_time=ORDER_TIME_GTC;
    g_p4Attempt[lane]=now;
    ResetLastError();
@@ -863,7 +886,7 @@ void P4Modify(int lane, const MqlTick &q, const P3Plan &plan)
    // Write-ahead intent: on any crash or uncertain result, only matching
    // broker values confirm the update; otherwise cancellation is requested.
    g_p4[lane].modifying=1; g_p4[lane].modEntry=plan.entry;
-   g_p4[lane].modSL=plan.stop; g_p4[lane].modTP=plan.target; g_p4[lane].planBar=plan.bar;
+   g_p4[lane].modSL=desiredSL; g_p4[lane].modTP=plan.target; g_p4[lane].planBar=plan.bar;
    if(!P4Persist()) return;
    bool sent=OrderSend(request,result);
    g_p4View[lane].note=StringFormat("Modification requested (%u); awaiting broker",result.retcode);
@@ -1105,7 +1128,7 @@ string P4Explain(const string note)
    if(StringFind(note,"Order rejected:")==0) return("The broker definitely rejected the last request. The row shows its return code and terminal error; MT may retry on a later tick.");
    if(StringFind(note,"Order check:")==0) return("The broker pre-check failed. The row shows its return code and terminal error; inspect the Experts log.");
    if(StringFind(note,"Pending modification check:")>=0) return("The broker pre-check for the pending-order update failed. MT requests cancellation; the row shows the broker code and comment.");
-   if(StringFind(note,"SL/TP missing: REVIEW")>=0) return("A broker-side SL or TP is missing. MT requests cancellation of any pending remainder; it does not close or modify an open position.");
+   if(StringFind(note,"SL/TP missing: REVIEW")>=0) return("A required broker-side SL or TP is missing. MT requests cancellation of any pending remainder; it does not close or modify an open position.");
    if(note=="Pending target does not clear spread") return("The limit's target distance is not larger than the current spread.");
    if(StringFind(note,"target does not clear spread")>=0) return("The limit's target distance is not larger than the current spread. MT requests cancellation of the existing limit.");
    if(StringFind(note,"Partial fill: cancel remainder")>=0 || StringFind(note,"Entry remainder pending")>=0) return("A partially filled position has an unfilled entry remainder; MT requests its cancellation.");
@@ -1115,12 +1138,14 @@ string P4Explain(const string note)
    if(StringFind(note,"No signal: cancel pending")>=0 || StringFind(note,"Signal changed: cancel pending")>=0) return("The signal no longer matches the pending limit, so MT requests cancellation.");
    if(StringFind(note,"Market upgrade: cancel pending")>=0) return("The signal upgraded to a market plan; MT cancels the old limit and waits for a later timeframe close before replacement.");
    if(StringFind(note,"Pending age unavailable: cancel")>=0 || StringFind(note,"Pending expired: cancel")>=0) return("The pending limit is too old or its age cannot be verified. MT requests cancellation and waits for a later timeframe close after confirmation.");
+   if(StringFind(note,"Pending retained SL risk: cancel")>=0) return("Keeping the existing SL at the proposed new entry would increase planned risk, or the risk could not be verified. MT requests cancellation.");
    if(StringFind(note,"Pending lot differs from allowed")>=0) return("The existing limit's lot does not meet the new plan's allowed size. MT requests cancellation rather than changing the volume.");
    if(StringFind(note,"Pending update:")>=0) return("The new pending plan failed a live-quote, SL/TP or broker-distance check. MT requests cancellation; the row gives the specific reason.");
    if(StringFind(note,"Pending volume step unavailable")>=0 || StringFind(note,"Pending price tick unavailable")>=0 || StringFind(note,"Pending volume/identity uncertain")>=0) return("MT cannot safely verify the pending order's broker properties. It requests cancellation.");
    if(StringFind(note,"Pending plan unsuitable: cancel")>=0 || StringFind(note,"Pending modification unconfirmed: cancel")>=0) return("The pending plan or modification cannot be safely maintained. MT requests cancellation.");
    if(StringFind(note,"Cancellation pending")>=0 || StringFind(note,"Cancellation requested (")>=0) return("MT is requesting cancellation. The broker must confirm it; a fill or rejection can occur first.");
    if(StringFind(note,"Modification requested (")==0) return("MT requested new pending-order levels. Only broker-confirmed levels are authoritative; a failed or unconfirmed update is cancelled.");
+   if(StringFind(note,"NO SL (unprotected)")>=0) return("The broker confirms no stop loss on this order or position. Losses are not limited by a stop.");
    if(note=="Signal WAIT" || note=="Signal unavailable") return("The timeframe signal is unavailable; MT cannot open a new trade.");
    if(note=="No qualifying signal") return("The current timeframe has no qualifying BUY or SELL signal.");
    if(note=="Timer paused") return("The daily schedule is closed, invalid or its local clock is unavailable; no new entries are allowed.");
@@ -1137,7 +1162,7 @@ string P4Explain(const string note)
    if(note=="Plan SL/TP invalid") return("The frozen SL and TP are not on the correct sides of the entry.");
    if(note=="Broker minimum distance not met") return("The entry or protective levels do not meet the broker's minimum stop distance at the current quote.");
    if(note=="Broker stops or plan data unavailable") return("MT cannot read a valid broker stop distance or complete plan/quote levels.");
-   if(note=="SL/TP lifetime or order mode unavailable") return("The broker does not report support for the required order, SL, TP and lasting protective levels.");
+   if(note=="SL/TP lifetime or order mode unavailable") return("The broker does not report support for the order, required exits, and lasting protective levels.");
    if(note=="Filling mode unavailable") return("MT cannot determine a supported volume-filling policy for this market order.");
    if(note=="Request retry delay") return("MT waits at least five seconds between requests for this timeframe.");
    if(note=="Ready: waiting for tick") return("Current local checks pass; MT waits for a symbol tick before attempting a new order. The broker may still reject it.");
@@ -1150,6 +1175,8 @@ string P4Tooltip(int lane)
    if(InpUseAutoSchedule && !P4ScheduleOpen()) mode+="The daily timer blocks new entries. ";
    if(!g_p4Ready) return(mode+"The trading coordinator or journal is unavailable; inspect the Experts log.");
    P4View v=g_p4View[lane];
+   if((v.state==P4_PENDING || v.state==P4_OPEN || v.state==P4_PARTIAL) && v.sl<=0.0)
+      mode+="No broker-side stop loss is present. ";
    if(v.note!="") return(mode+P4Explain(v.note));
    if(v.state==P4_PENDING) return(mode+"A broker-confirmed limit is waiting. Distance is from BUY Ask or SELL Bid.");
    if(v.state==P4_OPEN || v.state==P4_PARTIAL) return(mode+"A broker-confirmed position is open. Displayed SL and TP are broker values.");
@@ -1184,6 +1211,7 @@ string P4Line(int lane)
    s+=" | Lot "+P3LotText(v.lot)+" | SL "+(v.sl>0?DoubleToString(v.sl,digits):"--")+
       " ("+P4Money(v.direction,v.lot,v.entry,v.sl)+") | TP "+(v.tp>0?DoubleToString(v.tp,digits):"--")+
       " ("+P4Money(v.direction,v.lot,v.entry,v.tp)+")";
+   if(v.sl<=0.0 && StringFind(v.note,"NO SL")<0) s+=" | NO SL (unprotected)";
    if(v.note!="") s+=" | "+v.note;
    return(s);
 }

@@ -51,7 +51,8 @@ string P4Line(int i){return autos[i];}
 string timerText="Timer: OFF"; string P4ScheduleText(){return timerText;}
 string tips[3]={"tip 0", "tip 1", "tip 2"};
 string P4Tooltip(int i){return tips[i];}
-bool InpShowDetails=false,InpAutoTrading=false,InpMinimumLot=false,InpBypassRisk=false;
+bool InpShowDetails=false,InpAutoTrading=false,InpMinimumLot=false,InpBypassRisk=false,InpPlaceStopLoss=true;
+int tpPercent[3]={85,85,85};int P3TPPercentInput(int i){return tpPercent[i];}
 enum P3_TREND_CHOICE {P3_AUTO=0,P3_FOLLOW_CT=1,P3_FOLLOW_GT=2,P3_FOLLOW_ST=3};
 P3_TREND_CHOICE choices[3]={P3_AUTO,P3_AUTO,P3_AUTO};
 bool against[3]={true,true,true};
@@ -96,20 +97,25 @@ string lanes[3]={"M5 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~9b | S
 string P2Line(int i){return lanes[i];}
 string Combined(string name){string out;for(int i=0;labels.count(name+"_"+to_string(i));i++)out+=labels[name+"_"+to_string(i)].text;return out;}
 '''
-functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','HeaderOnOff','HeaderTrendChoice','HeaderSettings','HeaderTrendSettings','UpdatePanel'])
+functions='\n'.join(function(x) for x in ['Measure','MeasureLine','MakeTextLine','ChartSupported','HeaderOnOff','HeaderTrendChoice','HeaderSettings','HeaderTPPercent','HeaderTrendSettings','UpdatePanel'])
 main = r'''
 int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAIL "<<n<<"\n";failures++;}};
  UpdatePanel(); int openW=boxW,openH=boxH;
  check(Combined("state")=="OPEN","open header");
  check(Combined("suffix").find("2026.11.02")!=string::npos,"open clock");
  check(Combined("detail").empty(),"no market detail while open");
- check(Combined("settings")=="Auto Trading: OFF | Allow Against Trend: M5 ON M15 ON M30 ON | Minimum Lot: OFF | Bypass Risk: OFF","default input settings in header");
- check(Combined("trendSettings")=="Trend to Follow: M5 AUTO M15 AUTO M30 AUTO | Diary Details: OFF | ","default trend choices and details");
+ check(Combined("settings")=="Auto Trading: OFF | Allow Against Trend: M5 ON M15 ON M30 ON | Minimum Lot: OFF | Bypass Risk: OFF | SL Placement: ON","default input settings in header");
+ check(Combined("trendSettings")=="Trend to Follow: M5 AUTO M15 AUTO M30 AUTO | Diary Details: OFF | TP %: M5 85% M15 85% M30 85% | ","default trend choices and details");
  check(tooltips["settings_0"].find("not whether a timeframe is enabled")!=string::npos,"against-trend input is not mislabeled as lane enable");
  InpAutoTrading=true;InpMinimumLot=true;InpBypassRisk=true;against[0]=false;against[2]=false;
  choices[0]=P3_FOLLOW_CT;choices[1]=P3_FOLLOW_GT;choices[2]=P3_FOLLOW_ST;UpdatePanel();
- check(Combined("settings")=="Auto Trading: ON | Allow Against Trend: M5 OFF M15 ON M30 OFF | Minimum Lot: ON | Bypass Risk: ON","changed inputs display correctly");
- check(Combined("trendSettings")=="Trend to Follow: M5 CT M15 GT M30 ST | Diary Details: OFF | ","trend inputs display choices, not invented booleans");
+ check(Combined("settings")=="Auto Trading: ON | Allow Against Trend: M5 OFF M15 ON M30 OFF | Minimum Lot: ON | Bypass Risk: ON | SL Placement: ON","changed inputs display correctly");
+ check(Combined("trendSettings")=="Trend to Follow: M5 CT M15 GT M30 ST | Diary Details: OFF | TP %: M5 85% M15 85% M30 85% | ","trend inputs display choices, not invented booleans");
+ InpPlaceStopLoss=false;UpdatePanel();check(Combined("settings").find("SL Placement: OFF")!=string::npos && tooltips["settings_0"].find("without a broker stop loss")!=string::npos,"SL placement off visible and explained");InpPlaceStopLoss=true;
+ tpPercent[0]=65;tpPercent[1]=101;tpPercent[2]=90;UpdatePanel();
+ check(Combined("trendSettings").find("TP %: M5 65% M15 INVALID M30 90%")!=string::npos,"custom TP input status and invalid value visible");
+ check(tooltips["trendSettings_0"].find("INVALID uses original TP logic")!=string::npos,"invalid TP tooltip explains fallback");
+ tpPercent[0]=tpPercent[1]=tpPercent[2]=85;
  InpAutoTrading=false;InpMinimumLot=false;InpBypassRisk=false;against[0]=true;against[2]=true;
  choices[0]=choices[1]=choices[2]=P3_AUTO;UpdatePanel();
  check(Combined("timer")=="Timer: OFF" && tooltips["timer_0"].find("PC/VPS")!=string::npos,"timer appears in third header row with tooltip");

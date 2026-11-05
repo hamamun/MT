@@ -20,7 +20,7 @@ stubs=r'''
 #include <string>
 #include <vector>
 using namespace std;
-using datetime=long; using ushort=unsigned short; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int;
+using datetime=long; using ushort=unsigned short; using uint=unsigned int; using ENUM_ORDER_TYPE_FILLING=int; using ENUM_ORDER_TYPE=int;
 #define EMPTY_VALUE numeric_limits<double>::max()
 #define INVALID_HANDLE -1
 #define FILE_READ 1
@@ -248,12 +248,12 @@ bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
- g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
+ g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;InpPlaceStopLoss=true;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
  for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
  InpAutoTrading=false;P4Init();
 }
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
- P4Init();check(g_p4Ready && !InpAutoTrading,"initialization and default off");
+ P4Init();check(g_p4Ready && !InpAutoTrading && InpPlaceStopLoss,"initialization defaults auto off and stop placement on");
  check(P4Line(0).find("Starting")!=string::npos && P4Line(0).find("no active order")==string::npos,"initial state does not invent an empty broker scan");
  double levelValues[]={98,99,100,100.02,101,102};bool equivalent=true;
  for(int d:{-1,1})for(bool market:{false,true})for(long stops:{0,10,100})for(double entry:levelValues)for(double sl:levelValues)for(double tp:levelValues){
@@ -698,6 +698,60 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  resetWorld();P4Close();tester=true;connected=false;P4Init();InpAutoTrading=true;
  plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);
  check(sends==1,"tester can run when live terminal is disconnected");
+ // Explicit no-SL mode sends market BUY and SELL without a broker stop.
+ for(int direction:{1,-1}){
+   resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};
+   plans[0]={direction,true,true,direction>0?100.02:100.0,direction>0?99.0:101.0,direction>0?101.0:99.0,0.05};g_p3[0].score=direction*3;
+   P4Process(true);check(sends==1 && lastRequest.action==TRADE_ACTION_DEAL && lastRequest.sl==0 && lastRequest.tp==plans[0].target,"no-SL market request retains TP");
+   P4Process(false);check(positions.size()==1 && positions[0].sl==0 && P4Line(0).find("NO SL (unprotected)")!=string::npos && P4Tooltip(0).find("No broker-side stop loss")!=string::npos,"unprotected open position visible");
+   P4Close();InpPlaceStopLoss=true;P4Init();P4Process(false);check(positions.size()==1 && P4Line(0).find("SL/TP missing: REVIEW")!=string::npos && modifies==0,"reenabling does not silently change an open position");
+ }
+ // Both BUY and SELL limit orders remain pending without SL, and still require TP.
+ for(int direction:{1,-1}){
+   resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};
+   plans[0]={direction,true,false,direction>0?99.9:100.5,direction>0?99.0:101.0,direction>0?101.0:99.0,0.05};g_p3[0].score=direction*2;
+   P4Process(true);P4Process(false);check(sends==1 && orders.size()==1 && orders[0].sl==0 && orders[0].tp==plans[0].target && P4Line(0).find("NO SL (unprotected)")!=string::npos && cancels==0,"no-SL limit remains pending with TP and warning");
+   orders[0].tp=0;uptime+=6000;P4Process(false);check(cancels==1 && orders.empty(),"missing TP still cancels an unprotected pending");
+ }
+ // A no-SL pending replan stays no-SL and its write-ahead journal survives restart.
+ resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};
+ plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].target=100.9;uptime+=6000;P4Process(false);
+ check(modifies==1 && lastRequest.sl==0 && orders[0].sl==0 && g_p4[0].modifying==1 && g_p4[0].modSL==0,"no-SL pending replan journals zero stop");
+ P4Close();P4Init();check(g_p4Ready,"zero-stop modification journal survives restart");P4Process(false);
+ check(g_p4View[0].state==P4_PENDING && !g_p4[0].modifying && !g_p4[0].cancel && orders[0].sl==0,"broker-confirmed no-SL modification reconciles");
+ P4Close();InpPlaceStopLoss=true;P4Init();uptime+=6000;P4Process(false);check(cancels==1 && orders.empty(),"reenabling SL requests cancellation of an unprotected pending");
+ // Zero is legitimate, but corrupt negative, EMPTY_VALUE or NaN stops are not.
+ for(double bad:{-1.0,EMPTY_VALUE,numeric_limits<double>::quiet_NaN()}){
+   resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].modifying=1;
+   g_p4[0].modEntry=99.9;g_p4[0].modSL=bad;g_p4[0].modTP=101;P4Persist();P4Close();P4Init();
+   check(!g_p4Ready,"invalid modification stop does not load");
+ }
+ // A protected open position stays protected after input reinitialization.
+ resetWorld();InpAutoTrading=true;current={100,100.02,terminalTime};plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);P4Process(false);
+ P4Close();InpPlaceStopLoss=false;P4Init();P4Process(false);
+ check(positions.size()==1 && positions[0].sl==99 && modifies==0 && P4Line(0).find("NO SL")==string::npos,"switching off does not alter existing position stop");
+ // Do not send a modification based on a stale SL snapshot.
+ resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ P4Refresh(0);orders[0].sl=99;laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;uptime+=6000;P4Modify(0,current,plans[0]);
+ check(modifies==0 && orders[0].sl==99 && !g_p4[0].cancel,"changed broker SL causes refresh instead of overwriting it");
+ // Turning off SL placement must not strip an existing pending order's stop.
+ resetWorld();InpAutoTrading=true;current={100,100.02,terminalTime};plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ P4Close();InpPlaceStopLoss=false;P4Init();laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;uptime+=6000;P4Process(false);
+ check(modifies==1 && lastRequest.sl==99 && orders[0].sl==99,"existing pending SL is retained when mode changes");
+ // If retaining the old SL at a new entry would increase planned risk, cancel instead.
+ resetWorld();InpAutoTrading=true;current={100,100.02,terminalTime};plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ InpPlaceStopLoss=false;laneBars[0].push_back(1002);plans[0].bar=1001;plans[0].entry=99.7;plans[0].stop=99.6;uptime+=6000;P4Process(false);
+ check(modifies==0 && cancels==1 && orders.empty(),"retained SL cannot increase replan risk");
+ // An SL-free partial fill retains its position but cancels the remainder.
+ resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ orders[0].position=900;part=Position{};part.id=900;part.ticket=901;part.magic=P4Magic(0);part.type=POSITION_TYPE_BUY;part.entry=99.9;part.sl=0;part.tp=101;part.lot=0.02;part.symbol=_Symbol;part.comment="MT4-M5";positions.push_back(part);deals.push_back({900,DEAL_ENTRY_IN,0.02});
+ uptime+=6000;P4Process(false);check(cancels==1 && positions.size()==1 && P4Line(0).find("NO SL")!=string::npos && P4Tooltip(0).find("remainder")!=string::npos,"partial no-SL fill retains warning and cancellation explanation");
+ // The broker still must support TP and its lifetime, but SL support is only required when enabled.
+ resetWorld();orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_LIMIT|SYMBOL_ORDER_TP;
+ check(!P4ProtectionAllowed(true),"SL capability required when SL placement enabled");
+ InpPlaceStopLoss=false;check(P4ProtectionAllowed(true) && P4ProtectionAllowed(false),"SL capability not required for no-SL orders");
+ stopLifetime=SYMBOL_ORDERS_DAILY;check(!P4ProtectionAllowed(true),"lasting TP remains mandatory without SL");
  if(!f) cout<<"Phase 4 broker/runtime stub checks passed\n";
  return f?1:0;
 }

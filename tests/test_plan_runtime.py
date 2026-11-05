@@ -74,14 +74,26 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  for(int i=0;i<1000;i++){double p=100+sin(i*0.3)*0.3;feed.push_back({i+1,p,p+0.8,p-0.8,p+0.1,2});}
  vector<int> scores(1100,2),gts(1100,1),cts(1100,1),status(1100,1);
  P3Reset();P3ResetSnapshots();
- // The runtime must route each lane to the requested historical percentile.
- int expectedCount=0;double expected=P3ObservedTargetR(feed,scores,gts,cts,status,1000,1,2,P3_AUTO,true,0.01,0.01,0.05,0.02,expectedCount,true);
- InpWiderTP=true;P3Remember(1,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
- check(g_p3[1].samples==expectedCount && g_p3[1].targetR==expected,"M15 routes enabled option to wider historical replay");
- expected=P3ObservedTargetR(feed,scores,gts,cts,status,1000,0,2,P3_AUTO,true,0.01,0.01,0.05,0.02,expectedCount,false);
- P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
- check(g_p3[0].samples==expectedCount && g_p3[0].targetR==expected,"M5 routes enabled option to legacy replay");
- InpWiderTP=false;P3Reset();P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
+ // Each lane routes its own selected percentile, including M5.
+ check(InpTPPercentM5==85 && InpTPPercentM15==85 && InpTPPercentM30==85,"all three percentile inputs default to 85");
+ InpTPPercentM5=60;InpTPPercentM15=75;InpTPPercentM30=90;fill(scores.begin(),scores.end(),3);
+ for(int lane=0;lane<3;lane++){
+   int expectedCount=0;int pc=lane==0?60:(lane==1?75:90);
+   double expected=P3ObservedTargetR(feed,scores,gts,cts,status,1000,lane,3,P3_AUTO,true,0.01,0.01,0.05,0.02,expectedCount,pc);
+   P3Remember(lane,1,1,1,3,"MIXED",1000,feed,scores,gts,cts,status);
+   check(expectedCount>0 && g_p3[lane].samples==expectedCount && g_p3[lane].targetR==expected && P3TPPercent(lane)==pc,"lane routes selected historical percentile");
+ }
+ // Different percentages should select different excursions when the samples vary.
+ int minCount=0,maxCount=0;
+ double minR=P3ObservedTargetR(feed,scores,gts,cts,status,1000,1,3,P3_AUTO,true,0.01,0.01,0.05,0.02,minCount,1);
+ double maxR=P3ObservedTargetR(feed,scores,gts,cts,status,1000,1,3,P3_AUTO,true,0.01,0.01,0.05,0.02,maxCount,100);
+ check(minCount>0 && minCount==maxCount && maxR>minR,"different percentiles select different historical excursions");
+ InpTPPercentM15=101;check(P3TPPercent(1)==0 && !P3UseSecondSwing(1) && P3Strategy(1)==30004 && P3TPPercent(0)==60 && P3TPPercent(2)==90,"invalid value restores legacy only for its lane");
+ int legacyCount=0;double legacyR=P3ObservedTargetR(feed,scores,gts,cts,status,1000,1,3,P3_AUTO,true,0.01,0.01,0.05,0.02,legacyCount,0);
+ P3Remember(1,1,1,1,3,"MIXED",1000,feed,scores,gts,cts,status);
+ check(legacyCount>0 && g_p3[1].targetR==legacyR && g_p3[1].samples==legacyCount,"invalid percentile uses original historical median");
+ InpTPPercentM5=InpTPPercentM15=InpTPPercentM30=85;fill(scores.begin(),scores.end(),2);
+ P3Reset();P3Remember(0,1,1,1,2,"MIXED",1000,feed,scores,gts,cts,status);
  P3Plan p{};check(!P3MakePlan(0,p)&&p.signal==1,"no plan until observed tick");
  current.time=1000;P3CaptureQuotes();P3FreezePlans();check(!P3MakePlan(0,p),"pre-close quote is not captured");
  current.time=1001;P3CaptureQuotes();P3FreezePlans();check(P3MakePlan(0,p) && p.valid && p.signal==1 && !p.market,"buy limit snapshot");
@@ -141,26 +153,26 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
    g_p3[lane].volumeState=1;g_p3[lane].samples=20;g_p3[lane].targetR=50;
  }
  P3Plan legacy5{},legacy15{},legacy30{},wide5{},wide15{},wide30{};
- check(!InpWiderTP && P3Strategy(1)==30004,"wider option defaults off");
- check(P3MakePlanAt(0,current,legacy5) && P3MakePlanAt(1,current,legacy15) && P3MakePlanAt(2,current,legacy30),"legacy buy plans");
- InpWiderTP=true;
- check(P3MakePlanAt(0,current,wide5) && P3MakePlanAt(1,current,wide15) && P3MakePlanAt(2,current,wide30),"wider buy plans");
- check(legacy5.target==wide5.target && P3Strategy(0)==30004,"M5 unchanged when enabled");
+ InpTPPercentM5=InpTPPercentM15=InpTPPercentM30=0;
+ check(P3MakePlanAt(0,current,legacy5) && P3MakePlanAt(1,current,legacy15) && P3MakePlanAt(2,current,legacy30),"invalid percentages retain legacy buy plans");
+ InpTPPercentM5=InpTPPercentM15=InpTPPercentM30=85;
+ check(P3MakePlanAt(0,current,wide5) && P3MakePlanAt(1,current,wide15) && P3MakePlanAt(2,current,wide30),"percentile buy plans");
+ check(legacy5.target==wide5.target && P3Strategy(0)==30006,"M5 retains nearest swing cap");
  check(abs(legacy15.target-101)<1e-8 && abs(wide15.target-102)<1e-8 && abs(legacy30.target-101)<1e-8 && abs(wide30.target-102)<1e-8,"second distinct buy pivot for M15 and M30");
- check(legacy15.entry==wide15.entry && legacy15.stop==wide15.stop && legacy15.lot==wide15.lot && P3Strategy(1)==30005 && P3Strategy(2)==30005,"entry stop lot and mode identity");
- InpWiderTP=false;P3Plan reverted{};check(P3MakePlanAt(1,current,reverted) && reverted.target==legacy15.target,"turning option off restores the original plan");
- g_p3[1].targetR=0.1;check(P3MakePlanAt(1,current,legacy15),"short historical target in original mode");
- InpWiderTP=true;check(P3MakePlanAt(1,current,wide15) && wide15.target==legacy15.target,"second swing is a cap, not a mandatory target");g_p3[1].targetR=50;
+ check(legacy15.entry==wide15.entry && legacy15.stop==wide15.stop && legacy15.lot==wide15.lot && P3Strategy(1)==30006 && P3Strategy(2)==30006,"entry stop lot and mode identity");
+ InpTPPercentM15=0;P3Plan invalid{};
+ check(P3MakePlanAt(1,current,invalid) && invalid.target==legacy15.target && P3Strategy(1)==30004,"invalid lane uses original swing cap");
+ g_p3[1].targetR=0.1;check(P3MakePlanAt(1,current,legacy15),"short historical target with nearest swing");
+ InpTPPercentM15=85;check(P3MakePlanAt(1,current,wide15) && wide15.target==legacy15.target,"second swing is a cap, not a mandatory target");g_p3[1].targetR=50;
  for(int lane=0;lane<3;lane++)g_p3[lane].score=-3;
- InpWiderTP=false;check(P3MakePlanAt(1,current,legacy15),"legacy sell plan");
- InpWiderTP=true;check(P3MakePlanAt(1,current,wide15),"wider sell plan");
+ InpTPPercentM15=0;check(P3MakePlanAt(1,current,legacy15),"legacy sell plan");
+ InpTPPercentM15=85;check(P3MakePlanAt(1,current,wide15),"percentile sell plan");
  check(abs(legacy15.target-99.02)<1e-8 && abs(wide15.target-98.02)<1e-8,"second distinct sell pivot");
  // With one opposing pivot, use it; with none, keep the recent-move fallback.
  feed[72].low=99.5;feed[82].low=99.5;
  check(P3MakePlanAt(1,current,wide15) && abs(wide15.target-99.02)<1e-8,"single pivot fallback");
  feed[62].low=99.5;g_p3[1].samples=0;g_p3[1].targetR=0;
  check(P3MakePlanAt(1,current,wide15) && wide15.target<wide15.entry,"no pivot and insufficient analogs keep fallback");
- InpWiderTP=false;
  if(!f)cout<<"Phase 3 plan-runtime stub checks passed\n";
  return f?1:0;}
 
