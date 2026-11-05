@@ -106,7 +106,10 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  current={t+3,100,100.02};tickHistory.push_back(current);P3DiaryTick();
  check(g_diary.size()==2 && g_diary[1].obs.state==P3_PENDING,"second pending signal");
  P3DiaryClose();P3DiaryInit();
- check(g_diaryReady && g_diary.size()==2 && g_diary[0].obs.state==P3_TARGET && g_diary[0].obs.exitQuote==101 && g_diary[0].strategy==30003 && g_diary[0].equity==10000 && g_diary[1].obs.state==P3_UNKNOWN,"restart preserves outcomes and marks gap");
+ check(g_diaryReady && g_diary.size()==2 && g_diary[0].obs.state==P3_TARGET && g_diary[0].obs.exitQuote==101 && g_diary[0].strategy==30004 && g_diary[0].equity==10000 && g_diary[1].obs.state==P3_UNKNOWN,"restart preserves outcomes and marks gap");
+ g_diary[0].strategy=30003;g_diary[0].signalStrategy=30003;check(P3DiarySave(),"save older strategy record");
+ P3DiaryClose();P3DiaryInit();
+ check(g_diaryReady && g_diary[0].strategy==30003 && g_diary[0].signalStrategy==30003 && g_diary[1].strategy==30004,"old and new strategy records survive restart");
  current={t+4,100,100.02};tickHistory.push_back(current);P3DiaryTick();
  check(g_diary.size()==2,"restart does not duplicate signal");
  plans[1]={1,true,false,99,98,101,0.05,3};g_p3[1].score=2;

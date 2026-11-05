@@ -169,7 +169,7 @@ void FileWriteInteger(int h,int x,int){writeVal<int>(h,x);}void FileWriteLong(in
 int FileReadInteger(int h,int){return readVal<int>(h);}long FileReadLong(int h){return readVal<long>(h);}double FileReadDouble(int h){return readVal<double>(h);}
 #include "MT_AutoPolicy.mqh"
 struct P3Plan{int signal=P3_WAIT;bool valid=false,market=false;double entry=0,stop=0,target=0,lot=0;datetime bar=1000;};
-struct Lane{int score=0;};Lane g_p3[3];P3Plan plans[3];
+struct Lane{int score=0,volumeState=-1;};Lane g_p3[3];P3Plan plans[3];
 bool P3MakePlan(int i,P3Plan &p){p=plans[i];return p.valid;}
 bool P3MakePlanAt(int i,const MqlTick &,P3Plan &p){p=plans[i];return p.valid;}
 string P3LotText(double x){return DoubleToString(x,2);}
@@ -237,7 +237,7 @@ void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
  g_marketState=MARKET_OPEN;uptime=10000;sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
- for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;}
+ for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
  InpAutoTrading=false;P4Init();
 }
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
@@ -424,6 +424,17 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(orders.empty() && sends==1 && g_p4[0].cooldown,"market upgrade cancels without immediate replacement");
  laneBars[1].push_back(1002);P4Process(true);check(sends==1,"another timeframe cannot release cooldown");
  laneBars[0].push_back(1002);plans[0].bar=1001;uptime+=6000;P4Process(true);check(sends==2 && positions.size()==1,"market upgrade re-enters on subsequent own close");
+ // A score-3 low-volume plan is still a limit, not a market upgrade.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ g_p3[0].score=3;g_p3[0].volumeState=0;uptime+=6000;P4Process(true);P4Process(false);
+ check(sends==1 && orders.size()==1 && cancels==0,"low-volume score 3 retains pending limit");
+ // Once a valid market plan exists, it cancels and waits as before.
+ g_p3[0].volumeState=1;plans[0].market=true;plans[0].entry=100.02;uptime+=6000;P4Process(true);P4Process(false);
+ check(sends==1 && orders.empty() && g_p4[0].cooldown,"confirmed volume market upgrade cancels pending");
+ resetWorld();InpAutoTrading=true;plans[1]={-1,true,false,100.5,102,99,0.05};g_p3[1].score=-3;g_p3[1].volumeState=0;P4Process(true);
+ check(sends==1 && lastRequest.action==TRADE_ACTION_PENDING && lastRequest.type==ORDER_TYPE_SELL_LIMIT,"low-volume negative 3 sends sell limit");
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;g_p3[0].volumeState=0;P4Process(true);
+ check(sends==0,"mismatched stale market plan blocked under low volume");
  // SELL upgrade, expiry coinciding with WAIT, and cancellation retries.
  resetWorld();InpAutoTrading=true;plans[2]={-1,true,false,100.5,102,99,0.05};g_p3[2].score=-2;P4Process(true);P4Process(false);
  plans[2].market=true;plans[2].entry=100;g_p3[2].score=-3;uptime+=6000;P4Process(true);P4Process(true);
