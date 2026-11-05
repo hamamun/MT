@@ -6,6 +6,17 @@ import os, pathlib, re, subprocess, tempfile
 
 source = (pathlib.Path(__file__).resolve().parents[1] / 'MT.mq5').read_text()
 assert not re.search(r'\b(?:OrderSend|OrderSendAsync|CTrade|PositionOpen|PositionClose)\s*(?:\(|\w+)', source), 'Phase 2 must not place or manage orders'
+panel_source = (pathlib.Path(__file__).resolve().parents[1] / 'MT_Panel.mqh').read_text()
+def panel_function(name):
+    m = re.search(r'\b(?:void|string)\s+' + name + r'\s*\([^)]*\)\s*\{', panel_source)
+    if not m: raise RuntimeError('panel function not found: ' + name)
+    depth, pos = 1, m.end()
+    while depth:
+        if panel_source[pos] == '{': depth += 1
+        if panel_source[pos] == '}': depth -= 1
+        pos += 1
+    return panel_source[m.start():pos]
+panel_helpers = 'string g_uiReadings[3];\n' + '\n'.join(panel_function(n) for n in ('P2StateText','UIFormatCountdown','UIClearReading','UISetReadings','P2Line'))
 engine = source[source.index('// Phase 2 numerical kernels'):]
 # Translate MQL's dynamic-array spelling to vectors. Fixed arrays are unchanged.
 engine = re.sub(r'\bconst (double|int|MqlRates) &(\w+)\[\]', r'const vector<\1> &\2', engine)
@@ -44,7 +55,7 @@ using datetime=long long; using ulong=unsigned long; using uint=unsigned int;
 using ENUM_TIMEFRAMES=int;
 struct MqlRates {datetime time; double open,high,low,close;};
 struct P2Countdown {bool loaded=false,valid=false;int label=0,age=0,remaining=0;datetime anchor=0;};
-struct P2Lane {string line;datetime lastBar=0,attemptedBar=0;ulong lastAttempt=0;int requested=0,lastGoodRequest=0;bool retry=false;P2Countdown pt,score;};
+struct P2Lane {datetime lastBar=0,attemptedBar=0;ulong lastAttempt=0;int requested=0,lastGoodRequest=0;bool retry=false;P2Countdown pt,score;};
 void P3Invalidate(int){}
 void P3Remember(int,int,int,int,int,string,datetime,const vector<MqlRates>&,const vector<int>&,const vector<int>&,const vector<int>&,const vector<int>&){}
 P2Lane g_p2[3]; string _Symbol="TEST"; vector<MqlRates> feed; map<string,double> globals;
@@ -170,9 +181,9 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  feed.clear(); globals.clear();
  for(int i=0;i<5000;i++){double price=100 + 0.002*i + 2*sin(i*0.13) + 0.4*sin(i*0.047);feed.push_back({10000+60LL*i,price,price+0.3,price-0.3,price});}
  P2Reset();P2Evaluate(0,PERIOD_M5,feed.back().time);
- check(g_p2[0].line.find("M5 | GT: ")==0,"full lane evaluated");
- check(g_p2[0].line.find("CT: WAIT")==string::npos && g_p2[0].line.find("SC: WAIT")==string::npos,"CT and score available");
- check(g_p2[0].line.find("RG: WAIT")==string::npos,"full own M5 Hurst history");
+ check(g_uiReadings[0].find("M5 | GT: ")==0,"full lane evaluated");
+ check(g_uiReadings[0].find("CT: WAIT")==string::npos && g_uiReadings[0].find("SC: WAIT")==string::npos,"CT and score available");
+ check(g_uiReadings[0].find("RG: WAIT")==string::npos,"full own M5 Hurst history");
  check(g_p2[0].lastBar==feed.back().time,"latest closed bar recorded");
  vector<double> all; for(auto &r:feed) all.push_back(r.close); double hp[],*unused=nullptr; (void)unused;
  vector<double> hp40,hp1,hp2;P2HighPass3(all,40,hp40);
@@ -181,13 +192,13 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  vector<int> fast(all.size());P2Cycles(hp40,fast);for(int i=0;i<(int)all.size();i++) check(fast[i]==P2ObservationCycleAt(hp40,i),"incremental adaptive cycle matches reference");int cycle=P2ObservationCycleAt(hp40,(int)all.size()-1);
  P2HighPass3(all,max(90,min(225,(int)round(cycle*6.25))),hp1);P2HighPass3(all,cycle,hp2);
  int dir=hp1.back()>hp2.back()?1:(hp1.back()<hp2.back()?-1:0);
- check(g_p2[0].line.find("CT: "+P2StateText(dir))!=string::npos,"current CT matches independently filtered latest cycle");
+ check(g_uiReadings[0].find("CT: "+P2StateText(dir))!=string::npos,"current CT matches independently filtered latest cycle");
  feed.resize(600);P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(g_p2[1].line.find("CT: WAIT")!=string::npos && g_p2[1].line.find("GT: WAIT")==string::npos && g_p2[1].line.find("RG: WAIT")==string::npos,"partial history keeps independently available GT and RG");
+ check(g_uiReadings[1].find("CT: WAIT")!=string::npos && g_uiReadings[1].find("GT: WAIT")==string::npos && g_uiReadings[1].find("RG: WAIT")==string::npos,"partial history keeps independently available GT and RG");
  P2Evaluate(0,PERIOD_M5,feed.back().time);
- check(g_p2[0].line.find("RG: WAIT")!=string::npos,"M5 does not borrow available M15 regime");
+ check(g_uiReadings[0].find("RG: WAIT")!=string::npos,"M5 does not borrow available M15 regime");
  maxBars=600;P2Reset();P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(g_p2[1].line.find("GT: WAIT")==string::npos && g_p2[1].line.find("RG: WAIT")==string::npos,"terminal maximum does not prevent usable history");
+ check(g_uiReadings[1].find("GT: WAIT")==string::npos && g_uiReadings[1].find("RG: WAIT")==string::npos,"terminal maximum does not prevent usable history");
  check(g_p2[1].requested<=maxBars-1,"history request respects terminal bar limit");
  maxBars=200001;
  check(P2HistoryLimit()==200000 && P2NextHistoryRequest(100000,P2HistoryLimit())==200000,"history can expand beyond 100000");
@@ -195,19 +206,19 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
  check(P2NextHistoryRequest(1500000000,2147483646)==2147483646,"history growth does not overflow int");
  // A larger download can fail while a smaller range is already available.
  maxBars=1501;P2Reset();P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(!g_p2[1].line.empty(),"initial smaller range usable");
+ check(!g_uiReadings[1].empty(),"initial smaller range usable");
  maxBars=100001;maxCopy=2000;P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(!g_p2[1].line.empty() && g_p2[1].requested==12000,"failed deeper request retains usable readings and keeps retrying");
+ check(!g_uiReadings[1].empty() && g_p2[1].requested==12000,"failed deeper request retains usable readings and keeps retrying");
  maxCopy=2147483647;maxBars=1;P2Reset();
  maxBars=100001;P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(!g_p2[1].line.empty() && g_p2[1].requested>=12000,"history requests recover after terminal bar limit becomes available");
+ check(!g_uiReadings[1].empty() && g_p2[1].requested>=12000,"history requests recover after terminal bar limit becomes available");
  P2Evaluate(2,PERIOD_M30,feed.back().time+1);
- check(g_p2[2].line.empty(),"stale copied data never presented as latest");
+ check(g_uiReadings[2].empty(),"stale copied data never presented as latest");
  double goodClose=feed.back().close;feed.back().close=feed.back().high+1;
  P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(g_p2[1].line.empty(),"invalid latest OHLC is unavailable");feed.back().close=goodClose;
+ check(g_uiReadings[1].empty(),"invalid latest OHLC is unavailable");feed.back().close=goodClose;
  feed.back().close=EMPTY_VALUE;P2Evaluate(1,PERIOD_M15,feed.back().time);
- check(g_p2[1].line.empty(),"EMPTY_VALUE latest close is unavailable");feed.back().close=goodClose;
+ check(g_uiReadings[1].empty(),"EMPTY_VALUE latest close is unavailable");feed.back().close=goodClose;
  P2Reset();copyCalls=0;ticks=100000;P2Update();int firstCalls=copyCalls;
  ticks+=1000;P2Update();check(copyCalls==firstCalls,"same-bar history retry is throttled");
  feed.push_back({feed.back().time+60,100,101,99,100});P2Update();
@@ -219,7 +230,7 @@ int main(){int failures=0;auto check=[&](bool b,const char *n){if(!b){cerr<<"FAI
 main = main.replace('double hp[],*unused=nullptr; (void)unused;', '')
 with tempfile.TemporaryDirectory() as tmp:
     path = pathlib.Path(tmp)
-    (path / 'test.cpp').write_text(stubs + engine + main)
+    (path / 'test.cpp').write_text(stubs + panel_helpers + engine + main)
     flags = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if os.getenv('MT_TEST_SANITIZERS') else []
     subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-misleading-indentation'] + flags + [str(path/'test.cpp'),'-o',str(path/'test')],check=True)
     subprocess.run([str(path/'test')],check=True)
