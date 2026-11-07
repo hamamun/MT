@@ -58,22 +58,22 @@ string P2Line(int lane)
    return(tf+" | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT");
 }
 
-bool g_uiBuilt=false, g_uiSupported=false;
-int g_uiAutoParts[3]={0,0,0}, g_uiPlanNotes[3]={0,0,0};
+bool g_uiBuilt=false, g_uiSupported=false, g_uiClosed=false;
+int g_uiAutoParts[3]={0,0,0}, g_uiPlanNotes[3]={0,0,0}, g_uiPlanDistances[3]={0,0,0};
 int g_uiReadingNotes[3]={0,0,0}, g_uiDiaryNotes[3]={0,0,0}, g_uiDetails[3]={0,0,0};
 int g_uiCashRows[3][2]={{0,0},{0,0},{0,0}};
 int g_uiMarketNotes=0, g_uiTimerNotes=0;
 
 void UIResetCounts()
 {
-   for(int i=0;i<3;i++) { g_uiAutoParts[i]=0; g_uiPlanNotes[i]=0; g_uiReadingNotes[i]=0; g_uiDiaryNotes[i]=0; g_uiDetails[i]=0; g_uiCashRows[i][0]=0; g_uiCashRows[i][1]=0; }
+   for(int i=0;i<3;i++) { g_uiAutoParts[i]=0; g_uiPlanNotes[i]=0; g_uiPlanDistances[i]=0; g_uiReadingNotes[i]=0; g_uiDiaryNotes[i]=0; g_uiDetails[i]=0; g_uiCashRows[i][0]=0; g_uiCashRows[i][1]=0; }
    g_uiMarketNotes=0; g_uiTimerNotes=0;
 }
 void PanelRemove()
 {
    // MT_ is the established panel prefix, including objects from older layouts.
    ObjectsDeleteAll(0,UI_PREFIX);
-   g_uiBuilt=false; g_uiSupported=false; UIResetCounts();
+   g_uiBuilt=false; g_uiSupported=false; g_uiClosed=false; UIResetCounts();
    ChartRedraw();
 }
 void UIMeasure(const string text, int size, int &width, int &height)
@@ -301,10 +301,41 @@ bool UIStats(const string line, const string tf, string &today, string &all)
 }
 bool UIAutoTrade(const string line, string &direction, string &style)
 {
-   string token=UIPart(line,2);
+   int index=UIPart(line,2)=="TIMER PAUSED"?3:2;
+   string token=UIPart(line,index);
    direction=UIWord(token,0); style=UIWord(token,1);
    return((direction=="BUY" || direction=="SELL") && (style=="OPEN" || style=="LIMIT") && token==direction+" "+style);
 }
+// Price distance, not points/pips or a profit estimate. Negative means the
+// current exit-side quote has already passed the target; unavailable/stale
+// quotes and missing targets are deliberately shown as --.
+string UITPDistance(const string direction, const string targetText, bool fresh, const MqlTick &quote, int digits)
+{
+   if(!fresh || (direction!="BUY" && direction!="SELL") || targetText=="") return("--");
+   bool digit=false,dot=false;
+   for(int i=0;i<StringLen(targetText);i++)
+   {
+      int ch=StringGetCharacter(targetText,i);
+      if(ch>=48 && ch<=57) { digit=true; continue; }
+      if(ch==46 && !dot) { dot=true; continue; }
+      return("--");
+   }
+   if(!digit) return("--");
+   double target=StringToDouble(targetText);
+   if(!MathIsValidNumber(target) || target<=0.0) return("--");
+   double distance=direction=="BUY"?target-quote.bid:quote.ask-target;
+   return(DoubleToString(distance,digits));
+}
+string UIAutoTarget(const string line)
+{
+   for(int i=0;i<UIPartCount(line);i++)
+   {
+      string part=UIPart(line,i);
+      if(StringFind(part,"TP ")==0) return(UIWord(UIAfter(part,"TP "),0));
+   }
+   return("");
+}
+
 // Place broker tokens across a row, wrapping as needed without abbreviating notes.
 int UIAutoFlow(const string line, int lane, int x, int y, int width, int lead, int step, bool draw, const string tip)
 {
@@ -313,9 +344,11 @@ int UIAutoFlow(const string line, int lane, int x, int y, int width, int lead, i
    string direction="",style="";
    bool trade=normal && UIAutoTrade(line,direction,style);
    int extra=trade?UIWidth(direction)+UIWidth(style)+24:0;
-   int count=normal?UIPartCount(line):1, first=normal?(trade?3:2):0, row=0, cursor=normal?lead+extra:8, part=0;
+   int count=normal?UIPartCount(line):1, first=normal?2:0, row=0, cursor=normal?lead+extra:8, part=0;
+   int tradeIndex=UIPart(line,2)=="TIMER PAUSED"?3:2;
    for(int t=first;t<count;t++)
    {
+      if(trade && t==tradeIndex) continue;
       string item=normal?UIPart(line,t):line;
       if(item=="") continue;
       for(int pos=0;pos<StringLen(item);)
@@ -344,10 +377,10 @@ void UpdatePanel()
 {
    if(!g_uiBuilt) return;
    datetime now=ServerNow(); UpdateState(now);
-   bool supported=ChartSupported();
-   if(supported!=g_uiSupported)
+   bool supported=ChartSupported(), closed=supported && g_marketState==MARKET_CLOSED;
+   if(supported!=g_uiSupported || closed!=g_uiClosed)
    {
-      ObjectsDeleteAll(0,UI_PREFIX); UIResetCounts(); g_uiSupported=supported;
+      ObjectsDeleteAll(0,UI_PREFIX); UIResetCounts(); g_uiSupported=supported; g_uiClosed=closed;
    }
    int pad=10,gap=8,x=UI_X+pad,y=UI_Y+pad,w,h;
    UIMeasure("Mg",UI_SIZE,w,h); int step=h+6;
@@ -364,7 +397,34 @@ void UpdatePanel()
       UIText("unsupportedNotice",x,y+step,notice,clrTomato,UI_SIZE+1);
       ChartRedraw(); return;
    }
+   // The market-closed layout only changes presentation: continue the same
+   // readings refresh so the timer/tick and broker-management paths are intact.
    P2Update();
+   if(closed)
+   {
+      string detail=g_marketDetail;
+      if(detail=="") detail=g_nextOpen>0?"MARKET CLOSED - next open "+FormatClock(g_nextOpen):"MARKET CLOSED - next open --";
+      int brandW=UIWidth("MT V1.00")+10,symbolW=UIWidth(g_symbol,UI_SIZE+2)+8;
+      int typeW=UIWidth(g_type)+10,stateW=UIWidth("close")+10;
+      int headerW=brandW+symbolW+typeW+stateW+10;
+      int chartW=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0);
+      int available=(int)MathMax(headerW,chartW-2*UI_X-2*pad);
+      int width=(int)MathMax(headerW,MathMin(UIWidth(detail),available));
+      UIGrowStep(g_symbol,UI_SIZE+2,step); UIGrowStep(detail,UI_SIZE,step);
+      bool fits=UIWidth(detail)<=width;
+      int rows=fits?1:UIWrappedRows(detail,width);
+      UIBox("bg",UI_X,UI_Y,width+2*pad,2*pad+(rows+1)*step+6,UI_BG,UI_BORDER);
+      UIBox("brand",x,y-2,brandW,step,UI_BADGE,UI_BORDER);
+      UIBox("type",x+brandW+symbolW,y-2,typeW,step,UI_BADGE,UI_BORDER);
+      UIBox("marketState",x+brandW+symbolW+typeW+5,y-2,stateW,step,UIChipFill("close"),UI_BORDER);
+      UIText("brandText",x+5,y,"MT V1.00",UI_TITLE,UI_SIZE);
+      UIText("symbol",x+brandW+4,y,g_symbol,clrWhite,UI_SIZE+2);
+      UIText("typeText",x+brandW+symbolW+5,y,g_type,clrSilver,UI_SIZE);
+      UIText("stateText",x+brandW+symbolW+typeW+10,y,"close",clrTomato,UI_SIZE);
+      UIText("closedDetail",x,y+step+6,fits?detail:"",clrSilver,UI_SIZE,"Broker session times are in server time.");
+      UIWrapped("marketDetail",x,y+step+6,fits?"":detail,width,step,clrSilver,"Broker session times are in server time.",g_uiMarketNotes);
+      ChartRedraw(); return;
+   }
    string tf[3]={"M5","M15","M30"}, readings[3],planText[3],autos[3],diaries[3],details[3],today[3],all[3];
    bool readingOK[3],statsOK[3]; UIPlan plan[3];
    for(int i=0;i<3;i++)
@@ -385,8 +445,21 @@ void UpdatePanel()
       default: state="MARKET STATUS UNKNOWN"; stateInk=clrOrange; break;
    }
    string bid="--",ask="--"; MqlTick q;
-   if(SymbolInfoTick(_Symbol,q) && q.bid>0 && q.ask>=q.bid)
-   { int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS); bid=DoubleToString(q.bid,digits); ask=DoubleToString(q.ask,digits); }
+   int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
+   bool haveQuote=SymbolInfoTick(_Symbol,q) && q.bid>0 && q.ask>=q.bid;
+   if(haveQuote) { bid=DoubleToString(q.bid,digits); ask=DoubleToString(q.ask,digits); }
+   bool freshQuote=haveQuote && g_marketState==MARKET_OPEN && P4FreshQuote(q);
+   string planDistance[3]; bool compactPlan[3];
+   for(int i=0;i<3;i++)
+   {
+      compactPlan[i]=plan[i].signal=="NONE" && plan[i].entry=="" && plan[i].notes=="" && plan[i].volume=="" && plan[i].style=="";
+      planDistance[i]=(plan[i].signal=="BUY" || plan[i].signal=="SELL")?
+                      "TP distance (price): "+UITPDistance(plan[i].signal,plan[i].tp,freshQuote,q,digits):"";
+      string direction="",style="";
+      string mode=UIPart(autos[i],1);
+      if(UIPart(autos[i],0)==tf[i] && (mode=="Auto: ON" || mode=="Auto: OFF") && UIAutoTrade(autos[i],direction,style))
+         autos[i]+=" | TP distance (price): "+UITPDistance(direction,UIAutoTarget(autos[i]),freshQuote,q,digits);
+   }
    string groups[9]={"Auto Trading","Allow Against Trend","Minimum Lot","Bypass Risk","SL Placement","Trend to Follow","Diary Details","TP %","Timer"};
    int start[9]={0,1,4,5,6,7,10,11,14}, count[9]={1,3,1,1,1,3,1,3,1};
    string values[15];
@@ -420,7 +493,7 @@ void UpdatePanel()
    {
       settingSize=pass<3?11-pass:9;
       // Tight charts retain the compact minimum; wider charts get roomier groups.
-      settingGap=pass==3?4:18; settingLabelPad=pass==3?4:8;
+      settingGap=pass==3?12:18; settingLabelPad=pass==3?4:8;
       settingBadgePad=pass==3?8:12; settingChipGap=pass==3?2:4;
       settingsRow[0]=4*settingGap; settingsRow[1]=3*settingGap;
       for(int g=0;g<9;g++)
@@ -440,27 +513,29 @@ void UpdatePanel()
    // Each lane gets only the width its own plan needs. SL/TP cash amounts
    // share the price row, as in the mock, rather than adding extra rows.
    int planCol[3][4],planMin[3],planTotal=0;
-   bool inlineCash=true;
+   bool inlineCash=true; int planSize=UI_SIZE,moneySize=UI_SIZE-1;
    string planHead[4]={"Entry","Lot","SL","TP"};
    // On a narrow chart, put cash under its price instead of forcing the
    // three cards wider than the screen. No amount is shortened or omitted.
    for(int pass=0;pass<2;pass++)
    {
-      inlineCash=(pass==0); planTotal=0;
+      inlineCash=(pass==0); planSize=inlineCash?UI_SIZE:UI_SIZE-1;
+      moneySize=inlineCash?UI_SIZE-1:UI_SIZE-2; planTotal=0;
       for(int i=0;i<3;i++)
       {
          string data[4];
          data[0]=plan[i].entry; data[1]=plan[i].lot; data[2]=plan[i].sl; data[3]=plan[i].tp;
          for(int c=0;c<4;c++)
          {
-            int content=UIWidth(data[c]);
+            int content=UIWidth(data[c],planSize);
             string cash=c==2?plan[i].slCash:(c==3?plan[i].tpCash:"");
             if(cash!="")
             {
-               int cashWidth=UIWidth(cash,UI_SIZE-2);
+               int cashWidth=UIWidth(cash,moneySize);
                if(inlineCash) content+=4+cashWidth;
+               else content=(int)MathMax(content,cashWidth);
             }
-            planCol[i][c]=(int)MathMax(UIWidth(planHead[c]),content)+12;
+            planCol[i][c]=(int)MathMax(UIWidth(planHead[c],planSize),content)+8;
          }
          int head=UIWidth("M30")+16+6+UIWidth(plan[i].signal)+12+UIWidth(plan[i].style)+12+
                   (plan[i].volume==""?0:UIWidth("VOL "+plan[i].volume)+14);
@@ -479,13 +554,13 @@ void UpdatePanel()
    int diaryMin=tfW+8*statW+20;
    int autoLead=tfW+UIWidth("Auto")+UIWidth("OFF")+30;
    int leftHead=UIWidth("MT V1.00")+UIWidth(g_symbol,UI_SIZE+2)+UIWidth(g_type)+UIWidth(state)+60;
-   int rightHead=UIWidth("Bid: "+bid)+UIWidth("Ask: "+ask)+UIWidth(clock)+40;
-   int minW=(int)MathMax(leftHead+rightHead+gap,(int)MathMax(settingsRow[0],settingsRow[1])+20);
+   int quoteMin=UIWidth("AUTO EXECUTION")+UIWidth("Bid: "+bid)+UIWidth("Ask: "+ask)+42;
+   int minW=(int)MathMax(leftHead+UIWidth(clock)+gap,(int)MathMax(settingsRow[0],settingsRow[1])+20);
    minW=(int)MathMax(minW,planTotal+2*gap);
-   minW=(int)MathMax(minW,diaryMin+autoLead+120+gap);
+   minW=(int)MathMax(minW,diaryMin+(int)MathMax(autoLead+120,quoteMin)+gap);
    int inner=minW;
    int panelWidth=inner+2*pad;
-   int diaryW=(int)MathMax(diaryMin,(inner-gap)*38/100),autoW=inner-gap-diaryW;
+   int diaryW=(int)MathMin((int)MathMax(diaryMin,(inner-gap)*38/100),inner-gap-quoteMin),autoW=inner-gap-diaryW;
    statW=(int)MathMax(statW,(diaryW-tfW-20)/8);
    int readW[7]; string cols[7]={"TF","GT","CT","ST","RG","PT","SC"}; int sum=0;
    for(int c=0;c<7;c++)
@@ -495,7 +570,7 @@ void UpdatePanel()
       { string val=""; if(c==0) val=tf[i]; else UIReadingField(readings[i],cols[c],val); readW[c]=(int)MathMax(readW[c],UIWidth(val)+14); }
       sum+=readW[c];
    }
-   if(sum>inner-20) { inner=sum+20; panelWidth=inner+2*pad; diaryW=(int)MathMax(diaryMin,(inner-gap)*38/100); autoW=inner-gap-diaryW; statW=(int)MathMax(statW,(diaryW-tfW-20)/8); }
+   if(sum>inner-20) { inner=sum+20; panelWidth=inner+2*pad; diaryW=(int)MathMin((int)MathMax(diaryMin,(inner-gap)*38/100),inner-gap-quoteMin); autoW=inner-gap-diaryW; statW=(int)MathMax(statW,(diaryW-tfW-20)/8); }
    int spare=inner-20-sum;
    for(int c=0;c<7;c++) readW[c]+=spare/7+(c<spare%7?1:0);
    int cardW[3],planSpare=inner-2*gap-planTotal;
@@ -504,14 +579,15 @@ void UpdatePanel()
    int cashExtra=0;
    if(!inlineCash) for(int i=0;i<3;i++)
    {
-      cashExtra=(int)MathMax(cashExtra,UIWrappedRows(plan[i].slCash,planCol[i][2]-12,UI_SIZE-2));
-      cashExtra=(int)MathMax(cashExtra,UIWrappedRows(plan[i].tpCash,planCol[i][3]-12,UI_SIZE-2));
+      cashExtra=(int)MathMax(cashExtra,UIWrappedRows(plan[i].slCash,planCol[i][2]-8,moneySize));
+      cashExtra=(int)MathMax(cashExtra,UIWrappedRows(plan[i].tpCash,planCol[i][3]-8,moneySize));
    }
-   int readRows[3],readTotal=0,planNoteRows=0,autoRows[3],autoTotal=0,diaryRows[3],diaryTotal=2,detailTotal=0;
+   int readRows[3],readTotal=0,planNoteRows[3],distanceRows[3],autoRows[3],autoTotal=0,diaryRows[3],diaryTotal=2,detailTotal=0;
    for(int i=0;i<3;i++)
    {
       readRows[i]=readingOK[i]?1:(int)MathMax(1,UIWrappedRows(readings[i],inner-20)); readTotal+=readRows[i];
-      planNoteRows=(int)MathMax(planNoteRows,UIWrappedRows(plan[i].notes,cardW[i]-20));
+      planNoteRows[i]=UIWrappedRows(plan[i].notes,cardW[i]-20);
+      distanceRows[i]=UIWrappedRows(planDistance[i],cardW[i]-20);
       autoRows[i]=UIAutoFlow(autos[i],i,0,0,autoW,autoLead,step,false,""); autoTotal+=autoRows[i]*step+4;
       diaryRows[i]=statsOK[i]?1:(int)MathMax(1,UIWrappedRows(diaries[i],diaryW-20)); diaryTotal+=diaryRows[i];
       if(InpShowDetails) detailTotal+=UIWrappedRows(details[i],diaryW-20);
@@ -519,7 +595,13 @@ void UpdatePanel()
    int headerH=step+6,marketY=y+headerH,settingsY=marketY+marketRows*step+gap;
    int settingsH=(3+timerRows)*step+10,readTitleY=settingsY+settingsH+gap,readHeaderY=readTitleY+step;
    int readY=readHeaderY+step,planTitleY=readY+readTotal*step+gap,cardsY=planTitleY+step;
-   int cardH=(3+cashExtra+planNoteRows)*step+12, bottomTitleY=cardsY+cardH+gap,bottomY=bottomTitleY+step;
+   int cardH[3],maxCardH=0;
+   for(int i=0;i<3;i++)
+   {
+      cardH[i]=compactPlan[i]?step+8:(3+cashExtra+planNoteRows[i]+distanceRows[i])*step+12;
+      maxCardH=(int)MathMax(maxCardH,cardH[i]);
+   }
+   int bottomTitleY=cardsY+maxCardH+gap,bottomY=bottomTitleY+step;
    int bottomH=(int)MathMax(autoTotal+4,(diaryTotal+detailTotal)*step+12);
    int panelHeight=bottomY-UI_Y+bottomH+pad;
 
@@ -531,9 +613,9 @@ void UpdatePanel()
    UIBox("brand",bx,y-2,brandW,step,UI_BADGE,UI_BORDER);
    UIBox("type",bx+brandW+symbolW,y-2,typeW,step,UI_BADGE,UI_BORDER);
    UIBox("marketState",bx+brandW+symbolW+typeW+5,y-2,stateW,step,UIChipFill(state),UI_BORDER);
-   int quoteX=x+inner-rightHead;
-   UIBox("bidBox",quoteX,y-2,UIWidth("Bid: "+bid)+10,step,UI_SURFACE,UI_BORDER);
-   UIBox("askBox",quoteX+UIWidth("Bid: "+bid)+16,y-2,UIWidth("Ask: "+ask)+10,step,UI_SURFACE,UI_BORDER);
+   int quoteX=x+UIWidth("AUTO EXECUTION")+12;
+   UIBox("bidBox",quoteX,bottomTitleY-2,UIWidth("Bid: "+bid)+10,step,UI_SURFACE,UI_BORDER);
+   UIBox("askBox",quoteX+UIWidth("Bid: "+bid)+16,bottomTitleY-2,UIWidth("Ask: "+ask)+10,step,UI_SURFACE,UI_BORDER);
    int settingX[9],badgeX[15],sx=x+10;
    for(int g=0;g<9;g++)
    {
@@ -574,7 +656,7 @@ void UpdatePanel()
    {
       string n=IntegerToString(i); cardX[i]=nextCardX; nextCardX+=cardW[i]+gap;
       color planBorder=plan[i].signal=="BUY"?UI_GREEN:(plan[i].signal=="SELL"?UI_RED:UI_BORDER);
-      UIBox("card"+n,cardX[i],cardsY,cardW[i],cardH,UI_SURFACE,planBorder);
+      UIBox("card"+n,cardX[i],cardsY,cardW[i],cardH[i],UI_SURFACE,planBorder);
       UIBox("cardTF"+n,cardX[i]+6,cardsY+4,tfW-6,step,UI_BADGE,UI_BORDER);
       int sigX=cardX[i]+tfW+6,sigW=UIWidth(plan[i].signal)+10,styleW=UIWidth(plan[i].style)+10;
       UIBox("cardSignal"+n,sigX,cardsY+4,sigW,step,plan[i].signal=="NONE" || plan[i].signal=="WAIT"?UI_SURFACE:UIChipFill(plan[i].signal),UI_SURFACE);
@@ -583,8 +665,10 @@ void UpdatePanel()
       int colX=cardX[i]+4;
       for(int c=0;c<4;c++)
       {
+         string cell="cardCell"+n+"_"+IntegerToString(c);
          int cw=c==3?cardX[i]+cardW[i]-4-colX:planCol[i][c];
-         UIBox("cardCell"+n+"_"+IntegerToString(c),colX,cardsY+step+7,cw,(2+cashExtra)*step,UI_SURFACE,plan[i].entry==""?UI_SURFACE:UI_BORDER);
+         if(compactPlan[i]) ObjectDelete(0,UI_PREFIX+cell);
+         else UIBox(cell,colX,cardsY+step+7,cw,(2+cashExtra)*step,UI_SURFACE,plan[i].entry==""?UI_SURFACE:UI_BORDER);
          colX+=cw;
       }
    }
@@ -610,9 +694,9 @@ void UpdatePanel()
    UIText("symbol",bx+brandW+4,y,g_symbol,clrWhite,UI_SIZE+2);
    UIText("typeText",bx+brandW+symbolW+5,y,g_type,clrSilver,UI_SIZE);
    UIText("stateText",bx+brandW+symbolW+typeW+10,y,state,stateInk,UI_SIZE);
-   UIText("bidText",quoteX+5,y,"Bid: "+bid,clrWhite,UI_SIZE);
-   UIText("askText",quoteX+UIWidth("Bid: "+bid)+21,y,"Ask: "+ask,clrWhite,UI_SIZE);
-   UIText("clock",quoteX+UIWidth("Bid: "+bid)+UIWidth("Ask: "+ask)+32,y,clock,clrWhite,UI_SIZE);
+   UIText("bidText",quoteX+5,bottomTitleY,"Bid: "+bid,clrWhite,UI_SIZE);
+   UIText("askText",quoteX+UIWidth("Bid: "+bid)+21,bottomTitleY,"Ask: "+ask,clrWhite,UI_SIZE);
+   UIText("clock",x+inner-UIWidth(clock),y,clock,clrWhite,UI_SIZE);
    UIWrapped("marketDetail",x,marketY,g_marketDetail,inner,step,clrSilver,"",g_uiMarketNotes);
    UIText("settingsTitle",x+10,settingsY+3,"SETTINGS",UI_MUTED,UI_SIZE);
    string settingsTip="Input settings only. Allow Against Trend controls alignment, not whether a timeframe is enabled. SL Placement OFF sends new orders without a broker stop loss. Other trading and broker rules still apply.";
@@ -643,16 +727,16 @@ void UpdatePanel()
       rx+=readW[c];
    }
    int yy=readY;
-   string planTip="Frozen trading plan, not necessarily the broker order. If SL placement is off, the planned SL is a sizing reference, not a protective stop.";
+   string planTip="Frozen trading plan, not necessarily the broker order. SL and TP amounts are estimates in account currency. If SL placement is off, the planned SL is a sizing reference, not a protective stop. TP distance is in price units from the current BUY Bid or SELL Ask; negative means the target was passed. A pending plan is not a fill.";
    for(int i=0;i<3;i++)
    {
       string n=IntegerToString(i);
       UIWrapped("readFallback"+n+"_",x+10,yy,readingOK[i]?"":readings[i],inner-20,step,clrSilver,"",g_uiReadingNotes[i]); yy+=readRows[i]*step;
       UIText("cardTFText"+n,cardX[i]+10,cardsY+6,plan[i].recognized?tf[i]:"",clrWhite,UI_SIZE,planTip);
-      bool idle=plan[i].signal=="NONE" || plan[i].signal=="WAIT";
+      bool idle=plan[i].signal=="WAIT";
       int sigX=cardX[i]+tfW+11;
       if(idle) sigX=cardX[i]+(cardW[i]-UIWidth(plan[i].signal,UI_SIZE+2))/2;
-      int sigY=idle?cardsY+(cardH-step)/2:cardsY+6;
+      int sigY=idle?cardsY+(cardH[i]-step)/2:cardsY+6;
       UIText("cardSignalText"+n,sigX,sigY,plan[i].signal,UIValueColor(plan[i].signal),idle?UI_SIZE+2:UI_SIZE,planTip);
       int styleX=cardX[i]+tfW+6+UIWidth(plan[i].signal)+12;
       UIText("cardStyleText"+n,styleX+5,cardsY+6,plan[i].style,clrWhite,UI_SIZE,planTip);
@@ -663,23 +747,25 @@ void UpdatePanel()
       for(int c=0;c<4;c++)
       {
          string id=n+"_"+IntegerToString(c);
-         UIText("planHeading"+id,colX,cardsY+step+9,plan[i].entry==""?"":planHead[c],UI_MUTED,UI_SIZE,planTip);
-         UIText("planValue"+id,colX,cardsY+2*step+9,data[c],clrWhite,UI_SIZE,planTip);
+         UIText("planHeading"+id,colX,cardsY+step+9,plan[i].entry==""?"":planHead[c],UI_MUTED,planSize,planTip);
+         UIText("planValue"+id,colX,cardsY+2*step+9,data[c],clrWhite,planSize,planTip);
          if(c==2 || c==3)
          {
             string money=c==2?plan[i].slCash:plan[i].tpCash;
-            UIText("planMoney"+id,colX+UIWidth(data[c])+4,cardsY+2*step+9,inlineCash?money:"",c==2?clrTomato:clrLime,UI_SIZE-2,planTip);
-            UIWrapped("planMoneyRows"+id+"_",colX,cardsY+3*step+9,inlineCash?"":money,planCol[i][c]-12,step,c==2?clrTomato:clrLime,planTip,g_uiCashRows[i][c-2],UI_SIZE-2);
+            UIText("planMoney"+id,colX+UIWidth(data[c],planSize)+4,cardsY+2*step+9,inlineCash?money:"",c==2?clrTomato:clrLime,moneySize,planTip);
+            UIWrapped("planMoneyRows"+id+"_",colX,cardsY+3*step+9,inlineCash?"":money,planCol[i][c]-8,step,c==2?clrTomato:clrLime,planTip,g_uiCashRows[i][c-2],moneySize);
          }
          colX+=planCol[i][c];
       }
       UIWrapped("planNote"+n+"_",cardX[i]+10,cardsY+(3+cashExtra)*step+9,plan[i].notes,cardW[i]-20,step,clrOrange,planTip,g_uiPlanNotes[i]);
+      UIWrapped("planDistance"+n+"_",cardX[i]+10,cardsY+(3+cashExtra+planNoteRows[i])*step+9,planDistance[i],cardW[i]-20,step,clrSilver,planTip,g_uiPlanDistances[i]);
    }
    autoY=bottomY+6;
    for(int i=0;i<3;i++)
    {
       string n=IntegerToString(i),tip=P4Tooltip(i),mode=UIPart(autos[i],1);
       bool normal=(UIPart(autos[i],0)==tf[i] && (mode=="Auto: ON" || mode=="Auto: OFF"));
+      if(StringFind(autos[i]," | TP distance (price): ")>=0) tip+=" TP distance is from the current BUY Bid or SELL Ask to the broker TP, in price units; negative means passed. A pending order is not a fill.";
       UIText("autoTFText"+n,x+9,autoY,normal?tf[i]:"",clrWhite,UI_SIZE,tip);
       UIText("autoKey"+n,x+tfW+2,autoY,normal?"Auto":"",clrSilver,UI_SIZE,tip);
       UIText("autoModeText"+n,x+tfW+UIWidth("Auto")+15,autoY,normal?UIAfter(mode,"Auto: "):"",clrWhite,UI_SIZE,tip);

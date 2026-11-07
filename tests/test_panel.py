@@ -15,6 +15,7 @@ panel_cpp = re.sub(r"C'(\d+),(\d+),(\d+)'", lambda m: str(int(m[1]) + 256*int(m[
 stubs = r'''
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -67,10 +68,13 @@ enum MARKET_STATE {MARKET_OPEN,MARKET_CLOSED,MARKET_STALE,MARKET_UNKNOWN,MARKET_
 MARKET_STATE g_marketState=MARKET_OPEN; datetime g_nextOpen=200, now=100;
 datetime ServerNow(){return now;} void UpdateState(datetime){} bool ChartSupported(){return _Period==5||_Period==15||_Period==30;}
 string FormatClock(datetime t){return t==100?"2026.11.05 11:45:53":"2026.11.06 08:00:00";}
-struct MqlTick {double bid=1.12194,ask=1.12202;}; bool SymbolInfoTick(string,MqlTick &q){q=MqlTick{};return true;}
+struct MqlTick {double bid=1.12194,ask=1.12202;}; MqlTick quote; bool hasQuote=true,quoteFresh=true;
+bool SymbolInfoTick(string,MqlTick &q){q=quote;return hasQuote;} bool P4FreshQuote(const MqlTick&){return quoteFresh;}
 long SymbolInfoInteger(string,int){return 5;} long TerminalInfoInteger(int){return 96;} long ChartGetInteger(int,int,int){return chartWidth;}
 string DoubleToString(double v,int digits){ostringstream o;o<<fixed<<setprecision(digits)<<v;return o.str();}
 string EnumToString(int){return "PERIOD_H1";} string IntegerToString(int x){return to_string(x);}
+double StringToDouble(const string &s){return strtod(s.c_str(),nullptr);} bool MathIsValidNumber(double v){return isfinite(v);}
+int StringGetCharacter(const string &s,int i){return (unsigned char)s.at(i);}
 int StringLen(const string &s){return int(s.size());}
 int StringFind(const string &s,const string &v,int start=0){auto p=s.find(v,start);return p==string::npos?-1:int(p);}
 string StringSubstr(const string &s,int start,int len=-1){if(start>=int(s.size()))return "";return s.substr(start,len<0?string::npos:size_t(len));}
@@ -86,7 +90,7 @@ bool ObjectSetString(int,string n,int prop,string v){auto &o=objects[n];if(prop=
 bool ObjectDelete(int,string n){objects.erase(n);return true;}
 void ObjectsDeleteAll(int,string prefix){clearCount++;for(auto it=objects.begin();it!=objects.end();)if(it->first.find(prefix)==0)it=objects.erase(it);else ++it;}
 void ChartRedraw(){}
-void P2Update();
+int p2Updates=0;void P2Update();
 string lanes[3]={"M5 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: ~8b | SC: -3/3 (33%L)","M15 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: 0b+ | SC: -3/3 (50%L)","M30 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~8b | SC: -3/3 (50%L)"};
 string plans[3]={"M5 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12306 (-1.10 USD) | TP: 1.12135 (+0.61 USD)","M15 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12367 (-1.71 USD) | TP: 1.11999 (+1.97 USD)","M30 | Signal: SELL | Volume: OK | MARKET Entry: 1.12194 | Lot: 0.01 | SL: 1.12336 (-1.42 USD) | TP: 1.12136 (+0.58 USD)"};
 string autos[3]={"M5 | Auto: ON | SELL OPEN | Entry 1.12204 | Lot 0.01 | SL 1.12306 (-1.02 USD) | TP 1.12148 (+0.56 USD)","M15 | Auto: ON | SELL OPEN | Entry 1.12196 | Lot 0.01 | SL -- (-- USD) | TP 1.11999 (+1.97 USD) | Position NO SL (unprotected)","M30 | Auto: ON | SELL OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)"};
@@ -101,10 +105,13 @@ string AutoText(int lane){string s;for(int j=0;j<g_uiAutoParts[lane];j++){if(j)s
 string NoSpaces(string s){s.erase(remove(s.begin(),s.end(),' '),s.end());return s;}
 '''
 # AutoText references module globals and is appended after the module.
-start=stubs.index('string AutoText('); auto_helper='void P2Update(){for(int i=0;i<3;i++) g_uiReadings[i]=lanes[i];}\n'+stubs[start:];stubs=stubs[:start]
+start=stubs.index('string AutoText('); auto_helper='void P2Update(){p2Updates++;for(int i=0;i<3;i++) g_uiReadings[i]=lanes[i];}\n'+stubs[start:];stubs=stubs[:start]
 main = r'''
 int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL "<<msg<<"\n";fails++;}};
  check(UIFormatCountdown(false,false,0,0)=="--" && UIFormatCountdown(true,true,-1,4)=="past est." && UIFormatCountdown(false,true,-1,4)=="0b+","countdown formatting belongs to panel");
+ check(UITPDistance("BUY","1.12500",true,quote,5)=="0.00306" && UITPDistance("SELL","1.12000",true,quote,5)=="0.00202","TP distance uses BUY Bid and SELL Ask in price units");
+ check(UITPDistance("BUY","1.10000",true,quote,5)=="-0.02194" && UITPDistance("SELL","1.13000",true,quote,5)=="-0.00798","negative distance means TP has passed");
+ check(UITPDistance("BUY","--",true,quote,5)=="--" && UITPDistance("BUY","1.25garbage",true,quote,5)=="--" && UITPDistance("SELL","1.25",false,quote,5)=="--","missing, malformed and stale TP data show unavailable");
  UISetReadings(0,1,-1,2,"MIXED","~8b",3,"33%L");
  check(P2Line(0)=="M5 | GT: UP | CT: DOWN | ST: CONFLICT | RG: MIXED | PT: ~8b | SC: +3/3 (33%L)","reading formatting belongs to panel");
  UISetReadings(1,-1,P2_WAIT,P2_WAIT,"WAIT","--",P2_WAIT,"");
@@ -112,11 +119,18 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  UIClearReading(0);check(P2Line(0)=="M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT","cleared reading fallback");
  BuildPanel(); Obj bg=objects["MT_bg"];
  check(bg.x+bg.w<=chartWidth && bg.y+bg.h<=750,"screenshot-sized chart fits normal active three-lane panel");
- check(Label("symbol")=="EURUSDm" && Label("stateText")=="OPEN" && Label("bidText")=="Bid: 1.12194" && Label("askText")=="Ask: 1.12202","live market header");
+ check(Label("symbol")=="EURUSDm" && Label("stateText")=="OPEN" && Label("bidText")=="Bid: 1.12194" && Label("askText")=="Ask: 1.12202","live market and quote values");
+ check(objects["MT_bidText_0"].y==objects["MT_autoTitle_0"].y && objects["MT_askText_0"].y==objects["MT_autoTitle_0"].y && objects["MT_bidText_0"].x>objects["MT_autoTitle_0"].x && objects["MT_askBox"].x+objects["MT_askBox"].w<objects["MT_diaryTitle_0"].x,"bid and ask appear beside auto execution without crossing into statistics");
+ check(objects["MT_clock_0"].y==objects["MT_symbol_0"].y,"server clock remains in top header");
  check(Label("settingKey1")=="Allow Against Trend" && Label("settingValue1")=="M5 ON" && Label("settingValue2")=="M15 ON" && Label("settingValue3")=="M30 ON","separate timeframe setting chips");
  check(Label("settingValue7")=="M5 AUTO" && Label("settingValue8")=="M15 AUTO" && Label("settingValue9")=="M30 AUTO" && Label("settingValue11")=="M5 85%" && Label("settingValue13")=="M30 85%","trend and TP chips");
  check(Label("settingValue6")=="OFF" && Label("settingValue14")=="OFF","SL placement and timer inputs");
  check(Label("reading0_1")=="DOWN" && Label("reading2_1")=="FLAT" && Label("reading2_3")=="MIXED" && Label("reading2_6")=="-3/3 (50%L)","reading matrix");
+ check(Wrapped("planDistance0_")=="TP distance (price): 0.00067" && AutoText(0).find("TP distance (price): 0.00054")!=string::npos,"plan and broker TP distances use their own targets");
+ quoteFresh=false;UpdatePanel();check(Wrapped("planDistance0_")=="TP distance (price): --" && AutoText(0).find("TP distance (price): --")!=string::npos,"stale quote does not produce live distance");
+ quoteFresh=true;UpdatePanel();check(Wrapped("planDistance0_")=="TP distance (price): 0.00067","fresh quote restores plan distance");
+ hasQuote=false;UpdatePanel();check(Label("bidText")=="Bid: --" && Label("askText")=="Ask: --" && Wrapped("planDistance0_")=="TP distance (price): --","missing quote remains unavailable without inventing distance");
+ hasQuote=true;UpdatePanel();
  for(int i=0;i<3;i++){
   string n=to_string(i);check(Label("cardSignalText"+n)=="SELL" && Label("cardStyleText"+n)=="MARKET" && Label("cardVolumeText"+n)=="VOL OK","plan header with signal, style, volume");
   check(Label("planHeading"+n+"_0")=="Entry" && Label("planHeading"+n+"_1")=="Lot" && Label("planHeading"+n+"_2")=="SL" && Label("planHeading"+n+"_3")=="TP","four plan field columns");
@@ -124,7 +138,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   check(Label("autoTFText"+n)==UIPart(autos[i],0) && Label("autoModeText"+n)=="ON" && Label("autoTradeText"+n)=="SELL" && Label("autoStyleText"+n)=="OPEN","auto direction and broker status badges");
   string text=AutoText(i);
   for(int j=3;j<UIPartCount(autos[i]);j++) check(text.find(UIPart(autos[i],j))!=string::npos,"auto field and note retained");
-  for(int j=0;j<g_uiAutoParts[i];j++)check(objects["MT_autoText"+n+"_"+to_string(j)+"_0"].tip==tips[i],"auto tooltip on every field");
+  for(int j=0;j<g_uiAutoParts[i];j++)check(objects["MT_autoText"+n+"_"+to_string(j)+"_0"].tip.find(tips[i])==0,"auto tooltip on every field");
  }
  check(Label("planValue0_0")=="1.12196" && Label("planValue0_1")=="0.01" && Label("planValue0_2")=="1.12306" && Wrapped("planMoneyRows0_2_")=="(-1.10 USD)" && Label("planValue0_3")=="1.12135" && Wrapped("planMoneyRows0_3_")=="(+0.61 USD)","full plan levels and amounts, with separate SL and TP");
  check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL (unprotected)")!=string::npos,"broker no-SL warning retained");
@@ -156,6 +170,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   }
  };
  checkSettings();check(objects["MT_settingKey0_0"].size==9,"narrow chart uses compact readable setting font");
+ for(int g:{0,1,2,3,5,6,7}) {int end=(g<5?g==0?0:g==1?3:g==2?4:5:g==5?9:g==6?10:13); Obj last=objects["MT_settingBadge"+to_string(end)],next=objects["MT_settingKey"+to_string(g+1)+"_0"];check(next.x-(last.x+last.w)>=12,"settings groups retain visible spacing on a compact chart");}
  chartWidth=1290;UpdatePanel();checkSettings();
  check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue14_0"].size==11,"screenshot-width chart uses larger setting font");
  check(objects["MT_bg"].x+objects["MT_bg"].w<=chartWidth,"compact panel fits a wide chart");
@@ -172,16 +187,20 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  int threeActiveWidth=objects["MT_bg"].w;
  string savedPlan0=plans[0],savedPlan2=plans[2];plans[0]="M5 | Signal: NONE";plans[2]="M30 | Signal: NONE";UpdatePanel();checkSettings();
  check(objects["MT_bg"].w<threeActiveWidth && objects["MT_bg"].w<chartWidth-100,"one-active plan layout keeps the panel compact on a wide chart");
- check(Label("cardSignalText0")=="NONE" && Label("cardSignalText2")=="NONE" && Label("planValue0_0").empty() && Label("planMoney0_2").empty(),"idle cards center NONE and clear old plan data");
+ check(Label("cardSignalText0")=="NONE" && Label("cardSignalText2")=="NONE" && Label("planValue0_0").empty() && Label("planMoney0_2").empty(),"idle cards show NONE and clear old plan data");
+ check(objects["MT_card0"].h<objects["MT_card1"].h && objects["MT_card2"].h<objects["MT_card1"].h && objects["MT_cardSignalText0_0"].y==objects["MT_cardTFText0_0"].y && !objects.count("MT_cardCell0_0"),"NONE plans collapse to a single row alongside active plans");
  check(objects["MT_card1"].w>objects["MT_card0"].w && objects["MT_card1"].w>objects["MT_card2"].w && Label("planMoney1_2")=="(-1.71 USD)" && Label("planMoney1_3")=="(+1.97 USD)","active card has room for live prices and inline SL/TP amounts");
  check(objects["MT_card0"].x+objects["MT_card0"].w<objects["MT_card1"].x && objects["MT_card1"].x+objects["MT_card1"].w<objects["MT_card2"].x && objects["MT_card2"].x+objects["MT_card2"].w==objects["MT_settings"].x+objects["MT_settings"].w,"three cards are separated and span the panel");
+ plans[1]="M15 | Signal: NONE";UpdatePanel();
+ check(objects["MT_card0"].h==objects["MT_card1"].h && objects["MT_card1"].h==objects["MT_card2"].h && objects["MT_autoTitle_0"].y-objects["MT_card0"].y<=objects["MT_card0"].h+10,"all NONE plans collapse the section height");
+ plans[1]="M15 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12367 (-1.71 USD) | TP: 1.11999 (+1.97 USD)";UpdatePanel();
  plans[0]=savedPlan0;plans[2]=savedPlan2;UpdatePanel();
  against[1]=false; choices[0]=P3_FOLLOW_CT;percentages[1]=0;InpAutoTrading=false;
  timer="Timer: CLOCK UNAVAILABLE | New entries blocked";UpdatePanel();checkSettings();
  check(Label("settingValue0")=="OFF" && Label("settingValue2")=="M15 OFF" && Label("settingValue7")=="M5 CT" && Label("settingValue12")=="M15 INVALID" && Label("settingValue14")=="CLOCK UNAVAILABLE" && Wrapped("timerDetail")==timer,"settings display actual values and retain complete timer warning");
  against[1]=true;choices[0]=P3_AUTO;percentages[1]=85;InpAutoTrading=true;timer="Timer: OFF";
  chartWidth=850;UpdatePanel();checkSettings();check(Wrapped("timerDetail").empty(),"stale timer detail cleared after resize and refresh");
- check(Label("planMoney0_2").empty() && Wrapped("planMoneyRows0_2_")=="(-1.10 USD)","narrow fallback wraps complete cash and clears inline amount");
+ check(Label("planMoney0_2").empty() && Wrapped("planMoneyRows0_2_")=="(-1.10 USD)" && g_uiCashRows[0][0]==1,"narrow fallback keeps normal USD amounts together on one line");
  string unusualCash="(-123.45 "+string(100,'X')+")", savedPlan=plans[0];
  plans[0]="M5 | Signal: BUY | MARKET Entry: 1.20000 | Lot: 0.01 | SL: 1.10000 "+unusualCash+" | TP: 1.30000 (+2.00 USD) | Bars: Last/unknown proxy";
  UpdatePanel();check(Wrapped("planMoneyRows0_2_")==unusualCash && Wrapped("planNote0_")=="Bars: Last/unknown proxy","long cash and plan warning survive narrow layout");
@@ -194,12 +213,20 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  autos[2]="M30 | Auto: ON | SELL LIMIT | Entry 1.12239 (distance 0.00100) | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)";UpdatePanel();
  check(AutoText(0).find("no active order")!=string::npos && AutoText(0).find("No qualifying signal")!=string::npos,"idle broker row and real blocker displayed");
  check(Label("autoTradeText2")=="SELL" && Label("autoStyleText2")=="LIMIT" && NoSpaces(AutoText(2)).find(NoSpaces("Entry 1.12239 (distance 0.00100)"))!=string::npos,"broker limit entry and distance retained");
+ autos[2]="M30 | Auto: ON | TIMER PAUSED | BUY OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12357 (+0.82 USD)";UpdatePanel();
+ check(Label("autoTradeText2")=="BUY" && Label("autoStyleText2")=="OPEN" && AutoText(2).find("TIMER PAUSED")!=string::npos && AutoText(2).find("TP distance (price): 0.00163")!=string::npos,"timer-paused open trade keeps its badges, pause and live TP distance");
  plans[1]="M15 | Signal: NONE";autos[1]="M15 | Auto: OFF";UpdatePanel();
  check(Label("cardSignalText1")=="NONE" && Label("cardStyleText1").empty() && Label("planValue1_2").empty() && Label("autoModeText1")=="OFF" && Label("autoTradeText1").empty() && AutoText(1).empty(),"stale plan and auto fields cleared");
+ string prior0=plans[0],prior2=plans[2];int priorWidth=chartWidth;chartWidth=980;plans[0]="M5 | Signal: NONE";plans[2]="M30 | Signal: BUY | Entry: -- | Plan data unavailable";UpdatePanel();
+ check(Label("cardSignalText0")=="NONE" && Label("cardSignalText1")=="NONE" && Label("cardSignalText2")=="BUY" && Wrapped("planNote2_")=="Plan data unavailable" && Wrapped("planDistance2_")=="TP distance (price): --","screenshot-like unavailable BUY retains clear warning and does not invent TP distance");
+ check(objects["MT_card0"].h<objects["MT_card2"].h && objects["MT_card1"].h<objects["MT_card2"].h && objects["MT_bg"].x+objects["MT_bg"].w<=chartWidth,"screenshot-like plans fit and NONE rows collapse");
+ plans[0]=prior0;plans[2]=prior2;chartWidth=priorWidth;UpdatePanel();
  plans[1]="M15 | Signal: BUY | Entry: -- | Plan data unavailable | Bars: Last/unknown proxy";UpdatePanel();
  check(Label("planValue1_0")=="--" && Wrapped("planNote1_").find("Plan data unavailable")!=string::npos && Wrapped("planNote1_").find("Bars: Last/unknown proxy")!=string::npos,"plan unavailable and proxy warnings visible");
  plans[1]="M15 | Signal: SELL | LIMIT Entry: 1.20000 | Lot: -- | SL: 1.20050 | TP: 1.19900 | Amounts unavailable";UpdatePanel();
  check(Label("cardStyleText1")=="LIMIT" && Wrapped("planNote1_")=="Amounts unavailable","limit style and unavailable amounts");
+ plans[1]="M15 | Signal: SELL | MARKET Entry: 1.20000 | Lot: 0.01 | SL: 1.21000 (-25.00 EUR) | TP: 1.10000 (+30.00 EUR)";UpdatePanel();
+ check((Label("planMoney1_2")+Wrapped("planMoneyRows1_2_"))=="(-25.00 EUR)" && (Label("planMoney1_3")+Wrapped("planMoneyRows1_3_"))=="(+30.00 EUR)","plan amounts retain actual account currency rather than assuming USD");
  autos[1]="M15 | Auto: OFF | REVIEW | "+string(240,'z')+" | NO SL (unprotected)";tips[1]="updated review tooltip";UpdatePanel();
  check(Label("autoModeText1")=="OFF" && AutoText(1).find("REVIEW")!=string::npos && AutoText(1).find("NO SL (unprotected)")!=string::npos && NoSpaces(AutoText(1)).find(string(240,'z'))!=string::npos,"long REVIEW and OFF remain visible");
  int tall=objects["MT_bg"].h;autos[1]="M15 | Auto: OFF";UpdatePanel();check(AutoText(1).empty() && objects["MT_bg"].h<tall,"long auto fields cleared and height shrinks");
@@ -210,8 +237,15 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  diaries[1]="M15 | Trade diary: clock unavailable";UpdatePanel();check(Wrapped("diaryFallback1_")==diaries[1] && Label("todayVal1_0").empty(),"unavailable diary not treated as zero");
  lanes[0]="M5 | unexpected "+string(180,'x');plans[0]="unexpected plan "+string(120,'p');autos[0]="unexpected order "+string(100,'o');UpdatePanel();
  check(Wrapped("readFallback0_")==lanes[0] && Wrapped("planNote0_")==plans[0] && AutoText(0).find("unexpected order")!=string::npos,"unexpected formats preserved");
+ g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');int beforeClosed=p2Updates;UpdatePanel();
+ check(p2Updates==beforeClosed+1,"closed presentation still refreshes readings");
+ check(Label("stateText")=="close" && Label("clock").empty() && Wrapped("marketDetail")==g_marketDetail,"collapsed view keeps the complete closed-market detail");
+ check(!objects.count("MT_settings") && !objects.count("MT_card0") && !objects.count("MT_autoRow0") && !objects.count("MT_diary") && !objects.count("MT_bidBox"),"market closed removes every expanded panel section");
+ int closedHeight=objects["MT_bg"].h;UpdatePanel();check(objects["MT_bg"].h==closedHeight && p2Updates==beforeClosed+2,"closed view refreshes without losing status");
+ g_marketDetail="MARKET CLOSED - next open Sun 2026.11.08 22:05:00 server (in 1d 18h 43m)";UpdatePanel();
+ check(Label("closedDetail")==g_marketDetail && Wrapped("marketDetail").empty() && objects["MT_closedDetail_0"].y==objects["MT_closedDetail_1"].y && objects["MT_bg"].h<closedHeight,"normal closed notice remains one complete line with segmented labels");
+ g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();check(objects.count("MT_settings") && objects.count("MT_card0") && objects.count("MT_autoRow0") && Label("marketDetail0").empty(),"market reopening restores all sections and clears closed notice");
  g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');UpdatePanel();
- check(Label("stateText")=="close" && Label("clock").find("Open at")!=string::npos && Wrapped("marketDetail")==g_marketDetail,"full closed-market detail");
  _Period=60;UpdatePanel();check(Label("unsupportedNotice")=="Incompatible chart. Switch to M5/M15/M30." && !objects.count("MT_card0") && !objects.count("MT_settings"),"unsupported cleanup and notice");
  _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";lanes[0]="M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT";plans[0]="M5 | Signal: WAIT";autos[0]="M5 | Auto: OFF | Signal WAIT";UpdatePanel();
  check(Label("reading0_1")=="WAIT" && Label("cardSignalText0")=="WAIT" && AutoText(0).find("Signal WAIT")!=string::npos && Label("unsupportedNotice").empty(),"WAIT and supported restore");
