@@ -7,8 +7,7 @@ sanitizer=['-fsanitize=undefined','-fno-sanitize-recover=undefined'] if os.geten
 module=ast.parse((root/'tests/test_auto_runtime.py').read_text())
 stubs=next(ast.literal_eval(n.value) for n in module.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='stubs' for t in n.targets))
 stubs=stubs.replace('#define FILE_COMMON 8','#define FILE_CSV 128\n#define FILE_ANSI 256\n#define FILE_COMMON 8')
-stubs=stubs.replace('#define ACCOUNT_CURRENCY 9','#define ACCOUNT_CURRENCY 9\n#define ACCOUNT_SERVER 60\n#define ACCOUNT_LOGIN 61\n#define ACCOUNT_EQUITY 62\n#define ACCOUNT_BALANCE 63\n#define DEAL_TIME_MSC 64\n#define DEAL_REASON 65\n#define DEAL_PRICE 66\n#define DEAL_PROFIT 67\n#define DEAL_COMMISSION 68\n#define DEAL_SWAP 69\n#define DEAL_FEE 70\n#define DEAL_TYPE 71\n#define DEAL_REASON_TP 2\n#define DEAL_REASON_SL 3\n#define DEAL_TYPE_BUY 1\n#define DEAL_TYPE_SELL 2')
-stubs=stubs.replace('bool InpMinimumLot=false;','bool InpMinimumLot=false,InpBypassRisk=false;')
+stubs=stubs.replace('#define ACCOUNT_CURRENCY 9','#define ACCOUNT_CURRENCY 9\n#define ACCOUNT_SERVER 60\n#define ACCOUNT_LOGIN 61\n#define ACCOUNT_BALANCE 63\n#define DEAL_TIME_MSC 64\n#define DEAL_REASON 65\n#define DEAL_PRICE 66\n#define DEAL_PROFIT 67\n#define DEAL_COMMISSION 68\n#define DEAL_SWAP 69\n#define DEAL_FEE 70\n#define DEAL_TYPE 71\n#define DEAL_REASON_TP 2\n#define DEAL_REASON_SL 3\n#define DEAL_TYPE_BUY 1\n#define DEAL_TYPE_SELL 2')
 stubs=stubs.replace('struct MqlTick{double bid=100,ask=100.02;datetime time=1700000000;};','struct MqlTick{double bid=100,ask=100.02;datetime time=1700000000;long time_msc=1700000000000L;};')
 stubs=stubs.replace('datetime bar=1000;};','datetime bar=1000; bool barProxy=false;};')
 stubs=stubs.replace('struct Lane{int score=0,volumeState=-1;};','struct Lane{int score=0,volumeState=-1,gt=1,ct=1,st=1;string regime="MIXED";};')
@@ -24,7 +23,6 @@ int FileOpen(string n,int f,int){return FileOpen(n,f);}
 vector<vector<string>> csvLines;
 template<class T> string csvVal(const T& x){ostringstream s;s<<x;return s.str();}
 template<class... T> void FileWrite(int,T... values){csvLines.push_back({csvVal(values)...});}
-double AccountInfoDouble(int){return 10000;}
 bool HistoryOrderGetString(ulong id,int,string &x){if(readFailure || !history.count(id))return false;x=history[id].symbol;return true;}
 int P3TPPercentInput(int){return 85;} int P3Choice(int){return 0;} bool P3Against(int){return true;} int P3Strategy(int){return 30004;}
 '''
@@ -113,7 +111,12 @@ int main(){int f=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n
  ck(sends==2 && orders.size()==2 && g_p5.size()==2 && g_p5[1].state==1 && g_p5[1].planStop==99 && g_p5[1].brokerStop==0 && g_p5[1].stopInput==0 && g_p5[1].tpPercentInput==85,"diary distinguishes planned SL from broker no-SL pending");
  P5Close();plans[2]={1,true,false,99.9,99,101,0.05,1000};g_p3[2].score=2;P4Process(true);
  ck(sends==3 && orders.size()==3,"disabled diary does not block execution");
- P4Close();if(!f)cout<<"Trade diary and execution integration stub checks passed\n";return f?1:0;}
+ P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
+ for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
+ equity=1000;current={100.79,100.80,terminalTime};sends=0;uptime=10000;InpPlaceStopLoss=true;P5Init();P4Init();
+ plans[0]={1,true,true,100.0,99.0,102.0,0.05,1000};g_p3[0].score=3;P4Process(true);
+ ck(sends==1 && g_p5.size()==1 && MathAbs(lastRequest.volume-0.02)<1e-8 && MathAbs(g_p5[0].lot-0.02)<1e-8 && g_p5[0].planEntry==100.0 && plans[0].lot==0.05,"real diary records reduced market request lot and frozen plan prices");
+ P4Close();P5Close();if(!f)cout<<"Trade diary and execution integration stub checks passed\n";return f?1:0;}
 '''
 with tempfile.TemporaryDirectory() as t:
  p=Path(t);(p/'x.cpp').write_text(stubs+extra+kernel+runtime+auto+integration)
