@@ -78,6 +78,8 @@ bool g_uiDetailsShown=false; int g_uiDetailsW=0;
 // Lane diary detail handed from the runtime to the separate window.
 string g_uiDetailText[3]={"","",""}, g_uiDetailTF[3]={"M5","M15","M30"};
 bool g_uiDetailOK[3]={false,false,false};
+string g_uiDetailExtra[3][8];
+int g_uiDetailExtraRows[3][8],g_uiDetailStateRows[3],g_uiDetailLastRows[3],g_uiDetailWarningRows[3];
 int g_uiCashRows[3][2]={{0,0},{0,0},{0,0}};
 int g_uiMarketNotes=0, g_uiTimerNotes=0;
 
@@ -350,6 +352,12 @@ bool UIStats(const string line, const string tf, string &today, string &all)
    return(ts!="" && tw!="" && tl!="" && tb!="" && as!="" && aw!="" && al!="" && ab!="" &&
           today=="S "+ts+" W "+tw+" L "+tl+" BE "+tb && all=="S "+as+" W "+aw+" L "+al+" BE "+ab);
 }
+// Keep break-even in the diary; the compact header shows only S/W/L.
+string UIHeaderStats(const string today, const string all)
+{
+   return("T S "+UIWord(today,1)+" W "+UIWord(today,3)+" L "+UIWord(today,5)+
+          "   |   A S "+UIWord(all,1)+" W "+UIWord(all,3)+" L "+UIWord(all,5));
+}
 bool UIAutoTrade(const string line, string &direction, string &style)
 {
    int index=UIPart(line,2)=="TIMER PAUSED"?3:2;
@@ -387,6 +395,22 @@ string UIAutoTarget(const string line)
    return("");
 }
 
+// Keep the broker entry and lot beside the trade badges whenever the row
+// can fit them. Very long broker fields can still wrap without losing text.
+int UIAutoFirstWidth(const string line, int lead)
+{
+   string direction="",style="";
+   if(!UIAutoTrade(line,direction,style)) return(0);
+   int width=lead+UIWidth(direction)+UIWidth(style)+24+8;
+   for(int i=2;i<UIPartCount(line);i++)
+   {
+      string part=UIPart(line,i);
+      if(StringFind(part,"Entry ")==0 || StringFind(part,"Lot ")==0)
+         width+=UIWidth(StringSubstr(part,0,48))+10;
+   }
+   return(width);
+}
+
 // Place broker tokens across a row, wrapping as needed without abbreviating notes.
 int UIAutoFlow(const string line, int lane, int x, int y, int width, int lead, int step, bool draw, const string tip)
 {
@@ -397,11 +421,13 @@ int UIAutoFlow(const string line, int lane, int x, int y, int width, int lead, i
    int extra=trade?UIWidth(direction)+UIWidth(style)+24:0;
    int count=normal?UIPartCount(line):1, first=normal?2:0, row=0, cursor=normal?lead+extra:8, part=0;
    int tradeIndex=UIPart(line,2)=="TIMER PAUSED"?3:2;
-   for(int t=first;t<count;t++)
+   for(int pass=0;pass<(trade?2:1);pass++) for(int t=first;t<count;t++)
    {
       if(trade && t==tradeIndex) continue;
       string item=normal?UIPart(line,t):line;
       if(item=="") continue;
+      bool core=StringFind(item,"Entry ")==0 || StringFind(item,"Lot ")==0;
+      if(trade && ((pass==0 && !core) || (pass==1 && core))) continue;
       for(int pos=0;pos<StringLen(item);)
       {
          int available=width-cursor-8;
@@ -507,6 +533,11 @@ void DetailsRemove()
 {
    ObjectsDeleteAll(0,UI_DETAILS_PREFIX);
    g_uiDetailsShown=false;
+   for(int i=0;i<3;i++)
+   {
+      g_uiDetailStateRows[i]=0; g_uiDetailLastRows[i]=0; g_uiDetailWarningRows[i]=0;
+      for(int j=0;j<8;j++) g_uiDetailExtraRows[i][j]=0;
+   }
 }
 
 // Width the window needs for its longest single field, before any wrapping.
@@ -516,12 +547,8 @@ int UIDetailsNaturalWidth()
    for(int i=0;i<3;i++)
    {
       UIDetail d;
-      if(g_uiDetailOK[i]) UIReadDetail(g_uiDetailText[i],g_uiDetailTF[i],d);
-      else
-      {
-         d.state=""; d.last=""; d.net="";
-         d.warning=(g_uiDetailText[i]==""?"Trade diary unavailable":g_uiDetailText[i]);
-      }
+      UIReadDetail(g_uiDetailText[i],g_uiDetailTF[i],d);
+      for(int j=0;j<8;j++) natural=(int)MathMax(natural,2*DETAILS_PAD+UIWidth(g_uiDetailExtra[i][j])+2);
       natural=(int)MathMax(natural,DETAILS_PAD+UIWidth(d.state)+DETAILS_PAD+2);
       natural=(int)MathMax(natural,DETAILS_PAD+UIWidth("Last ")+8+UIWidth(d.last)+DETAILS_PAD+2);
       natural=(int)MathMax(natural,DETAILS_PAD+UIWidth("Net ")+8+UIWidth(d.net)+DETAILS_PAD+2);
@@ -531,12 +558,13 @@ int UIDetailsNaturalWidth()
 }
 
 // Rows one lane needs, using exactly the widths used to draw it.
-int UIDetailRows(const UIDetail &d, int inner, int stateW, int lastW)
+int UIDetailRows(const UIDetail &d, int lane, int inner, int stateW, int lastW)
 {
    int rows=(d.state==""?1:(1+UIWrappedRows(d.state,stateW)));
    if(d.last!="") rows+=UIWrappedRows(d.last,lastW);
    if(d.net!="") rows++;
    if(d.warning!="") rows+=UIWrappedRows(d.warning,inner);
+   for(int j=0;j<8;j++) if(g_uiDetailExtra[lane][j]!="") rows+=UIWrappedRows(g_uiDetailExtra[lane][j],inner);
    return(rows);
 }
 
@@ -559,12 +587,8 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step)
    for(int i=0;i<3;i++)
    {
       d[i].tf=g_uiDetailTF[i];
-      if(g_uiDetailOK[i]) UIReadDetail(g_uiDetailText[i],g_uiDetailTF[i],d[i]);
-      else
-      {
-         d[i].state=""; d[i].last=""; d[i].net=""; d[i].ok=false;
-         d[i].warning=(g_uiDetailText[i]==""?"Trade diary unavailable":g_uiDetailText[i]);
-      }
+      UIReadDetail(g_uiDetailText[i],g_uiDetailTF[i],d[i]);
+      if(g_uiDetailText[i]=="") d[i].warning="Trade diary unavailable";
    }
    // Right-side placement: whatever the chart leaves is the window's, but it
    // is never asked for more than it needs and it wraps rather than leaving
@@ -585,7 +609,7 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step)
    int rows[3],total=0;
    for(int i=0;i<3;i++)
    {
-      rows[i]=UIDetailRows(d[i],inner,stateW,lastW);
+      rows[i]=UIDetailRows(d[i],i,inner,stateW,lastW);
       total+=rows[i];
    }
 
@@ -609,20 +633,25 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step)
       if(i>0) UIBox("sep"+n,x+4,cy-3,width-8,1,UI_BORDER,UI_BORDER,UI_DETAILS_PREFIX);
       UIBox("laneTF"+n,x+DETAILS_PAD,cy-2,UIWidth("M30")+10,rowH,UI_BADGE,UI_BORDER,UI_DETAILS_PREFIX);
       UIText("laneTFText"+n,x+DETAILS_PAD+5,cy,d[i].tf,clrWhite,UI_SIZE,"",UI_DETAILS_PREFIX);
-      int used=1,previous=0;
+      int used=1;
       // Badge line, then the state summary on its own line(s).
       UIWrapped("state"+n,x+DETAILS_PAD,cy+rowH,d[i].state,stateW,rowH,
                 d[i].state==""?clrOrange:clrSilver,
-                d[i].state==""?"This lane's diary detail is unavailable.":"",previous,UI_SIZE,UI_DETAILS_PREFIX);
+                d[i].state==""?"This lane's diary detail is unavailable.":"",g_uiDetailStateRows[i],UI_SIZE,UI_DETAILS_PREFIX);
       if(d[i].state!="") used+=UIWrappedRows(d[i].state,stateW);
       if(d[i].last!="")
       {
-         int lw=UIWidth("Last ")+8; previous=0;
+         int lw=UIWidth("Last ")+8;
          UIText("lastKey"+n,x+DETAILS_PAD,cy+used*rowH,"Last",UI_MUTED,UI_SIZE,"",UI_DETAILS_PREFIX);
          UIWrapped("last"+n,x+DETAILS_PAD+lw,cy+used*rowH,d[i].last,lastW,rowH,clrWhite,
                    "Latest record in the broker-confirmed trade diary for this lane.",
-                   previous,UI_SIZE,UI_DETAILS_PREFIX);
+                   g_uiDetailLastRows[i],UI_SIZE,UI_DETAILS_PREFIX);
          used+=UIWrappedRows(d[i].last,lastW);
+      }
+      else
+      {
+         UIText("lastKey"+n,0,0,"",clrWhite,UI_SIZE,"",UI_DETAILS_PREFIX);
+         UIWrapped("last"+n,0,0,"",lastW,rowH,clrWhite,"",g_uiDetailLastRows[i],UI_SIZE,UI_DETAILS_PREFIX);
       }
       if(d[i].net!="")
       {
@@ -632,17 +661,46 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step)
                 "Net result of the latest closed record, in account currency.",UI_DETAILS_PREFIX);
          used++;
       }
-      if(d[i].warning!="")
+      else
       {
-         previous=0;
-         UIWrapped("warn"+n,x+DETAILS_PAD,cy+used*rowH,d[i].warning,inner,rowH,clrOrange,
-                   "The diary cannot provide this lane's detail; nothing is assumed.",
-                   previous,UI_SIZE,UI_DETAILS_PREFIX);
-         used+=UIWrappedRows(d[i].warning,inner);
+         UIText("netKey"+n,0,0,"",clrWhite,UI_SIZE,"",UI_DETAILS_PREFIX);
+         UIText("net"+n,0,0,"",clrWhite,UI_SIZE,"",UI_DETAILS_PREFIX);
+      }
+      UIWrapped("warn"+n,x+DETAILS_PAD,cy+used*rowH,d[i].warning,inner,rowH,clrOrange,
+                "The diary cannot provide this lane's detail; nothing is assumed.",
+                g_uiDetailWarningRows[i],UI_SIZE,UI_DETAILS_PREFIX);
+      if(d[i].warning!="") used+=UIWrappedRows(d[i].warning,inner);
+      for(int j=0;j<8;j++)
+      {
+         string text=g_uiDetailExtra[i][j];
+         UIWrapped("insight"+n+"_"+IntegerToString(j)+"_",x+DETAILS_PAD,cy+used*rowH,text,inner,rowH,
+                   j==0 && !g_uiDetailOK[i]?clrOrange:clrSilver,
+                   "Broker diary: only fully reconciled trades are results. Win rate includes break-even in the denominator; costs are commission, swap and fee on attributed deals. Final exits use the last deal reason.",
+                   g_uiDetailExtraRows[i][j],UI_SIZE,UI_DETAILS_PREFIX);
+         if(text!="") used+=UIWrappedRows(text,inner);
       }
       cy+=rows[i]*rowH;
    }
    g_uiDetailsShown=true;
+}
+
+// Refresh independently of market status: broker reconciliation can still
+// change the diary while the main display is collapsed.
+void UIRefreshDetails(datetime now)
+{
+   string tf[3]={"M5","M15","M30"};
+   for(int i=0;i<3;i++)
+   {
+      string today="",all="",summary=P5Summary(i,now);
+      g_uiDetailTF[i]=tf[i]; g_uiDetailOK[i]=UIStats(summary,tf[i],today,all);
+      g_uiDetailText[i]=P5Detail(i);
+      g_uiDetailExtra[i][0]=g_uiDetailOK[i]?"Today "+today+" | All "+all:summary;
+      P5Insights insights; P5BuildInsights(i,insights);
+      g_uiDetailExtra[i][1]=insights.totals; g_uiDetailExtra[i][2]=insights.score;
+      g_uiDetailExtra[i][3]=insights.direction; g_uiDetailExtra[i][4]=insights.style;
+      g_uiDetailExtra[i][5]=insights.recent; g_uiDetailExtra[i][6]=insights.exits;
+      g_uiDetailExtra[i][7]=insights.context;
+   }
 }
 
 void UpdatePanel()
@@ -683,7 +741,8 @@ void UpdatePanel()
       // closed; the body is collapsed, not the account's record.
       string closedStats="";
       string statToday="",statAll="";
-      if(UIStats(P5Summary(-1,now),"*",statToday,statAll)) closedStats=statToday+"   |   "+statAll;
+      if(UIStats(P5Summary(-1,now),"*",statToday,statAll)) closedStats=UIHeaderStats(statToday,statAll);
+      else closedStats="Trade statistics unavailable";
       int headerW=brandW+symbolW+typeW+stateW+UIWidth(closedStats)+20;
       int chartW=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0);
       // An open diary window keeps its column: the collapsed header wraps its
@@ -711,34 +770,38 @@ void UpdatePanel()
       // content while the main panel is collapsed. The collapsed header keeps
       // its full-width notice, so the window moves under it instead of
       // overlapping it - and returns to the panel's right side on reopening.
-      if(g_uiDetailsShown && g_uiDetailsW>0)
+      if(InpShowDetails)
       {
-         int wx=(int)MathMax(UI_X,chartW-UI_X-DETAILS_PAD-g_uiDetailsW);
+         UIRefreshDetails(now);
+         int requested=g_uiDetailsShown?g_uiDetailsW:UIDetailsNaturalWidth();
+         int wx=(int)MathMax(UI_X,chartW-UI_X-requested);
+         UpdateDetailsWindow(wx,0,0,step);
          int wy=UI_Y+2*pad+(rows+1)*step+6+gap;
          DetailsMoveTo(wx,wy);
       }
+      else if(g_uiDetailsShown) DetailsRemove();
       ChartRedraw(); return;
    }
-   string tf[3]={"M5","M15","M30"}, readings[3],planText[3],autos[3],diaries[3],today[3],all[3];
-   bool readingOK[3],statsOK[3]; UIPlan plan[3];
+   string tf[3]={"M5","M15","M30"}, readings[3],planText[3],autos[3],diaries[3];
+   bool readingOK[3]; UIPlan plan[3];
    for(int i=0;i<3;i++)
    {
       readings[i]=P2Line(i); readingOK[i]=UIReadingsValid(readings[i],tf[i]);
       planText[i]=P3PlanLine(i); UIReadPlan(planText[i],tf[i],plan[i]); autos[i]=P4Line(i);
-      diaries[i]=P5Summary(i,now); statsOK[i]=UIStats(diaries[i],tf[i],today[i],all[i]);
+      diaries[i]=P5Summary(i,now);
    }
    // TRADE STATISTICS are now one symbol-wide line in the header: today and
    // all-time across every lane. Per-lane counts live in the diary window.
    string statsLine="",statsToday="",statsAll="";
    bool statsReady=UIStats(P5Summary(-1,now),"*",statsToday,statsAll);
-   if(statsReady) statsLine=statsToday+"   |   "+statsAll;
+   if(statsReady) statsLine=UIHeaderStats(statsToday,statsAll);
    else           statsLine="Trade statistics unavailable";
    // The window's own width is known before the panel is sized, so the panel
    // yields only the room the window actually needs.
    int detailsW=0;
    if(InpShowDetails)
    {
-      for(int i=0;i<3;i++) { g_uiDetailTF[i]=tf[i]; g_uiDetailOK[i]=statsOK[i]; g_uiDetailText[i]=P5Detail(i); }
+      UIRefreshDetails(now);
       detailsW=UIDetailsNaturalWidth();
    }
    string state="",clock=""; color stateInk=clrWhite;
@@ -756,12 +819,14 @@ void UpdatePanel()
    bool haveQuote=SymbolInfoTick(_Symbol,q) && q.bid>0 && q.ask>=q.bid;
    if(haveQuote) { bid=DoubleToString(q.bid,digits); ask=DoubleToString(q.ask,digits); }
    bool freshQuote=haveQuote && g_marketState==MARKET_OPEN && P4FreshQuote(q);
-   string planDistance[3]; bool compactPlan[3];
+   string planDistance[3],planQuote[3]; bool compactPlan[3];
    for(int i=0;i<3;i++)
    {
       compactPlan[i]=plan[i].signal=="NONE" && plan[i].entry=="" && plan[i].notes=="" && plan[i].volume=="" && plan[i].style=="";
       planDistance[i]=(plan[i].signal=="BUY" || plan[i].signal=="SELL")?
                       "TP distance (price): "+UITPDistance(plan[i].signal,plan[i].tp,freshQuote,q,digits):"";
+      planQuote[i]=plan[i].signal=="BUY"?"Ask: "+(freshQuote?ask:"--"):
+                   (plan[i].signal=="SELL"?"Bid: "+(freshQuote?bid:"--"):"");
       string direction="",style="";
       string mode=UIPart(autos[i],1);
       if(UIPart(autos[i],0)==tf[i] && (mode=="Auto: ON" || mode=="Auto: OFF") && UIAutoTrade(autos[i],direction,style))
@@ -855,13 +920,14 @@ void UpdatePanel()
    int tfW=UIWidth("M30")+16;
    int autoLead=tfW+UIWidth("Auto")+UIWidth("OFF")+30;
    // The header line carries brand, symbol, type, state, the statistics line,
-   // the quote and the clock; the body is the readings/plans column beside the
-   // auto-execution column, so both have to fit too.
+   // the clock; quotes now sit beside the Auto Execution section title.
    int leftHead=UIWidth("MT V1.00")+UIWidth(g_symbol,UI_SIZE+2)+UIWidth(g_type)+UIWidth(state)+70;
-   int quoteMin=UIWidth("Bid: "+bid)+50;
-   int minW=(int)MathMax(leftHead+UIWidth(statsLine)+quoteMin+UIWidth(clock)+30,
+   int autoTitleMin=(int)MathMax(UI_AUTO_MIN_W,UIWidth("AUTO EXECUTION")+UIWidth("Bid: "+bid)+UIWidth("Ask: "+ask)+42);
+   int autoMin=autoTitleMin;
+   for(int i=0;i<3;i++) autoMin=(int)MathMax(autoMin,UIAutoFirstWidth(autos[i],autoLead));
+   int minW=(int)MathMax(leftHead+UIWidth(statsLine)+UIWidth(clock)+30,
                          (int)MathMax(settingsRow[0],settingsRow[1])+20);
-   minW=(int)MathMax(minW,UI_READ_MIN_W+gap+UI_AUTO_MIN_W);
+   minW=(int)MathMax(minW,UI_READ_MIN_W+gap+autoMin);
    int inner=minW;
    int panelWidth=inner+2*pad;
    // TF GT CT ST RG PT SC SG - SG sits at the right of SC. Columns are only as
@@ -881,7 +947,10 @@ void UpdatePanel()
       }
       sum+=readW[c];
    }
-   if(sum>inner-20) { inner=sum+20; panelWidth=inner+2*pad; }
+   int leftMin=sum+10;
+   for(int i=0;i<3;i++) if(planQuote[i]!="")
+      leftMin=(int)MathMax(leftMin,UIWidth("TP distance (price):")+UIWidth(planQuote[i])+32);
+   if(leftMin+gap+autoMin>inner) { inner=leftMin+gap+autoMin; panelWidth=inner+2*pad; }
    // With the diary window open the two must fit side by side: the panel gives
    // up width for it rather than growing, down to a readable floor. Its height
    // and its trade-statistics footprint are unaffected either way.
@@ -895,12 +964,16 @@ void UpdatePanel()
    }
    // Leftover width stays as a margin to the right of SG: a little extra gutter
    // is fine, but the columns are not stretched across the panel.
-   int spare=inner-20-sum;
+   // Keep any extra reading gutters from consuming the space needed by the
+   // first broker row and the two quote badges.
+   if(inner<leftMin+gap+autoMin) { inner=leftMin+gap+autoMin; panelWidth=inner+2*pad; }
+   int spare=inner-leftMin-gap-autoMin;
    int extra=spare>0?(int)MathMin(UI_READ_SPREAD,spare/8):0;
    for(int c=0;c<8;c++) readW[c]+=extra;
    // The readings box hugs its own columns; the spare width stays outside it.
    int readRowW=10;
    for(int c=0;c<8;c++) readRowW+=readW[c];
+   readRowW=(int)MathMax(readRowW,leftMin);
    // TRADING PLANS are one stacked row per lane, exactly as wide as the
    // readings table above them. Empty NONE rows collapse to a single line.
    int marketRows=UIWrappedRows(g_marketDetail,inner),timerRows=timerDetail?UIWrappedRows(timer,inner-20):0;
@@ -913,14 +986,15 @@ void UpdatePanel()
    // Two columns under the settings: MARKET READINGS over TRADING PLANS on the
    // left (both the same width), AUTO EXECUTION on the right starting level
    // with the readings table.
-   int leftW=readRowW, autoX=x+leftW+gap, autoW=inner-leftW-gap;
-   if(autoW<UI_AUTO_MIN_W) { autoW=UI_AUTO_MIN_W; leftW=(int)MathMax(UI_READ_MIN_W,inner-autoW-gap); }
+   int leftW=readRowW, autoW=inner-leftW-gap;
+   int autoX=x+leftW+gap;
    int readRows[3],readTotal=0,planNoteRows[3],distanceRows[3],autoRows[3],autoTotal=0;
    for(int i=0;i<3;i++)
    {
       readRows[i]=readingOK[i]?1:(int)MathMax(1,UIWrappedRows(readings[i],leftW-20)); readTotal+=readRows[i];
       planNoteRows[i]=compactPlan[i]?0:UIWrappedRows(plan[i].notes,leftW-20);
-      distanceRows[i]=compactPlan[i]?0:UIWrappedRows(planDistance[i],leftW-20);
+      int distanceW=(int)MathMax(1,leftW-20-(planQuote[i]==""?0:UIWidth(planQuote[i])+12));
+      distanceRows[i]=compactPlan[i]?0:UIWrappedRows(planDistance[i],distanceW);
       autoRows[i]=UIAutoFlow(autos[i],i,0,0,autoW,autoLead,step,false,""); autoTotal+=autoRows[i]*step+4;
    }
    int headerH=step+6,marketY=y+headerH,settingsY=marketY+marketRows*step+gap;
@@ -934,7 +1008,7 @@ void UpdatePanel()
       // adds the field headings/values plus only the note lines it really has.
       if(compactPlan[i]) cardH[i]=step+10;
       else if(plan[i].entry=="") cardH[i]=(1+planNoteRows[i]+distanceRows[i])*step+10;
-      else cardH[i]=(2+cashExtra+planNoteRows[i]+distanceRows[i])*step+10;
+      else cardH[i]=(3+cashExtra+planNoteRows[i]+distanceRows[i])*step+10;
       planTotalH+=cardH[i]+UI_PLAN_GAP;
    }
    int planTitleY=readY+readTotal*step+gap,cardsY=planTitleY+step;
@@ -952,13 +1026,13 @@ void UpdatePanel()
    UIBox("brand",bx,y-2,brandW,step,UI_BADGE,UI_BORDER);
    UIBox("type",bx+brandW+symbolW,y-2,typeW,step,UI_BADGE,UI_BORDER);
    UIBox("marketState",bx+brandW+symbolW+typeW+5,y-2,stateW,step,UIChipFill(state),UI_BORDER);
-   // Symbol-wide trade statistics, then the quote, on the header line.
+   // Symbol-wide trade statistics remain on the header line.
    int statsX=bx+brandW+symbolW+typeW+stateW+14;
    int statsW=UIWidth(statsLine)+12;
    UIBox("stats",statsX,y-2,statsW,step,UI_SURFACE,UI_BORDER);
-   int quoteX=statsX+statsW+10;
-   UIBox("bidBox",quoteX,y-2,UIWidth("Bid: "+bid)+10,step,UI_SURFACE,UI_BORDER);
-   UIBox("askBox",quoteX+UIWidth("Bid: "+bid)+16,y-2,UIWidth("Ask: "+ask)+10,step,UI_SURFACE,UI_BORDER);
+   int quoteX=autoX+UIWidth("AUTO EXECUTION")+12;
+   UIBox("bidBox",quoteX,autoTitleY-2,UIWidth("Bid: "+bid)+10,step,UI_SURFACE,UI_BORDER);
+   UIBox("askBox",quoteX+UIWidth("Bid: "+bid)+16,autoTitleY-2,UIWidth("Ask: "+ask)+10,step,UI_SURFACE,UI_BORDER);
    int settingX[9],badgeX[15],sx=x+10;
    for(int g=0;g<9;g++)
    {
@@ -1013,7 +1087,7 @@ void UpdatePanel()
       stackedY+=cardH[i]+UI_PLAN_GAP;
    }
    // AUTO EXECUTION column: one box per lane, starting level with the readings.
-   int autoY=autoTitleY+step+4;
+   int autoY=readHeaderY-2;
    for(int i=0;i<3;i++)
    {
       string n=IntegerToString(i),mode=UIAfter(UIPart(autos[i],1),"Auto: ");
@@ -1032,9 +1106,9 @@ void UpdatePanel()
    UIText("typeText",bx+brandW+symbolW+5,y,g_type,clrSilver,UI_SIZE);
    UIText("stateText",bx+brandW+symbolW+typeW+10,y,state,stateInk,UI_SIZE);
    UIText("statsText",statsX+6,y,statsLine,UI_MUTED,UI_SIZE,
-          "Broker-confirmed trade diary for this symbol and account: today then all time. S accepted orders, W/L/BE fully reconciled closed results. Per-timeframe counts are in the diary window.");
-   UIText("bidText",quoteX+5,y,"Bid: "+bid,clrWhite,UI_SIZE);
-   UIText("askText",quoteX+UIWidth("Bid: "+bid)+21,y,"Ask: "+ask,clrWhite,UI_SIZE);
+          "Broker-confirmed trade diary for this symbol and account: T today, A all time. S accepted orders; W/L reconciled wins/losses. Break-even is recorded separately in the diary.");
+   UIText("bidText",quoteX+5,autoTitleY,"Bid: "+bid,clrWhite,UI_SIZE);
+   UIText("askText",quoteX+UIWidth("Bid: "+bid)+21,autoTitleY,"Ask: "+ask,clrWhite,UI_SIZE);
    UIText("clock",x+inner-UIWidth(clock),y,clock,clrWhite,UI_SIZE);
    UIWrapped("marketDetail",x,marketY,g_marketDetail,inner,step,clrSilver,"",g_uiMarketNotes);
    UIText("settingsTitle",x+10,settingsY+3,"SETTINGS",UI_MUTED,UI_SIZE);
@@ -1071,7 +1145,7 @@ void UpdatePanel()
    for(int i=0;i<3;i++)
    {
       string n=IntegerToString(i);
-      UIWrapped("readFallback"+n+"_",x+10,yy,readingOK[i]?"":readings[i],inner-20,step,clrSilver,"",g_uiReadingNotes[i]); yy+=readRows[i]*step;
+      UIWrapped("readFallback"+n+"_",x+10,yy,readingOK[i]?"":readings[i],leftW-20,step,clrSilver,"",g_uiReadingNotes[i]); yy+=readRows[i]*step;
       int rowY=cardY[i];
       UIText("planTFText"+n,cardX[i]+10,rowY+6,plan[i].recognized?tf[i]:"",clrWhite,UI_SIZE,planTip);
       int sigX=cardX[i]+tfW+11;
@@ -1096,10 +1170,15 @@ void UpdatePanel()
          }
          colX+=planCol[i][c];
       }
-      UIWrapped("planNote"+n+"_",cardX[i]+10,rowY+(3+cashExtra)*step+9,plan[i].notes,leftW-20,step,clrOrange,planTip,g_uiPlanNotes[i]);
-      UIWrapped("planDistance"+n+"_",cardX[i]+10,rowY+(3+cashExtra+planNoteRows[i])*step+9,planDistance[i],leftW-20,step,clrSilver,planTip,g_uiPlanDistances[i]);
+      int detailY=rowY+(plan[i].entry==""?1:3+cashExtra)*step+9;
+      UIWrapped("planNote"+n+"_",cardX[i]+10,detailY,plan[i].notes,leftW-20,step,clrOrange,planTip,g_uiPlanNotes[i]);
+      int distanceY=detailY+planNoteRows[i]*step;
+      int distanceW=(int)MathMax(1,leftW-20-(planQuote[i]==""?0:UIWidth(planQuote[i])+12));
+      UIWrapped("planDistance"+n+"_",cardX[i]+10,distanceY,planDistance[i],distanceW,step,clrSilver,planTip,g_uiPlanDistances[i]);
+      UIText("planQuote"+n,cardX[i]+leftW-10-UIWidth(planQuote[i]),distanceY,planQuote[i],clrWhite,UI_SIZE,
+             "Current entry-side quote: Ask for BUY, Bid for SELL. TP distance uses the exit-side quote, and a stale quote is shown as unavailable.");
    }
-   autoY=autoTitleY+step+6;
+   autoY=readHeaderY;
    for(int i=0;i<3;i++)
    {
       string n=IntegerToString(i),tip=P4Tooltip(i),mode=UIPart(autos[i],1);

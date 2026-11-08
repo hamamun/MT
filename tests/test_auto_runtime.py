@@ -227,7 +227,8 @@ bool OrderSend(MqlTradeRequest &r,MqlTradeResult &out){
 }
 '''
 diary_stubs=r'''
-int P5Begin(int, const P3Plan&, const MqlTick&){return -1;}
+int P3TPPercentInput(int){return 85;}
+int P5Begin(int, const P3Plan&, const MqlTick&, bool, int){return -1;}
 void P5SendResult(int,ulong,uint,bool){}
 void P5Track(int,int,int,ulong,ulong,datetime,long){}
 '''

@@ -757,7 +757,7 @@ void P4Place(int lane, const MqlTick &quote, const P3Plan &plan)
    g_p4[lane].order=0; g_p4[lane].position=0;
    g_p4[lane].birthBar=plan.market?0:-1; g_p4[lane].planBar=plan.bar;
    if(!P4Persist()) return;
-   int diaryRow=P5Begin(lane,plan,quote);
+   int diaryRow=P5Begin(lane,plan,quote,InpPlaceStopLoss,P3TPPercentInput(lane));
    ResetLastError();
    bool sent=OrderSend(request,result);
    int sendError=GetLastError();

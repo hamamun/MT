@@ -7,7 +7,7 @@
 // 4=unfilled end, 5=definite rejection, 6=review/incomplete.
 struct P5Row
 {
-   int lane, direction, score, gt, ct, st, regime, volumeState, market, choice, against, bypass, minimum, strategy, barProxy, state, accepted, retcode, exitReason;
+   int lane, direction, score, gt, ct, st, regime, volumeState, market, choice, against, bypass, minimum, strategy, barProxy, state, accepted, retcode, exitReason, stopInput, tpPercentInput;
    long order, position, bar, requestMs, entryMs, exitMs;
    double planEntry, planStop, planTarget, lot, bid, ask, equity, balance, entryVolume, exitVolume, entryPrice, exitPrice, profit, commission, swap, fee, net, brokerEntry, brokerStop, brokerTarget;
 };
@@ -23,7 +23,7 @@ bool P5Export()
    int h=FileOpen(tmp,FILE_WRITE|FILE_CSV|FILE_ANSI|g_p5Flags,',');
    if(h==INVALID_HANDLE) return(false);
    ResetLastError();
-   FileWrite(h,"server","account","symbol","currency","lane","direction","score","gt","ct","st","regime","volume","market","trend_choice","allow_against","bypass","minimum","strategy","bar_proxy","state","accepted","retcode","exit_reason","order","position","plan_bar","request_ms","entry_ms","exit_ms","plan_entry","plan_sl","plan_tp","lot","bid","ask","equity","balance","entry_volume","exit_volume","entry_price","exit_price","profit","commission","swap","fee","net","broker_entry","broker_sl","broker_tp");
+   FileWrite(h,"server","account","symbol","currency","lane","direction","score","gt","ct","st","regime","volume","market","trend_choice","allow_against","bypass","minimum","strategy","bar_proxy","state","accepted","retcode","exit_reason","order","position","plan_bar","request_ms","entry_ms","exit_ms","plan_entry","plan_sl","plan_tp","lot","bid","ask","equity","balance","entry_volume","exit_volume","entry_price","exit_price","profit","commission","swap","fee","net","broker_entry","broker_sl","broker_tp","stop_placement_input","tp_percent_input","request_spread_price","plan_risk_price","plan_reward_price","plan_reward_risk","entry_slippage_vs_original_plan_price","holding_seconds");
    for(int i=0;i<ArraySize(g_p5);i++)
    {
       P5Row r=g_p5[i];
@@ -31,7 +31,14 @@ bool P5Export()
          r.lane,r.direction,r.score,r.gt,r.ct,r.st,r.regime,r.volumeState,r.market,r.choice,r.against,r.bypass,r.minimum,r.strategy,r.barProxy,
          r.state,r.accepted,r.retcode,r.exitReason,r.order,r.position,r.bar,r.requestMs,r.entryMs,r.exitMs,
          r.planEntry,r.planStop,r.planTarget,r.lot,r.bid,r.ask,r.equity,r.balance,r.entryVolume,r.exitVolume,
-         r.entryPrice,r.exitPrice,r.profit,r.commission,r.swap,r.fee,r.net,r.brokerEntry,r.brokerStop,r.brokerTarget);
+         r.entryPrice,r.exitPrice,r.profit,r.commission,r.swap,r.fee,r.net,r.brokerEntry,r.brokerStop,r.brokerTarget,
+         r.stopInput<0?"":IntegerToString(r.stopInput),r.stopInput<0?"":IntegerToString(r.tpPercentInput),
+         DoubleToString(r.ask-r.bid,(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)),
+         DoubleToString(MathAbs(r.planEntry-r.planStop),(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)),
+         DoubleToString(MathAbs(r.planTarget-r.planEntry),(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)),
+         MathAbs(r.planEntry-r.planStop)>0?DoubleToString(MathAbs(r.planTarget-r.planEntry)/MathAbs(r.planEntry-r.planStop),4):"",
+         r.state==3?DoubleToString(r.direction*(r.entryPrice-r.planEntry),(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)):"",
+         r.state==3 && r.exitMs>=r.entryMs?DoubleToString((double)(r.exitMs-r.entryMs)/1000.0,3):"");
    }
    FileFlush(h); bool ok=(GetLastError()==0); FileClose(h);
    return(ok && FileMove(tmp,g_p5Flags,dest,g_p5Flags|FILE_REWRITE));
@@ -44,7 +51,7 @@ bool P5Save()
    int h=FileOpen(tmp,FILE_WRITE|FILE_BIN|g_p5Flags);
    if(h==INVALID_HANDLE) return(false);
    ResetLastError();
-   FileWriteInteger(h,1297368117,INT_VALUE); FileWriteInteger(h,1,INT_VALUE);
+   FileWriteInteger(h,1297368117,INT_VALUE); FileWriteInteger(h,2,INT_VALUE);
    int count=ArraySize(g_p5); FileWriteInteger(h,count,INT_VALUE);
    for(int i=0;i<count;i++)
    {
@@ -94,8 +101,9 @@ bool P5Save()
       FileWriteDouble(h,r.brokerEntry);
       FileWriteDouble(h,r.brokerStop);
       FileWriteDouble(h,r.brokerTarget);
+      FileWriteInteger(h,r.stopInput,INT_VALUE); FileWriteInteger(h,r.tpPercentInput,INT_VALUE);
    }
-   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==(ulong)(12+(long)count*284));
+   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==(ulong)(12+(long)count*292));
    FileClose(h);
    if(!ok || !FileMove(tmp,g_p5Flags,g_p5File,g_p5Flags|FILE_REWRITE)) return(false);
    g_p5ExportReady=P5Export();
@@ -110,7 +118,7 @@ bool P5Load()
    int h=FileOpen(g_p5File,FILE_READ|FILE_BIN|g_p5Flags);
    if(h==INVALID_HANDLE || FileSize(h)<12) { if(h!=INVALID_HANDLE) FileClose(h); return(false); }
    int magic=FileReadInteger(h,INT_VALUE), version=FileReadInteger(h,INT_VALUE), count=FileReadInteger(h,INT_VALUE);
-   if(magic!=1297368117 || version!=1 || count<0 || count>1000000 || FileSize(h)!=(ulong)(12+(long)count*284))
+   if(magic!=1297368117 || (version!=1 && version!=2) || count<0 || count>1000000 || FileSize(h)!=(ulong)(12+(long)count*(version==1?284:292)))
    { FileClose(h); return(false); }
    if(ArrayResize(g_p5,count)!=count) { FileClose(h); return(false); }
    ResetLastError();
@@ -162,7 +170,9 @@ bool P5Load()
       r.brokerEntry=FileReadDouble(h);
       r.brokerStop=FileReadDouble(h);
       r.brokerTarget=FileReadDouble(h);
-      if(r.lane<0 || r.lane>2 || (r.direction!=1 && r.direction!=-1) || r.score < -3 || r.score > 3 ||
+      r.stopInput=-1; r.tpPercentInput=0;
+      if(version>=2) { r.stopInput=FileReadInteger(h,INT_VALUE); r.tpPercentInput=FileReadInteger(h,INT_VALUE); }
+      if((r.stopInput < -1 || r.stopInput > 1) || r.lane<0 || r.lane>2 || (r.direction!=1 && r.direction!=-1) || r.score < -3 || r.score > 3 ||
          r.state<0 || r.state>6 || (r.accepted!=0 && r.accepted!=1) || r.order<0 || r.position<0 ||
          r.bar<=0 || r.requestMs<=0 || r.entryMs<0 || r.exitMs<0 || r.strategy<=0 ||
          !P3Positive(r.planEntry) || !P3Positive(r.planStop) || !P3Positive(r.planTarget) || !P3Positive(r.lot) ||
@@ -200,7 +210,7 @@ void P5Init()
 
 // Save the request context before sending; its existence is NOT a fill or S.
 // Diary failures do not block safety management or alter trade permissions.
-int P5Begin(int lane, const P3Plan &plan, const MqlTick &quote)
+int P5Begin(int lane, const P3Plan &plan, const MqlTick &quote, bool stopInput, int tpPercentInput)
 {
    if(!g_p5Ready || lane<0 || lane>2 || quote.time_msc<=0) return(-1);
    int n=ArraySize(g_p5); if(ArrayResize(g_p5,n+1)!=n+1) { g_p5Ready=false; return(-1); }
@@ -211,6 +221,7 @@ int P5Begin(int lane, const P3Plan &plan, const MqlTick &quote)
    r.volumeState=g_p3[lane].volumeState; r.market=plan.market?1:0;
    r.choice=(int)P3Choice(lane); r.against=P3Against(lane)?1:0;
    r.bypass=InpBypassRisk?1:0; r.minimum=InpMinimumLot?1:0; r.strategy=P3Strategy(lane); r.barProxy=plan.barProxy?1:0;
+   r.stopInput=stopInput?1:0; r.tpPercentInput=tpPercentInput;
    r.state=0; r.accepted=0; r.exitReason=-1; r.bar=(long)plan.bar; r.requestMs=quote.time_msc;
    r.planEntry=plan.entry; r.planStop=plan.stop; r.planTarget=plan.target; r.lot=plan.lot;
    r.bid=quote.bid; r.ask=quote.ask; r.equity=AccountInfoDouble(ACCOUNT_EQUITY); r.balance=AccountInfoDouble(ACCOUNT_BALANCE);
@@ -451,6 +462,76 @@ string P5Summary(int lane, datetime now)
       else { be++; if(today) dbe++; }
    }
    return(StringFormat("%s | Trades Today S %d W %d L %d BE %d | All S %d W %d L %d BE %d",tf,ds,dw,dl,dbe,s,w,l,be));
+}
+// Read-only analysis of reconciled broker trades. Recent means latest exit time,
+// not array order; open, partial and review rows are never counted as results.
+struct P5Insights
+{
+   string totals, score, direction, style, recent, exits, context;
+};
+string P5Rate(int wins, int closed)
+{
+   return(closed>0?DoubleToString(100.0*wins/closed,1)+"%":"--");
+}
+void P5BuildInsights(int lane, P5Insights &out)
+{
+   out.totals=""; out.score=""; out.direction=""; out.style=""; out.recent=""; out.exits=""; out.context="";
+   if(!g_p5Ready || lane<0 || lane>2) return;
+   int n=0,w=0,l=0,be=0,scoreN[2]={0,0},scoreW[2]={0,0},scoreL[2]={0,0};
+   int dirN[2]={0,0},dirW[2]={0,0},styleN[2]={0,0},styleW[2]={0,0};
+   double net=0,cost=0; P5Row recent[30], latest; int nr=0; bool hasLatest=false;
+   for(int i=0;i<ArraySize(g_p5);i++)
+   {
+      P5Row r=g_p5[i];
+      if(r.lane!=lane) continue;
+      latest=r; hasLatest=true; // last recorded request, matching P5Detail
+      if(!r.accepted || r.state!=3) continue;
+      n++; if(r.net>0) w++; else if(r.net<0) l++; else be++;
+      net+=r.net; cost+=r.commission+r.swap+r.fee;
+      int sc=(int)MathAbs(r.score)-2;
+      if(sc>=0 && sc<2) { scoreN[sc]++; if(r.net>0) scoreW[sc]++; else if(r.net<0) scoreL[sc]++; }
+      int dir=r.direction>0?0:1, style=r.market?0:1;
+      dirN[dir]++; styleN[style]++; if(r.net>0) { dirW[dir]++; styleW[style]++; }
+      int at=0; while(at<nr && recent[at].exitMs>=r.exitMs) at++;
+      if(at<30)
+      {
+         int last=(int)MathMin(nr,29);
+         for(int k=last;k>at;k--) recent[k]=recent[k-1];
+         recent[at]=r; if(nr<30) nr++;
+      }
+   }
+   string currency=AccountInfoString(ACCOUNT_CURRENCY);
+   out.totals=StringFormat("All closed %d W %d L %d BE %d Win ",n,w,l,be)+P5Rate(w,n)+
+              " Net "+(n>0?DoubleToString(net,2)+" "+currency:"--")+
+              " Costs "+(n>0?DoubleToString(cost,2)+" "+currency:"--");
+   out.score=StringFormat("Score 2/3: %d closed W %d L %d | 3/3: %d closed W %d L %d",
+                          scoreN[0],scoreW[0],scoreL[0],scoreN[1],scoreW[1],scoreL[1]);
+   out.direction=StringFormat("BUY: %d closed Win ",dirN[0])+P5Rate(dirW[0],dirN[0])+
+                 StringFormat(" | SELL: %d closed Win ",dirN[1])+P5Rate(dirW[1],dirN[1]);
+   out.style=StringFormat("Market: %d closed Win ",styleN[0])+P5Rate(styleW[0],styleN[0])+
+             StringFormat(" | Limit: %d closed Win ",styleN[1])+P5Rate(styleW[1],styleN[1]);
+   int rw=0,rl=0,rb=0,tp=0,sl=0,other=0,unknown=0; double rn=0;
+   for(int i=0;i<nr;i++)
+   {
+      P5Row r=recent[i]; rn+=r.net;
+      if(r.net>0) rw++; else if(r.net<0) rl++; else rb++;
+      if(r.exitReason==DEAL_REASON_TP) tp++; else if(r.exitReason==DEAL_REASON_SL) sl++;
+      else if(r.exitReason<0) unknown++; else other++;
+   }
+   out.recent=StringFormat("Last %d closed: W %d L %d BE %d Win ",nr,rw,rl,rb)+P5Rate(rw,nr)+
+              " Net "+(nr>0?DoubleToString(rn,2)+" "+currency:"--");
+   out.exits=StringFormat("Last %d final exits: TP %d SL %d Other %d Unknown %d",nr,tp,sl,other,unknown);
+   if(hasLatest)
+   {
+      string regime=latest.regime==1?"STEADY":(latest.regime==2?"CHOPPY":(latest.regime==0?"MIXED":"--"));
+      string stop=latest.stopInput<0?"--":(latest.stopInput==1?"ON":"OFF");
+      string percent=latest.stopInput<0?"--":IntegerToString(latest.tpPercentInput)+"%";
+      out.context=StringFormat("Last request: %s %s Score %d RG ",latest.direction>0?"BUY":"SELL",
+                               latest.market?"MARKET":"LIMIT",latest.score)+regime+" Spread "+
+                  DoubleToString(latest.ask-latest.bid,(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS))+
+                  " SL input "+stop+" TP input "+percent;
+   }
+   else out.context="Last request: none";
 }
 string P5Detail(int lane)
 {

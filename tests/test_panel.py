@@ -108,6 +108,15 @@ string details[3]={"M5 | Pending 1 | Open 1 | Review 0 | Unfilled 2 | Last: SELL
                    "M15 | Pending 0 | Open 0 | Review 1 | Unfilled 0 | Last: BUY CLOSED | Net: +1.25 USD",
                    "M30 | Pending 2 | Open 1 | Review 0 | Unfilled 1 | No recorded trades | CSV unavailable"};
 string P5Detail(int i){return details[i];}
+struct P5Insights {string totals,score,direction,style,recent,exits,context;};
+void P5BuildInsights(int i,P5Insights &o){
+ if(diaries[i].find("unavailable")!=string::npos){o={};return;}
+ o={"All closed 2 W 1 L 1 BE 0 Win 50.0% Net 1.25 USD Costs -0.10 USD",
+    "Score 2/3: 1 closed W 1 L 0 | 3/3: 1 closed W 0 L 1",
+    "BUY: 1 closed Win 100.0% | SELL: 1 closed Win 0.0%",
+    "Market: 1 closed Win 100.0% | Limit: 1 closed Win 0.0%",
+    "Last 2 closed: W 1 L 1 BE 0 Win 50.0% Net 1.25 USD",
+    "Last 2 final exits: TP 1 SL 1 Other 0 Unknown 0","Last request: BUY MARKET Score 3 RG STEADY Spread 0.02 SL input ON TP input 85%"};}
 string P4ScheduleText(){return timer;}
 string Label(string name){string s;for(int j=0;objects.count("MT_"+name+"_"+to_string(j));j++)s+=objects["MT_"+name+"_"+to_string(j)].text;return s;}
 string Wrapped(string name){string s;for(int j=0;objects.count("MT_"+name+to_string(j)+"_0");j++)s+=Label(name+to_string(j));return s;}
@@ -130,7 +139,8 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  BuildPanel(); Obj bg=objects["MT_bg"];
  check(bg.x+bg.w<=chartWidth+100,"two-column panel stays close to the chart width");
  check(Label("symbol")=="EURUSDm" && Label("stateText")=="OPEN" && Label("bidText")=="Bid: 1.12194" && Label("askText")=="Ask: 1.12202","live market and quote values");
- check(objects["MT_bidText_0"].y==objects["MT_symbol_0"].y && objects["MT_askText_0"].y==objects["MT_symbol_0"].y && objects["MT_stats"].x>objects["MT_marketState"].x+objects["MT_marketState"].w && objects["MT_bidBox"].x>objects["MT_stats"].x+objects["MT_stats"].w,"statistics line and quote sit in the header, left of the clock");
+ check(objects["MT_stats"].x>objects["MT_marketState"].x+objects["MT_marketState"].w && objects["MT_bidText_0"].y==objects["MT_autoTitle_0"].y && objects["MT_askText_0"].y==objects["MT_autoTitle_0"].y && objects["MT_bidBox"].x>objects["MT_autoTitle_0"].x+UIWidth("AUTO EXECUTION") && objects["MT_askBox"].x+objects["MT_askBox"].w<=objects["MT_bg"].x+objects["MT_bg"].w,"Bid and Ask sit beside auto execution, not in the top header");
+ check(objects["MT_autoRow0"].y==objects["MT_readings"].y && objects["MT_autoTitle_0"].y==objects["MT_readTitle_0"].y && objects["MT_autoRow0"].x>=objects["MT_readings"].x+objects["MT_readings"].w,"auto rows and readings box align at the top without horizontal overlap");
  check(objects["MT_clock_0"].y==objects["MT_symbol_0"].y,"server clock remains in top header");
  check(Label("settingKey1")=="Allow Against Trend" && Label("settingValue1")=="M5 ON" && Label("settingValue2")=="M15 ON" && Label("settingValue3")=="M30 ON","separate timeframe setting chips");
  check(Label("settingValue7")=="M5 AUTO" && Label("settingValue8")=="M15 AUTO" && Label("settingValue9")=="M30 AUTO" && Label("settingValue11")=="M5 85%" && Label("settingValue13")=="M30 85%","trend and TP chips");
@@ -146,7 +156,11 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  for(int i=0;i<3;i++) check(Label("reading"+std::to_string(i)+"_7")=="SELL","SG shows the lane's own plan signal");
  check(Label("reading0_1")=="DOWN" && Label("reading2_1")=="FLAT" && Label("reading2_3")=="MIXED" && Label("reading2_6")=="-3/3 (50%L)","reading matrix");
  check(Wrapped("planDistance0_")=="TP distance (price): 0.00067" && AutoText(0).find("TP distance (price): 0.00054")!=string::npos,"plan and broker TP distances use their own targets");
- quoteFresh=false;UpdatePanel();check(Wrapped("planDistance0_")=="TP distance (price): --" && AutoText(0).find("TP distance (price): --")!=string::npos,"stale quote does not produce live distance");
+ check(Label("planQuote0")=="Bid: 1.12194" && objects["MT_planQuote0_0"].y==objects["MT_planDistance0_0_0"].y && objects["MT_planQuote0_0"].x>objects["MT_planDistance0_0_0"].x+UIWidth(Label("planDistance0_0")),"SELL plan shows Bid to the right of TP distance");
+ string directionPlan=plans[0];plans[0]="M5 | Signal: BUY | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12000 (-1.00 USD) | TP: 1.12500 (+1.00 USD)";UpdatePanel();
+ check(Label("planQuote0")=="Ask: 1.12202" && Wrapped("planDistance0_")=="TP distance (price): 0.00306","BUY plan shows Ask while TP distance continues to use Bid");
+ plans[0]=directionPlan;UpdatePanel();
+ quoteFresh=false;UpdatePanel();check(Wrapped("planDistance0_")=="TP distance (price): --" && Label("planQuote0")=="Bid: --" && AutoText(0).find("TP distance (price): --")!=string::npos,"stale quote does not produce live distance or current plan quote");
  quoteFresh=true;UpdatePanel();check(Wrapped("planDistance0_")=="TP distance (price): 0.00067","fresh quote restores plan distance");
  hasQuote=false;UpdatePanel();check(Label("bidText")=="Bid: --" && Label("askText")=="Ask: --" && Wrapped("planDistance0_")=="TP distance (price): --","missing quote remains unavailable without inventing distance");
  hasQuote=true;UpdatePanel();
@@ -158,6 +172,20 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   string text=AutoText(i);
   for(int j=3;j<UIPartCount(autos[i]);j++) check(text.find(UIPart(autos[i],j))!=string::npos,"auto field and note retained");
   for(int j=0;j<g_uiAutoParts[i];j++)check(objects["MT_autoText"+n+"_"+to_string(j)+"_0"].tip.find(tips[i])==0,"auto tooltip on every field");
+  bool entryOnLine=false,lotOnLine=false;
+  for(int j=0;j<g_uiAutoParts[i];j++){Obj part=objects["MT_autoText"+n+"_"+to_string(j)+"_0"];
+   if(part.text.find("Entry ")==0)entryOnLine=part.y==objects["MT_autoStyleText"+n+"_0"].y;
+   if(part.text.find("Lot ")==0)lotOnLine=part.y==objects["MT_autoStyleText"+n+"_0"].y;}
+  check(entryOnLine && lotOnLine,"normal broker Entry and Lot sit on the same line beside OPEN");
+ }
+ for(int lane=0;lane<3;lane++){
+  string n=to_string(lane);Obj card=objects["MT_plan"+n];
+  for(auto &pair:objects){const string &key=pair.first;const Obj &o=pair.second;
+   if(o.type!=OBJ_LABEL)continue;
+   bool belongs=key.find("MT_planDistance"+n+"_")==0 || key.find("MT_planNote"+n+"_")==0 || key.find("MT_planMoneyRows"+n+"_")==0 || key.find("MT_planQuote"+n+"_")==0;
+   if(belongs)check(o.y>=card.y && o.y+o.size+4<=card.y+card.h && o.x>=card.x && o.x+UIWidth(o.text,o.size)<=card.x+card.w,"each plan detail and quote stays entirely inside its own timeframe box");
+  }
+  if(lane<2)check(card.y+card.h<=objects["MT_plan"+to_string(lane+1)].y,"stacked plan boxes never overlap");
  }
  check(Label("planValue0_0")=="1.12196" && Label("planValue0_1")=="0.01" && Label("planValue0_2")=="1.12306" && (Label("planMoney0_2")+Wrapped("planMoneyRows0_2_"))=="(-1.10 USD)" && Label("planValue0_3")=="1.12135" && (Label("planMoney0_3")+Wrapped("planMoneyRows0_3_"))=="(+0.61 USD)","full plan levels and amounts, with separate SL and TP");
  check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL (unprotected)")!=string::npos,"broker no-SL warning retained");
@@ -167,7 +195,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   for(string prefix:{"planHeading","planValue"}){Obj text=objects["MT_"+prefix+n+"_0"];check(text.x>=card.x && text.x+int(text.text.size()*text.size*0.8)<=card.x+card.w && text.y>=card.y && text.y+text.size+4<=card.y+card.h,"aligned plan labels stay inside their stacked row");}
  }
 
- check(Label("statsText")=="S 2 W 1 L 0 BE 1   |   S 5 W 3 L 1 BE 1","one symbol-wide statistics line in the header");
+ check(Label("statsText")=="T S 2 W 1 L 0   |   A S 5 W 3 L 1","one symbol-wide statistics line in the header");
  check(!objects.count("MT_todayVal0_0") && !objects.count("MT_diary") && !objects.count("MT_todayHeader"),"per-timeframe statistics grid is no longer drawn in the panel");
  check(objects["MT_plan2"].y+objects["MT_plan2"].h<=bg.y+bg.h && objects["MT_autoRow2"].y+objects["MT_autoRow2"].h<=bg.y+bg.h,"stacked plans and the auto column both fit inside the panel");
  int rectOrder=objects["MT_autoStyle2"].order;check(rectOrder<objects["MT_brandText_0"].order,"all backgrounds created before labels");
@@ -208,6 +236,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  string savedPlan0=plans[0],savedPlan2=plans[2];plans[0]="M5 | Signal: NONE";plans[2]="M30 | Signal: NONE";UpdatePanel();checkSettings();
  check(objects["MT_bg"].w<=threeActiveWidth,"one-active plan layout never widens the panel");
  check(Label("planSignalText0")=="NONE" && Label("planSignalText2")=="NONE" && Label("planValue0_0").empty() && Label("planMoney0_2").empty(),"idle cards show NONE and clear old plan data");
+ check(Label("planQuote0").empty() && Wrapped("planDistance0_").empty(),"NONE removes the previous directional quote and distance");
  check(objects["MT_plan0"].h<objects["MT_plan1"].h && objects["MT_plan2"].h<objects["MT_plan1"].h && objects["MT_planSignalText0_0"].y==objects["MT_planTFText0_0"].y && !objects.count("MT_planCell0_0"),"NONE plans collapse to a single row alongside active plans");
  check(objects["MT_plan1"].w==objects["MT_plan0"].w && objects["MT_plan1"].w==objects["MT_plan2"].w && (Label("planMoney1_2")+Wrapped("planMoneyRows1_2_"))=="(-1.71 USD)" && (Label("planMoney1_3")+Wrapped("planMoneyRows1_3_"))=="(+1.97 USD)","every plan row has the same width and keeps live prices with their SL/TP amounts");
  check(objects["MT_plan0"].x==objects["MT_plan1"].x && objects["MT_plan1"].x==objects["MT_plan2"].x,"plan rows share one left edge");
@@ -224,6 +253,10 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  string unusualCash="(-123.45 "+string(100,'X')+")", savedPlan=plans[0];
  plans[0]="M5 | Signal: BUY | MARKET Entry: 1.20000 | Lot: 0.01 | SL: 1.10000 "+unusualCash+" | TP: 1.30000 (+2.00 USD) | Bars: Last/unknown proxy";
  UpdatePanel();check((Label("planMoney0_2")+Wrapped("planMoneyRows0_2_"))==unusualCash && Wrapped("planNote0_")=="Bars: Last/unknown proxy","long cash and plan warning survive in a stacked row");
+ for(auto &pair:objects){const string &key=pair.first;const Obj &o=pair.second;
+  if(o.type==OBJ_LABEL && (key.find("MT_planNote0_")==0 || key.find("MT_planDistance0_")==0 || key.find("MT_planQuote0_")==0 || key.find("MT_planMoneyRows0_")==0))
+   check(o.y>=objects["MT_plan0"].y && o.y+o.size+4<=objects["MT_plan0"].y+objects["MT_plan0"].h,"wrapped notes, money and distance fit in the owning plan row");}
+ check(objects["MT_plan0"].y+objects["MT_plan0"].h<=objects["MT_plan1"].y,"multi-line plan data does not overlap the next lane");
  plans[0]=savedPlan;UpdatePanel();check((Label("planMoney0_2")+Wrapped("planMoneyRows0_2_"))=="(-1.10 USD)" && Wrapped("planNote0_").empty(),"long cash and notes clear on plan refresh");
  string savedAuto=autos[0];autos[0]+=" | tallglyph";UpdatePanel();
  check(objects["MT_reading1_0_0"].y-objects["MT_reading0_0_0"].y>=46,"row height accounts for unusually tall displayed text");
@@ -233,12 +266,21 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  autos[2]="M30 | Auto: ON | SELL LIMIT | Entry 1.12239 (distance 0.00100) | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)";UpdatePanel();
  check(AutoText(0).find("no active order")!=string::npos && AutoText(0).find("No qualifying signal")!=string::npos,"idle broker row and real blocker displayed");
  check(Label("autoTradeText2")=="SELL" && Label("autoStyleText2")=="LIMIT" && NoSpaces(AutoText(2)).find(NoSpaces("Entry 1.12239 (distance 0.00100)"))!=string::npos,"broker limit entry and distance retained");
+ {bool en=false,lot=false;for(int j=0;j<g_uiAutoParts[2];j++){Obj part=objects["MT_autoText2_"+to_string(j)+"_0"];
+  if(part.text.find("Entry ")==0)en=part.y==objects["MT_autoStyleText2_0"].y;
+  if(part.text.find("Lot ")==0)lot=part.y==objects["MT_autoStyleText2_0"].y;}
+  check(en && lot,"pending limit Entry and Lot appear beside LIMIT even with entry distance");}
  autos[2]="M30 | Auto: ON | TIMER PAUSED | BUY OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12357 (+0.82 USD)";UpdatePanel();
  check(Label("autoTradeText2")=="BUY" && Label("autoStyleText2")=="OPEN" && AutoText(2).find("TIMER PAUSED")!=string::npos && AutoText(2).find("TP distance (price): 0.00163")!=string::npos,"timer-paused open trade keeps its badges, pause and live TP distance");
+ {string text=AutoText(2);bool en=false,lot=false;for(int j=0;j<g_uiAutoParts[2];j++){Obj part=objects["MT_autoText2_"+to_string(j)+"_0"];
+  if(part.text.find("Entry ")==0)en=part.y==objects["MT_autoStyleText2_0"].y;
+  if(part.text.find("Lot ")==0)lot=part.y==objects["MT_autoStyleText2_0"].y;}
+  check(en && lot && text.find("Entry ")<text.find("TIMER PAUSED") && text.find("Lot ")<text.find("TIMER PAUSED"),"entry and lot remain beside OPEN even when timer is paused");}
  plans[1]="M15 | Signal: NONE";autos[1]="M15 | Auto: OFF";UpdatePanel();
  check(Label("planSignalText1")=="NONE" && Label("planStyleText1").empty() && Label("planValue1_2").empty() && Label("autoModeText1")=="OFF" && Label("autoTradeText1").empty() && AutoText(1).empty(),"stale plan and auto fields cleared");
  string prior0=plans[0],prior2=plans[2];int priorWidth=chartWidth;chartWidth=980;plans[0]="M5 | Signal: NONE";plans[2]="M30 | Signal: BUY | Entry: -- | Plan data unavailable";UpdatePanel();
  check(Label("planSignalText0")=="NONE" && Label("planSignalText1")=="NONE" && Label("planSignalText2")=="BUY" && Wrapped("planNote2_")=="Plan data unavailable" && Wrapped("planDistance2_")=="TP distance (price): --","screenshot-like unavailable BUY retains clear warning and does not invent TP distance");
+ check(Label("planQuote2")=="Ask: 1.12202" && objects["MT_planDistance2_0_0"].y+objects["MT_planDistance2_0_0"].size+4<=objects["MT_plan2"].y+objects["MT_plan2"].h,"unavailable target still retains current Ask and keeps the distance row inside the plan box");
  check(objects["MT_plan0"].h<objects["MT_plan2"].h && objects["MT_plan1"].h<objects["MT_plan2"].h && objects["MT_bg"].x+objects["MT_bg"].w<=chartWidth,"screenshot-like plans fit and NONE rows collapse");
  plans[0]=prior0;plans[2]=prior2;chartWidth=priorWidth;UpdatePanel();
  plans[1]="M15 | Signal: BUY | Entry: -- | Plan data unavailable | Bars: Last/unknown proxy";UpdatePanel();
@@ -271,18 +313,20 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
        "trade statistics footprint is unchanged by the diary window");
  check(!objects.count("MT_diaryDetail0_0") && !objects.count("MT_diaryDetail1_0"),"details are not added inside the statistics box");
  check(window.x==panel.x+panel.w+8 && window.y==panel.y,"diary window is placed at the panel's right edge");
- check(window.x+window.w<=chartWidth && window.y+window.h<=750,"diary window fits the chart");
+ check(window.x+window.w<=chartWidth,"diary window fits a wide chart horizontally");
  string windowText;
  for(auto &pair:objects){auto o=pair.second;if(o.type==OBJ_LABEL && pair.first.find("MTD_")==0)
   {windowText+=o.text+" ";check(o.x>=window.x && o.x+int(o.text.size()*o.size*0.8)<=window.x+window.w && o.y>=window.y && o.y+o.size+4<=window.y+window.h,"diary labels stay inside the diary window");}}
  check(windowText.find("DIARY DETAILS")!=string::npos && windowText.find("Pending 1")!=string::npos && windowText.find("SELL OPEN")!=string::npos,"window shows per-lane counts and the latest record");
  check(windowText.find("+1.25 USD")!=string::npos && windowText.find("CSV export unavailable")!=string::npos,"window keeps net results and the CSV warning");
  check(windowText.find("No recorded trades")!=string::npos,"empty lanes keep their own wording");
+ check(windowText.find("All closed 2")!=string::npos && windowText.find("Score 2/3")!=string::npos && windowText.find("final exits")!=string::npos,"window displays real analysis sections");
  chartWidth=priorWide;UpdatePanel();
  check(objects["MTD_bg"].w>0 && objects["MTD_bg"].x>objects["MT_bg"].x,"widening the chart keeps the window beside the panel");
+ check(objects["MT_autoRow0"].y==objects["MT_readings"].y && objects["MT_autoRow0"].x>=objects["MT_readings"].x+objects["MT_readings"].w && objects["MT_autoRow0"].x+objects["MT_autoRow0"].w<=objects["MT_bg"].x+objects["MT_bg"].w && objects["MT_askBox"].x+objects["MT_askBox"].w<=objects["MT_bg"].x+objects["MT_bg"].w,"narrow chart keeps readings, auto rows and heading quotes nonoverlapping inside the main panel");
  check(objects["MTD_bg"].x>=objects["MT_bg"].x+objects["MT_bg"].w && objects["MT_bg"].w<plainPanel.w,
        "narrow chart narrows the main panel instead of overlapping it");
- check(Label("statsText").find("S 2 W 1 L 0 BE 1")==0 && !objects.count("MT_todayVal0_0_0"),
+ check(Label("statsText").find("T S 2 W 1 L 0")==0 && !objects.count("MT_todayVal0_0_0"),
        "the header keeps its statistics line while the panel narrows");
  InpShowDetails=false;UpdatePanel();check(!objects.count("MTD_bg") && !objects.count("MTD_title"),"hidden diary details remove the whole window"); InpShowDetails=false;UpdatePanel();check(!objects.count("MTD_bg") && !objects.count("MTD_title"),"hidden diary details remove the whole window");
  diaries[1]="M15 | Trade diary: clock unavailable";P5Wide="M15 | Trade diary: clock unavailable";UpdatePanel();
@@ -294,19 +338,25 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');int beforeClosed=p2Updates;UpdatePanel();
  check(p2Updates==beforeClosed+1,"closed presentation still refreshes readings");
  check(Label("stateText")=="close" && Label("clock").empty() && Wrapped("marketDetail")==g_marketDetail,"collapsed view keeps the complete closed-market detail");
+ check(Label("statsText")=="T S 2 W 1 L 0   |   A S 5 W 3 L 1","closed header keeps labeled today/all totals without BE");
  check(!objects.count("MT_settings") && !objects.count("MT_plan0") && !objects.count("MT_autoRow0") && !objects.count("MT_diary") && !objects.count("MT_bidBox"),"market closed removes every expanded panel section");
  check(objects.count("MTD_bg") && objects["MTD_bg"].w==openWindowW,"diary window keeps its size when the panel collapses");
  check(objects["MTD_bg"].y>objects["MT_bg"].y+objects["MT_bg"].h && objects["MTD_bg"].x+objects["MTD_bg"].w<=chartWidth,
        "diary window stays visible below the collapsed header without overlapping it");
  {for(auto &pp:objects) if(pp.first.find("MTD_")==0 && pp.second.type==OBJ_LABEL)
    check(pp.second.x>=objects["MTD_bg"].x && pp.second.x+objects["MTD_bg"].w>pp.second.x,"window content does not move on collapse");}
+ details[0]="M5 | Pending 0 | Open 0 | Review 0 | Unfilled 0 | No recorded trades";
  int closedHeight=objects["MT_bg"].h;UpdatePanel();check(objects["MT_bg"].h==closedHeight && p2Updates==beforeClosed+2,"closed view refreshes without losing status");
+ check(objects["MTD_last00_0"].text.find("No")!=string::npos && !objects.count("MTD_net0_0"),"closed market refreshes diary and clears stale net");
  g_marketDetail="MARKET CLOSED - next open Sun 2026.11.08 22:05:00 server (in 1d 18h 43m)";UpdatePanel();
  check(Label("closedDetail")==g_marketDetail && Wrapped("marketDetail").empty() && objects["MT_closedDetail_0"].y==objects["MT_closedDetail_1"].y && objects["MT_bg"].h<closedHeight,"normal closed notice remains one complete line with segmented labels");
+ InpShowDetails=false;UpdatePanel();check(!objects.count("MTD_bg"),"closed market permits hiding details");
+ InpShowDetails=true;UpdatePanel();check(objects.count("MTD_bg") && objects["MTD_bg"].y>objects["MT_bg"].y+objects["MT_bg"].h,"details can be initialized while the market is closed");
  g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();check(objects.count("MT_settings") && objects.count("MT_plan0") && objects.count("MT_autoRow0") && Label("marketDetail0").empty(),"market reopening restores all sections and clears closed notice");
  check(objects.count("MTD_bg") && objects["MTD_bg"].x>=objects["MT_bg"].x+objects["MT_bg"].w,"reopening returns the diary window to the panel's right side");
  diaries[2]="M30 | Trade diary: unavailable";UpdatePanel();
- check(objects.count("MTD_bg") && !objects.count("MTD_net2_0"),"unavailable lane detail leaves the window without inventing counts");
+ check(objects.count("MTD_bg") && !objects.count("MTD_insight2_1_0_0"),"unavailable lane analysis is removed without inventing counts");
+ check(objects.count("MTD_last20_0") && objects.count("MTD_insight2_0_0_0"),"clock failure is reported without hiding available last-record details");
  diaries[2]="M30 | Trades Today S 3 W 0 L 0 BE 0 | All S 3 W 0 L 0 BE 0";InpShowDetails=false;UpdatePanel();
  g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');UpdatePanel();
  g_marketState=MARKET_OPEN;g_marketDetail="";InpShowDetails=true;UpdatePanel();
