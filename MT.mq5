@@ -152,6 +152,11 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
+   if(id == CHARTEVENT_OBJECT_CLICK && UIHandleDetailsClick(sparam))
+   {
+      UpdatePanel();
+      return;
+   }
    if(id == CHARTEVENT_CHART_CHANGE)
    {
       if(_Symbol != g_symbol)

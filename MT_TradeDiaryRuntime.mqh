@@ -479,7 +479,7 @@ void P5BuildInsights(int lane, P5Insights &out)
    if(!g_p5Ready || lane<0 || lane>2) return;
    int n=0,w=0,l=0,be=0,scoreN[2]={0,0},scoreW[2]={0,0},scoreL[2]={0,0};
    int dirN[2]={0,0},dirW[2]={0,0},styleN[2]={0,0},styleW[2]={0,0};
-   double net=0,cost=0; P5Row recent[30], latest; int nr=0; bool hasLatest=false;
+   double net=0,cost=0; P5Row recent[30]; P5Row latest={}; int nr=0; bool hasLatest=false;
    for(int i=0;i<ArraySize(g_p5);i++)
    {
       P5Row r=g_p5[i];
