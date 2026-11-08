@@ -132,6 +132,15 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(Label("settingKey1")=="Allow Against Trend" && Label("settingValue1")=="M5 ON" && Label("settingValue2")=="M15 ON" && Label("settingValue3")=="M30 ON","separate timeframe setting chips");
  check(Label("settingValue7")=="M5 AUTO" && Label("settingValue8")=="M15 AUTO" && Label("settingValue9")=="M30 AUTO" && Label("settingValue11")=="M5 85%" && Label("settingValue13")=="M30 85%","trend and TP chips");
  check(Label("settingValue6")=="OFF" && Label("settingValue14")=="OFF","SL placement and timer inputs");
+ // MARKET READINGS keeps its compact eight-column row with SG last.
+ check(Label("col7")=="SG" && Label("col0")=="TF" && Label("col6")=="SC","readings table ends with SG to the right of SC");
+ check(objects["MT_col7_0"].x>objects["MT_col6_0"].x && objects["MT_col6_0"].x>objects["MT_col5_0"].x,"SG column is placed right of SC");
+ {int widest=0;for(int c=0;c<7;c++)
+   widest=std::max(widest,objects["MT_col"+std::to_string(c+1)+"_0"].x-objects["MT_col"+std::to_string(c)+"_0"].x);
+  check(widest<=120,"readings columns are packed together rather than spread across the panel");
+  Obj bgr=objects["MT_readings"];
+  check(objects["MT_col7_0"].x+UIWidth("SG")<=bgr.x+bgr.w,"the readings box ends where its SG column ends");}
+ for(int i=0;i<3;i++) check(Label("reading"+std::to_string(i)+"_7")=="SELL","SG shows the lane's own plan signal");
  check(Label("reading0_1")=="DOWN" && Label("reading2_1")=="FLAT" && Label("reading2_3")=="MIXED" && Label("reading2_6")=="-3/3 (50%L)","reading matrix");
  check(Wrapped("planDistance0_")=="TP distance (price): 0.00067" && AutoText(0).find("TP distance (price): 0.00054")!=string::npos,"plan and broker TP distances use their own targets");
  quoteFresh=false;UpdatePanel();check(Wrapped("planDistance0_")=="TP distance (price): --" && AutoText(0).find("TP distance (price): --")!=string::npos,"stale quote does not produce live distance");

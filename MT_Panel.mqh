@@ -8,6 +8,11 @@
 #define UI_DETAILS_PREFIX "MTD_"
 #define UI_FONT "Consolas"
 #define UI_SIZE 10
+// Gutter between MARKET READINGS columns. Kept small so the eight columns
+// (TF GT CT ST RG PT SC SG) stay compact in one aligned row.
+#define UI_READ_PAD 10
+// Extra gutter each column may take when the panel is wider than the row needs.
+#define UI_READ_SPREAD 6
 #define UI_X 12
 #define UI_Y 24
 #define UI_BG C'17,24,39'
@@ -296,6 +301,38 @@ bool UIReadingsValid(const string line, const string tf)
       !UIReadingField(line,"RG",d) || !UIReadingField(line,"PT",e) || !UIReadingField(line,"SC",f)) return(false);
    return(line==tf+" | GT: "+a+" | CT: "+b+" | ST: "+c+" | RG: "+d+" | PT: "+e+" | SC: "+f);
 }
+// SG - the lane's own signal, taken from its plan line so the readings table
+// shows exactly what TRADING PLANS shows. BUY/SELL/NONE/WAIT are passed through;
+// a plan line that cannot be read gives "--", never an invented direction.
+string UISignal(const string planLine, const string tf)
+{
+   UIPlan p; UIReadPlan(planLine,tf,p);
+   if(!p.recognized) return("--");
+   if(p.signal=="BUY" || p.signal=="SELL" || p.signal=="NONE" || p.signal=="WAIT") return(p.signal);
+   return(p.signal==""?"--":p.signal);
+}
+// One cell of the MARKET READINGS row. SG is the lane's plan signal; the other
+// columns come from the lane's own reading line and stay empty when it cannot
+// be read (the full text is shown underneath instead).
+string UISignalCell(const string readingLine, const string planLine,
+                    const string tf, const string col, int column, bool readingOK)
+{
+   if(column==0) return(tf);
+   if(column==7) return(UISignal(planLine,tf));
+   string value="";
+   if(!readingOK) return("");
+   UIReadingField(readingLine,col,value);
+   return(value);
+}
+
+color UISignalColor(const string value)
+{
+   if(value=="BUY") return(clrLime);
+   if(value=="SELL") return(clrTomato);
+   if(value=="WAIT" || value=="--") return(clrOrange);
+   return(clrSilver);
+}
+
 bool UIStats(const string line, const string tf, string &today, string &all)
 {
    string prefix=tf+" | Trades Today ", marker=" | All ";
@@ -817,12 +854,21 @@ void UpdatePanel()
    int panelWidth=inner+2*pad;
    int diaryW=(int)MathMin((int)MathMax(diaryMin,(inner-gap)*38/100),inner-gap-quoteMin),autoW=inner-gap-diaryW;
    statW=(int)MathMax(statW,(diaryW-tfW-20)/8);
-   int readW[7]; string cols[7]={"TF","GT","CT","ST","RG","PT","SC"}; int sum=0;
-   for(int c=0;c<7;c++)
+   // TF GT CT ST RG PT SC SG - SG sits at the right of SC. Columns are only as
+   // wide as their own header and values plus a small gutter, so the row stays
+   // compact instead of spreading the readings across the panel.
+   int readW[8]; string cols[8]={"TF","GT","CT","ST","RG","PT","SC","SG"}; int sum=0;
+   for(int c=0;c<8;c++)
    {
-      readW[c]=UIWidth(cols[c])+14;
-      for(int i=0;i<3;i++) if(readingOK[i])
-      { string val=""; if(c==0) val=tf[i]; else UIReadingField(readings[i],cols[c],val); readW[c]=(int)MathMax(readW[c],UIWidth(val)+14); }
+      int pad=UI_READ_PAD;
+      readW[c]=UIWidth(cols[c])+pad;
+      for(int i=0;i<3;i++)
+      {
+         if(c>0 && c<7 && !readingOK[i]) continue;
+         string val=(c==0?tf[i]:(c==7?UISignal(planText[i],tf[i]):""));
+         if(c>0 && c<7) UIReadingField(readings[i],cols[c],val);
+         readW[c]=(int)MathMax(readW[c],UIWidth(val)+pad);
+      }
       sum+=readW[c];
    }
    if(sum>inner-20)
@@ -846,8 +892,14 @@ void UpdatePanel()
          statW=(int)MathMax(statW,(diaryW-tfW-20)/8);
       }
    }
+   // Leftover width stays as a margin to the right of SG: a little extra gutter
+   // is fine, but the columns are not stretched across the panel.
    int spare=inner-20-sum;
-   for(int c=0;c<7;c++) readW[c]+=spare/7+(c<spare%7?1:0);
+   int extra=spare>0?(int)MathMin(UI_READ_SPREAD,spare/8):0;
+   for(int c=0;c<8;c++) readW[c]+=extra;
+   // The readings box hugs its own columns; the spare width stays outside it.
+   int readRowW=10;
+   for(int c=0;c<8;c++) readRowW+=readW[c];
    int cardW[3],planSpare=inner-2*gap-planTotal;
    for(int i=0;i<3;i++) cardW[i]=planMin[i]+planSpare/3+(i<planSpare%3?1:0);
    int marketRows=UIWrappedRows(g_marketDetail,inner),timerRows=timerDetail?UIWrappedRows(timer,inner-20):0;
@@ -882,7 +934,7 @@ void UpdatePanel()
    // Every background is created before any text and reused on each refresh.
    UIBox("bg",UI_X,UI_Y,panelWidth,panelHeight,UI_BG,UI_BORDER);
    UIBox("settings",x,settingsY,inner,settingsH,UI_SURFACE,UI_BORDER);
-   UIBox("readings",x,readHeaderY-2,inner,(1+readTotal)*step+4,UI_SURFACE,UI_BORDER);
+   UIBox("readings",x,readHeaderY-2,readRowW,(1+readTotal)*step+4,UI_SURFACE,UI_BORDER);
    int bx=x,brandW=UIWidth("MT V1.00")+10,symbolW=UIWidth(g_symbol,UI_SIZE+2)+8,typeW=UIWidth(g_type)+10,stateW=UIWidth(state)+10;
    UIBox("brand",bx,y-2,brandW,step,UI_BADGE,UI_BORDER);
    UIBox("type",bx+brandW+symbolW,y-2,typeW,step,UI_BADGE,UI_BORDER);
@@ -913,12 +965,12 @@ void UpdatePanel()
       }
    }
    int rx=x+10;
-   for(int c=0;c<7;c++)
+   for(int c=0;c<8;c++)
    {
       int yy=readY;
       for(int i=0;i<3;i++)
       {
-         string v=""; if(readingOK[i]) { if(c==0) v=tf[i]; else UIReadingField(readings[i],cols[c],v); }
+         string v=UISignalCell(readings[i],planText[i],tf[i],cols[c],c,readingOK[i]);
          UIBox("readingBadge"+IntegerToString(i)+"_"+IntegerToString(c),rx,yy-2,UIWidth(v)+8,step,
                c<5 && v!=""?UIChipFill(v):UI_SURFACE,UI_SURFACE);
          yy+=readRows[i]*step;
@@ -988,14 +1040,16 @@ void UpdatePanel()
    UIText("autoTitle",x,bottomTitleY,"AUTO EXECUTION",UI_MUTED,UI_SIZE);
    UIText("diaryTitle",x+autoW+gap,bottomTitleY,"TRADE STATISTICS",UI_MUTED,UI_SIZE);
    rx=x+14;
-   for(int c=0;c<7;c++)
+   for(int c=0;c<8;c++)
    {
-      UIText("col"+IntegerToString(c),rx,readHeaderY,cols[c],UI_MUTED,UI_SIZE);
+      UIText("col"+IntegerToString(c),rx,readHeaderY,cols[c],UI_MUTED,UI_SIZE,
+             c==7?"SG is this lane's own signal - the same value as its TRADING PLANS card.":"");
       int yy=readY;
       for(int i=0;i<3;i++)
       {
-         string v=""; if(readingOK[i]) { if(c==0) v=tf[i]; else UIReadingField(readings[i],cols[c],v); }
-         UIText("reading"+IntegerToString(i)+"_"+IntegerToString(c),rx,yy,v,UIValueColor(v),UI_SIZE);
+         string v=UISignalCell(readings[i],planText[i],tf[i],cols[c],c,readingOK[i]);
+         UIText("reading"+IntegerToString(i)+"_"+IntegerToString(c),rx,yy,v,
+                c==7?UISignalColor(v):UIValueColor(v),UI_SIZE);
          yy+=readRows[i]*step;
       }
       rx+=readW[c];
