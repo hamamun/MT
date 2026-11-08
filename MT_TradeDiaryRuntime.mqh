@@ -431,9 +431,10 @@ void P5Track(int lane, int active, int direction, ulong order, ulong position, d
    if(changed && !P5Save()) { g_p5Ready=false; Print("MT trade diary: reconciliation save failed"); }
 }
 
+// lane -1 totals every lane of this symbol, for the panel's single header line.
 string P5Summary(int lane, datetime now)
 {
-   string tf=lane==0?"M5":(lane==1?"M15":"M30");
+   string tf=lane<0?"*":(lane==0?"M5":(lane==1?"M15":"M30"));
    if(!g_p5Ready) return(tf+" | Trade diary: unavailable");
    if(now<=0) return(tf+" | Trade diary: clock unavailable");
    MqlDateTime dt; TimeToStruct(now,dt); dt.hour=0; dt.min=0; dt.sec=0;
@@ -441,7 +442,7 @@ string P5Summary(int lane, datetime now)
    int s=0,w=0,l=0,be=0,ds=0,dw=0,dl=0,dbe=0;
    for(int i=0;i<ArraySize(g_p5);i++)
    {
-      P5Row r=g_p5[i]; if(r.lane!=lane || !r.accepted) continue;
+      P5Row r=g_p5[i]; if(!r.accepted || (lane>=0 && r.lane!=lane)) continue;
       s++; if(r.requestMs>=start && r.requestMs<end) ds++;
       if(r.state!=3) continue;
       bool today=r.exitMs>=start && r.exitMs<end;
