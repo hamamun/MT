@@ -89,6 +89,8 @@ Use standard internal defaults without user inputs, adapting to the symbol's own
 
 On supported charts the three header rows remain above the M5, M15 and M30 rows. Size the panel to contain all content, and split long text into short chart labels so the score and market details are not truncated. Unsupported charts retain their two-line notice.
 
+MARKET READINGS sits above TRADING PLANS in the left column; the three plan rows are stacked, share one set of Entry/Lot/SL/TP column widths and are exactly as wide as the readings table. AUTO EXECUTION occupies the right column, starting level with MARKET READINGS. TRADE STATISTICS are a single symbol-wide line in the header (today, then all time); per-timeframe counts live in the separate diary window.
+
 Each timeframe row uses **GT** = Global Trend, **CT** = Current Trend, **ST** = Status, **RG** = Regime, **PT** = Prediction Trend, **SC** = Score and **SG** = Signal. SG is the lane's own plan signal (BUY/SELL/NONE/WAIT, or `--` when the plan line cannot be read), shown immediately to the right of SC so the readings row and the plan card cannot disagree; it is not a separate calculation. The eight columns are sized to their own headers and values and packed together, and the readings box ends at its SG column rather than stretching across the panel. ST remains the combined trend status. RG uses SimpleEA's regime mechanism. Show `WAIT` for RG when its required history is unavailable or invalid, and `--` for PT when its estimate is unavailable; do not invent a reading.
 
 Illustrative layout, not validated output:
