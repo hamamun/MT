@@ -51,6 +51,9 @@ using datetime=long; using ushort=unsigned short; using uint=unsigned int; using
 #define SYMBOL_TRADE_STOPS_LEVEL 20
 #define SYMBOL_TRADE_TICK_SIZE 21
 #define SYMBOL_VOLUME_STEP 22
+#define SYMBOL_VOLUME_MIN 23
+#define SYMBOL_VOLUME_MAX 24
+#define ACCOUNT_EQUITY 25
 #define SYMBOL_ORDER_MARKET 1
 #define SYMBOL_ORDER_LIMIT 2
 #define SYMBOL_ORDER_SL 16
@@ -127,7 +130,9 @@ using datetime=long; using ushort=unsigned short; using uint=unsigned int; using
 #define TRADE_RETCODE_INVALID_FILL 10030
 #define MARKET_OPEN 0
 int g_marketState=MARKET_OPEN; string _Symbol="XAUUSD";
-bool InpMinimumLot=false;
+bool InpMinimumLot=false, InpBypassRisk=false;
+double equity=10000, volMin=0.01, volMax=100, volStep=0.01;
+double AccountInfoDouble(int){return equity;}
 vector<datetime> laneBars[3]={{700,800,900,1000,1001},{700,800,900,1000,1001},{700,800,900,1000,1001}};
 int P3Timeframe(int lane){return lane;}
 datetime iTime(string,int tf,int shift){auto &b=laneBars[tf];return b.size()>(size_t)shift?b[b.size()-1-shift]:0;}
@@ -161,7 +166,7 @@ string SymbolInfoString(string s,int p){if(!pairs.count(s))return "";return p==S
 long stopPoints=0; bool stopInfo=true;
 long symbolFill=SYMBOL_FILLING_FOK, symbolExec=SYMBOL_TRADE_EXECUTION_MARKET, expiration=SYMBOL_EXPIRATION_GTC, calcMode=SYMBOL_CALC_MODE_FOREX, orderMode=51, stopLifetime=SYMBOL_ORDERS_GTC;
 long SymbolInfoInteger(string,int p){return p==SYMBOL_DIGITS?2:0;}
-double SymbolInfoDouble(string,int){return 0.01;}
+double SymbolInfoDouble(string,int p){return p==SYMBOL_VOLUME_MIN?volMin:p==SYMBOL_VOLUME_MAX?volMax:p==SYMBOL_VOLUME_STEP?volStep:0.01;}
 bool SymbolInfoInteger(string,int p,long &out){if(p==SYMBOL_TRADE_STOPS_LEVEL){out=stopPoints;return stopInfo;}out=p==SYMBOL_FILLING_MODE?symbolFill:p==SYMBOL_TRADE_EXEMODE?symbolExec:p==SYMBOL_TRADE_CALC_MODE?calcMode:p==SYMBOL_ORDER_MODE?orderMode:p==SYMBOL_ORDER_GTC_MODE?stopLifetime:expiration;return true;}
 bool OrderCalcProfit(int dir,string,double lot,double entry,double exit,double &x){if(!calcOk)return false;x=(dir==ORDER_TYPE_BUY?1:-1)*lot*(exit-entry)*100;return true;}
 bool ChartSupported(){return true;}string P3DiaryKey(){return "MT-test";}
@@ -218,17 +223,18 @@ bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){out.retcode=checkOk?
 int sendMode=0,sends=0,cancels=0,modifies=0;unsigned long nextTicket=100;MqlTradeRequest lastRequest{};
 bool OrderSend(MqlTradeRequest &r,MqlTradeResult &out){
  lastRequest=r;
- if(r.action==TRADE_ACTION_MODIFY){modifies++;if(sendMode==5){out.retcode=TRADE_RETCODE_REJECT;return false;}if(sendMode==6){out.retcode=10012;return false;}if(sendMode==8){out.retcode=10009;return true;}if(sendMode==7){for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;}out.retcode=10012;return false;}for(auto &o:orders)if(o.ticket==r.order){o.entry=r.price;o.sl=r.sl;o.tp=r.tp;out.retcode=10009;return true;}return false;}
- if(r.action==TRADE_ACTION_REMOVE){cancels++;if(sendMode==3){out.retcode=10028;return false;}for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);if(sendMode==4){Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;out.retcode=10036;return false;}o.state=ORDER_STATE_CANCELED;history[o.ticket]=o;out.retcode=10009;return true;}return false;}
+ if(r.action==TRADE_ACTION_MODIFY){modifies++;if(sendMode==5){out.retcode=TRADE_RETCODE_REJECT;return false;}if(sendMode==6){out.retcode=10012;return false;}if(sendMode==8){out.retcode=10009;return true;}if(sendMode==7){for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot,o.ticket});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;}out.retcode=10012;return false;}for(auto &o:orders)if(o.ticket==r.order){o.entry=r.price;o.sl=r.sl;o.tp=r.tp;out.retcode=10009;return true;}return false;}
+ if(r.action==TRADE_ACTION_REMOVE){cancels++;if(sendMode==3){out.retcode=10028;return false;}for(size_t i=0;i<orders.size();i++)if(orders[i].ticket==r.order){Order o=orders[i];orders.erase(orders.begin()+i);if(sendMode==4){Position p;p.id=o.ticket+1000;p.ticket=p.id;p.magic=o.magic;p.type=o.type==ORDER_TYPE_BUY_LIMIT?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);deals.push_back({p.id,DEAL_ENTRY_IN,p.lot,o.ticket});o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;out.retcode=10036;return false;}o.state=ORDER_STATE_CANCELED;history[o.ticket]=o;out.retcode=10009;return true;}return false;}
  sends++; if(sendMode==1){out.retcode=10012;return false;} if(sendMode==2){out.retcode=TRADE_RETCODE_REJECT;return false;} if(sendMode==9){out.retcode=TRADE_RETCODE_REJECT;out.deal=888;return false;}
  Order o; o.ticket=nextTicket++;o.magic=r.magic;o.type=r.type;o.entry=r.price;o.sl=r.sl;o.tp=r.tp;o.lot=r.volume;o.initial=r.volume;o.symbol=r.symbol;o.comment=r.comment;out.order=o.ticket;out.retcode=10009;
- if(r.action==TRADE_ACTION_PENDING){orders.push_back(o);}else{Position p; p.ticket=o.ticket+1000;p.id=o.ticket+1000;p.magic=o.magic;p.type=r.type==ORDER_TYPE_BUY?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;deals.push_back({p.id,DEAL_ENTRY_IN,p.lot});}
+ if(r.action==TRADE_ACTION_PENDING){orders.push_back(o);}else{Position p; p.ticket=o.ticket+1000;p.id=o.ticket+1000;p.magic=o.magic;p.type=r.type==ORDER_TYPE_BUY?POSITION_TYPE_BUY:POSITION_TYPE_SELL;p.entry=o.entry;p.sl=o.sl;p.tp=o.tp;p.lot=o.lot;p.symbol=o.symbol;p.comment=o.comment;positions.push_back(p);o.position=p.id;o.state=ORDER_STATE_FILLED;history[o.ticket]=o;deals.push_back({p.id,DEAL_ENTRY_IN,p.lot,o.ticket});}
  return true;
 }
 '''
 diary_stubs=r'''
 int P3TPPercentInput(int){return 85;}
-int P5Begin(int, const P3Plan&, const MqlTick&, bool, int){return -1;}
+double diaryRequestLot=0;
+int P5Begin(int, const P3Plan &p, const MqlTick&, bool, int){diaryRequestLot=p.lot;return -1;}
 void P5SendResult(int,ulong,uint,bool){}
 void P5Track(int,int,int,ulong,ulong,datetime,long){}
 '''
@@ -249,7 +255,7 @@ bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
- g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;InpMinimumLot=false;InpPlaceStopLoss=true;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
+ g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;diaryRequestLot=0;InpMinimumLot=false;InpBypassRisk=false;equity=10000;volMin=0.01;volMax=100;volStep=0.01;InpPlaceStopLoss=true;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
  for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
  InpAutoTrading=false;P4Init();
 }
@@ -502,11 +508,11 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  // Closed position with zero historical order position ID: require final order,
  // saved position, matching entry deal and fully matching exits.
  resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=701;g_p4[0].position=901;
- h=Order{};h.ticket=701;h.state=ORDER_STATE_FILLED;h.position=0;history[701]=h;
+ h=Order{};h.ticket=701;h.state=ORDER_STATE_FILLED;h.position=0;h.initial=0.05;history[701]=h;
  deals={{901,DEAL_ENTRY_IN,0.05,999},{901,DEAL_ENTRY_OUT,0.05,0}};
- P4Process(false);check(g_p4[0].active && P4Line(0).find("link or closure unconfirmed")!=string::npos,"closed unrelated position cannot clear saved order");
+ P4Process(false);check(g_p4[0].active && P4Line(0).find("fill not confirmed closed")!=string::npos,"closed unrelated position cannot clear saved order");
  deals[0].order=701;deals[1].vol=0.02;P4Process(false);
- check(g_p4[0].active && P4Line(0).find("link or closure unconfirmed")!=string::npos,"matching entry without full exit remains held");
+ check(g_p4[0].active && P4Line(0).find("fill not confirmed closed")!=string::npos,"matching entry without full exit remains held");
  deals[1].vol=0.05;history[701].state=99;P4Process(false);
  check(g_p4[0].active && P4Line(0).find("order not final")!=string::npos,"complete deals cannot override nonfinal order");
  history[701].state=ORDER_STATE_FILLED;P4Process(false);
@@ -514,10 +520,10 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  // Other history ambiguities cannot be mistaken for a closed position.
  resetWorld();g_p4[1].active=1;g_p4[1].direction=1;g_p4[1].order=702;g_p4[1].position=902;
  P4Process(false);check(P4Line(1).find("order history unavailable")!=string::npos,"missing history reason");
- h=Order{};h.ticket=702;h.state=ORDER_STATE_FILLED;h.position=903;history[702]=h;P4Process(false);
+ h=Order{};h.ticket=702;h.state=ORDER_STATE_FILLED;h.position=903;h.initial=0.05;history[702]=h;P4Process(false);
  check(g_p4[1].active && P4Line(1).find("position ID mismatch")!=string::npos,"mismatched position held");
  history[702].position=902;deals={{902,DEAL_ENTRY_IN,0.05,702},{902,DEAL_ENTRY_OUT,0.02,0}};P4Process(false);
- check(g_p4[1].active && P4Line(1).find("position history incomplete")!=string::npos,"partial exit held");
+ check(g_p4[1].active && P4Line(1).find("fill not confirmed closed")!=string::npos,"partial exit held");
  // A final filled order can recover an unsaved position ID from its own deals.
  resetWorld();current={100,100.02,terminalTime};
  g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=710;
@@ -539,6 +545,24 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  P4Process(true);P4Process(false);check(sends==0 && positions.empty() && P4Line(0).find("Waiting for next closed bar")!=string::npos,"confirmed closed fill waits for a fresh plan");
  laneBars[0].push_back(1002);plans[0].bar=1001;P4Process(true);P4Process(false);
  check(sends==1 && positions.size()==1 && g_p4View[0].state==P4_OPEN,"new own-timeframe plan permits re-entry");
+ // Known broker position IDs must also account for the whole order and its identity.
+ resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=729;g_p4[0].position=929;
+ h=Order{};h.ticket=729;h.state=ORDER_STATE_FILLED;h.position=929;h.initial=0.05;history[729]=h;
+ deals={{929,DEAL_ENTRY_IN,0.02,729},{929,DEAL_ENTRY_OUT,0.02,799}};P4Process(false);
+ check(g_p4[0].active && P4Line(0).find("fill not confirmed closed")!=string::npos,"known ID: balanced subset cannot clear full fill");
+ InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;laneBars[0].push_back(1002);plans[0].bar=1001;P4Process(true);
+ check(g_p4[0].active && sends==0,"incomplete known-ID history blocks re-entry even after next bar");
+ deals={{929,DEAL_ENTRY_IN,0.05,999},{929,DEAL_ENTRY_OUT,0.05,799}};P4Process(false);
+ check(g_p4[0].active,"known ID: unrelated entry cannot clear order");
+ deals[0].order=729;P4Process(false);check(!g_p4[0].active && g_p4[0].cooldown==2,"known ID: fully linked closure starts next-bar wait");
+ resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].position=930;
+ deals={{930,DEAL_ENTRY_IN,0.05,730},{930,DEAL_ENTRY_OUT,0.05,799}};P4Process(false);
+ check(g_p4[0].active && P4Line(0).find("no order ticket")!=string::npos,"unknown order cannot prove total fill");
+ resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=731;g_p4[0].position=931;
+ h=Order{};h.ticket=731;h.state=ORDER_STATE_CANCELED;h.position=931;h.initial=0.05;h.lot=0.03;history[731]=h;
+ deals={{931,DEAL_ENTRY_IN,0.01,731},{931,DEAL_ENTRY_OUT,0.01,799}};P4Process(false);
+ check(g_p4[0].active,"known partial order requires whole confirmed fill");
+ deals[0].vol=0.02;deals[1].vol=0.02;P4Process(false);check(!g_p4[0].active,"known partial order clears after complete linked closure");
  // A seemingly closed subset of the filled order is not the whole fill.
  resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=719;
  h=Order{};h.ticket=719;h.state=ORDER_STATE_FILLED;h.initial=0.05;history[719]=h;
@@ -577,6 +601,24 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  P4Process(false);check(!g_p4[2].active && historySelectCalls==1,"explicit history selection recovers saved final order");
  resetWorld();g_p4[2].active=1;g_p4[2].direction=1;g_p4[2].order=723;historyRequiresSelect=true;
  P4Process(false);check(g_p4[2].active && P4Line(2).find("order history unavailable")!=string::npos,"missing saved order stays held after history selection");
+ // Market risk uses live executable price, never increases frozen lot.
+ resetWorld();equity=1000;P3Plan riskBuy{1,true,true,100.0,99.0,102.0,0.05};double riskLot=0;
+ MqlTick riskQuote{100.79,100.80,terminalTime};
+ check(P4RequestLot(riskBuy,riskQuote,riskLot) && MathAbs(riskLot-0.02)<1e-8,"buy drift reduces lot on broker grid");
+ P3Plan riskSell{-1,true,true,100.0,101.0,98.0,0.05};riskQuote={99.20,99.21,terminalTime};
+ check(P4RequestLot(riskSell,riskQuote,riskLot) && MathAbs(riskLot-0.02)<1e-8,"sell drift reduces lot on broker grid");
+ riskQuote={99.9,99.92,terminalTime};check(P4RequestLot(riskBuy,riskQuote,riskLot) && MathAbs(riskLot-0.05)<1e-8,"improved price never increases frozen lot");
+ equity=1;check(P4RequestLot(riskBuy,riskQuote,riskLot) && MathAbs(riskLot-0.01)<1e-8,"normal below-minimum keeps minimum exception");
+ InpMinimumLot=true;check(P4RequestLot(riskBuy,riskQuote,riskLot) && riskLot==riskBuy.lot,"forced minimum mode unchanged");InpMinimumLot=false;
+ InpBypassRisk=true;check(P4RequestLot(riskBuy,riskQuote,riskLot) && riskLot==riskBuy.lot,"bypass mode unchanged");InpBypassRisk=false;
+ calcOk=false;check(!P4RequestLot(riskBuy,riskQuote,riskLot),"missing live loss calculation holds order");calcOk=true;
+ equity=0;check(!P4RequestLot(riskBuy,riskQuote,riskLot),"missing equity holds normal market sizing");
+ equity=1000;volStep=0;check(!P4RequestLot(riskBuy,riskQuote,riskLot),"missing volume grid holds normal market sizing");volStep=0.01;
+ InpPlaceStopLoss=false;riskQuote={100.79,100.80,terminalTime};check(P4RequestLot(riskBuy,riskQuote,riskLot) && MathAbs(riskLot-0.02)<1e-8,"no-SL mode still uses planned SL as sizing reference");InpPlaceStopLoss=true;
+ resetWorld();equity=1000;InpAutoTrading=true;current={100.79,100.80,terminalTime};plans[0]=riskBuy;g_p3[0].score=3;P4Process(true);
+ check(sends==1 && MathAbs(lastRequest.volume-0.02)<1e-8 && MathAbs(plans[0].lot-0.05)<1e-8 && MathAbs(diaryRequestLot-0.02)<1e-8,"actual request and diary use reduced lot while plan remains frozen");
+ resetWorld();equity=1000;InpAutoTrading=true;current={100.79,100.80,terminalTime};plans[0]=riskBuy;g_p3[0].score=3;calcOk=false;P4Process(true);P4Process(false);
+ check(sends==0 && P4Line(0).find("Live risk sizing unavailable")!=string::npos,"risk failure is visible and cannot send");
  // A live position can be linked by its entry deal when the order ID is zero.
  resetWorld();g_p4[0].active=1;g_p4[0].direction=1;g_p4[0].order=724;
  h=Order{};h.ticket=724;h.state=ORDER_STATE_FILLED;history[724]=h;
@@ -635,7 +677,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  "Pending volume step unavailable: cancel","Pending price tick unavailable: cancel","Pending volume/identity uncertain: cancel",
  "Pending plan unsuitable: cancel","Pending modification unconfirmed: cancel","Cancellation pending","Cancellation requested (10009)",
  "Modification requested (10009); awaiting broker","Order result 10009; awaiting broker","Order rejected: 10006","Order check: 10019",
- "Signal WAIT","Signal unavailable","No qualifying signal","Hedging account required","Trading permission unavailable","Market not open",
+ "Live risk sizing unavailable","Signal WAIT","Signal unavailable","No qualifying signal","Hedging account required","Trading permission unavailable","Market not open",
  "Plan data unavailable","Waiting for next closed bar","Fresh quote unavailable","BUY limit not below Ask","SELL limit not above Bid",
  "Market price outside SL/TP","Plan SL/TP invalid","Broker minimum distance not met","Broker stops or plan data unavailable",
  "SL/TP lifetime or order mode unavailable","Filling mode unavailable","Request retry delay","Ready: waiting for tick"};
