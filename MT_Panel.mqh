@@ -89,8 +89,41 @@ void UIResetCounts()
    // The diary window is a separate window: a panel reset (market close,
    // supported/unsupported change) does not clear its content or its place.
 }
+// MT5 draws trade-history markers and trade levels above foreground labels.
+// With the user's permission hide them across this chart while the panel is
+// active; restore only settings we changed and only if still in that state.
+bool g_uiTradesManaged=false, g_uiRestoreHistory=false, g_uiRestoreLevels=false;
+void UIHideChartTrades()
+{
+   if(g_uiTradesManaged) return;
+   g_uiTradesManaged=true; long prior=0;
+   if(!ChartGetInteger(0,CHART_SHOW_TRADE_HISTORY,0,prior))
+      Print("MT panel: cannot read chart trade-history visibility");
+   else if(prior!=0)
+   {
+      g_uiRestoreHistory=ChartSetInteger(0,CHART_SHOW_TRADE_HISTORY,false);
+      if(!g_uiRestoreHistory) Print("MT panel: cannot hide chart trade history");
+   }
+   if(!ChartGetInteger(0,CHART_SHOW_TRADE_LEVELS,0,prior))
+      Print("MT panel: cannot read chart trade-level visibility");
+   else if(prior!=0)
+   {
+      g_uiRestoreLevels=ChartSetInteger(0,CHART_SHOW_TRADE_LEVELS,false);
+      if(!g_uiRestoreLevels) Print("MT panel: cannot hide chart trade levels");
+   }
+}
+void UIRestoreChartTrades()
+{
+   long current=0;
+   if(g_uiRestoreHistory && ChartGetInteger(0,CHART_SHOW_TRADE_HISTORY,0,current) && current==0)
+      if(!ChartSetInteger(0,CHART_SHOW_TRADE_HISTORY,true)) Print("MT panel: cannot restore chart trade history");
+   if(g_uiRestoreLevels && ChartGetInteger(0,CHART_SHOW_TRADE_LEVELS,0,current) && current==0)
+      if(!ChartSetInteger(0,CHART_SHOW_TRADE_LEVELS,true)) Print("MT panel: cannot restore chart trade levels");
+   g_uiRestoreHistory=false; g_uiRestoreLevels=false; g_uiTradesManaged=false;
+}
 void PanelRemove()
 {
+   UIRestoreChartTrades();
    // MT_ is the established panel prefix, including objects from older layouts.
    ObjectsDeleteAll(0,UI_PREFIX); ObjectsDeleteAll(0,UI_DETAILS_PREFIX);
    g_uiBuilt=false; g_uiSupported=false; g_uiClosed=false; UIResetCounts();
@@ -217,6 +250,9 @@ color UIValueColor(const string value)
 {
    if(value=="UP" || value=="BUY" || (StringFind(value,"/3")>=0 && StringSubstr(value,0,1)=="+")) return(clrLime);
    if(value=="DOWN" || value=="SELL" || (StringFind(value,"/3")>=0 && StringSubstr(value,0,1)=="-")) return(clrTomato);
+   if(StringFind(value,"P/L +")==0) return(clrLime);
+   if(StringFind(value,"P/L -")==0 && StringFind(value,"P/L --")!=0) return(clrTomato);
+   if(StringFind(value,"SL --")==0 || StringFind(value,"Pending SL --")==0) return(clrOrange);
    if(value=="WAIT" || value=="CONFLICT" || StringFind(value,"NO SL")>=0 ||
       StringFind(value,"REVIEW")>=0 || StringFind(value,"unavailable")>=0 || StringFind(value,"PAUSED")>=0) return(clrOrange);
    return(clrSilver);
@@ -425,6 +461,8 @@ int UIAutoFlow(const string line, int lane, int x, int y, int width, int lead, i
       if(trade && t==tradeIndex) continue;
       string item=normal?UIPart(line,t):line;
       if(item=="") continue;
+      bool core=StringFind(item,"Entry ")==0 || StringFind(item,"Lot ")==0;
+      if(trade && ((pass==0 && !core) || (pass==1 && core))) continue;
       if(trade && StringFind(item,"TP distance (price): ")==0 && quote!="")
       {
          if(cursor>8) row++;
@@ -436,8 +474,6 @@ int UIAutoFlow(const string line, int lane, int x, int y, int width, int lead, i
          }
          part++; cursor=width; continue;
       }
-      bool core=StringFind(item,"Entry ")==0 || StringFind(item,"Lot ")==0;
-      if(trade && ((pass==0 && !core) || (pass==1 && core))) continue;
       for(int pos=0;pos<StringLen(item);)
       {
          int available=width-cursor-8;
@@ -685,6 +721,7 @@ void UpdatePanel()
    UIMeasure("Mg",UI_SIZE+2,w,h); step=(int)MathMax(step,h+6);
    if(!supported)
    {
+      UIRestoreChartTrades();
       string tf=EnumToString((ENUM_TIMEFRAMES)_Period);
       if(StringFind(tf,"PERIOD_")==0) tf=StringSubstr(tf,7);
       string title="MT V1.00 | "+g_symbol+" | "+tf;
@@ -696,6 +733,7 @@ void UpdatePanel()
       DetailsRemove();
       ChartRedraw(); return;
    }
+   UIHideChartTrades();
    // The market-closed layout only changes presentation: continue the same
    // readings refresh so the timer/tick and broker-management paths are intact.
    P2Update();
