@@ -504,7 +504,7 @@ void UIReadDetail(const string line, const string tf, UIDetail &d)
       if(StringFind(t,"Last: ")==0) d.last=UIAfter(t,"Last: ");
       else if(StringFind(t,"Net: ")==0) d.net=UIAfter(t,"Net: ");
       else if(StringFind(t,"No recorded trades")==0) d.last=t;
-      else if(t=="CSV unavailable") d.warning="CSV export unavailable";
+      else if(t=="CSV unavailable") d.warning=(d.warning==""?"CSV export unavailable":d.warning+" | CSV export unavailable");
       else d.warning=(d.warning==""?t:d.warning+" | "+t);
    }
    if(seen<4) { d.state=""; d.last=""; d.net=""; d.warning=line; return; }
@@ -699,6 +699,12 @@ void UpdatePanel()
    // The market-closed layout only changes presentation: continue the same
    // readings refresh so the timer/tick and broker-management paths are intact.
    P2Update();
+   string timer=P4ScheduleText(),timerValue=UIAfter(timer,"Timer: ");
+   if(timerValue=="") timerValue=timer;
+   string timerState=StringFind(timerValue,"CLOCK UNAVAILABLE")==0?"CLOCK UNAVAILABLE":UIWord(timerValue,0);
+   string timerLabel="Timer: "+timerState;
+   bool timerDetail=(timerValue!=timerState);
+   string timerTip=timer+". The timer uses the PC/VPS local clock and gates new entries, not open positions.";
    if(closed)
    {
       string detail=g_marketDetail;
@@ -711,7 +717,7 @@ void UpdatePanel()
       string statToday="",statAll="";
       if(UIStats(P5Summary(-1,now),"*",statToday,statAll)) closedStats=UIHeaderStats(statToday,statAll);
       else closedStats="Trade statistics unavailable";
-      int headerW=brandW+symbolW+typeW+stateW+UIWidth(closedStats)+20;
+      int headerW=brandW+symbolW+typeW+stateW+UIWidth(closedStats)+UIWidth(timerLabel)+46;
       int chartW=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0);
       // An open diary window keeps its column: the collapsed header wraps its
       // notice inside the room that is left, so the two never overlap.
@@ -732,6 +738,9 @@ void UpdatePanel()
       UIBox("stats",closedStatsX,y-2,UIWidth(closedStats)+12,step,UI_SURFACE,UI_BORDER);
       UIText("statsText",closedStatsX+6,y,closedStats,UI_MUTED,UI_SIZE,
              "Broker-confirmed trade diary for this symbol and account: today then all time.");
+      int closedTimerX=closedStatsX+UIWidth(closedStats)+20;
+      UIBox("timerBadge",closedTimerX,y-2,UIWidth(timerLabel)+12,step,UI_SURFACE,UI_BORDER);
+      UIText("timerStatus",closedTimerX+6,y,timerLabel,clrWhite,UI_SIZE,timerTip);
       UIText("closedDetail",x,y+step+6,fits?detail:"",clrSilver,UI_SIZE,"Broker session times are in server time.");
       UIWrapped("marketDetail",x,y+step+6,fits?"":detail,width,step,clrSilver,"Broker session times are in server time.",g_uiMarketNotes);
       // The diary window is a separate window: it stays visible with its own
@@ -801,20 +810,12 @@ void UpdatePanel()
          autoQuote[i]=(direction=="BUY"?"Ask: ":"Bid: ")+(freshQuote?(direction=="BUY"?ask:bid):"--");
       }
    }
-   string groups[9]={"Auto Trading","Allow Against Trend","Minimum Lot","Bypass Risk","SL Placement","Trend to Follow","Diary Details","TP %","Timer"};
-   int start[9]={0,1,4,5,6,7,10,11,14}, count[9]={1,3,1,1,1,3,1,3,1};
-   string values[15];
-   values[0]=UIOnOff(InpAutoTrading);
-   for(int i=0;i<3;i++) values[1+i]=tf[i]+" "+UIOnOff(P3Against(i));
-   values[4]=UIOnOff(InpMinimumLot); values[5]=UIOnOff(InpBypassRisk); values[6]=UIOnOff(InpPlaceStopLoss);
-   for(int i=0;i<3;i++) values[7+i]=tf[i]+" "+UITrend(P3Choice(i));
-   values[10]=UIOnOff(InpShowDetails);
-   for(int i=0;i<3;i++) values[11+i]=tf[i]+" "+UITP(i);
-   string timer=P4ScheduleText(),timerValue=UIAfter(timer,"Timer: ");
-   if(timerValue=="") timerValue=timer;
-   if(StringFind(timerValue,"CLOCK UNAVAILABLE")==0) values[14]="CLOCK UNAVAILABLE";
-   else values[14]=UIWord(timerValue,0);
-   bool timerDetail=(timerValue!=values[14]);
+   string groups[7]={"Auto Trading","SL Placement","Bypass Risk","Minimum Lot","TP %","Trend to Follow","Allow Against Trend"};
+   int start[7]={0,1,2,3,4,7,10}, count[7]={1,1,1,1,3,3,3};
+   string values[13];
+   values[0]=UIOnOff(InpAutoTrading); values[1]=UIOnOff(InpPlaceStopLoss);
+   values[2]=UIOnOff(InpBypassRisk); values[3]=UIOnOff(InpMinimumLot);
+   for(int i=0;i<3;i++) { values[4+i]=tf[i]+" "+UITP(i); values[7+i]=tf[i]+" "+UITrend(P3Choice(i)); values[10+i]=tf[i]+" "+UIOnOff(P3Against(i)); }
    // Height must cover the actual displayed glyphs, not just an example string.
    UIGrowStep(g_symbol,UI_SIZE+2,step); UIGrowStep(g_type,UI_SIZE,step);
    UIGrowStep(state,UI_SIZE,step); UIGrowStep(clock,UI_SIZE,step);
@@ -833,16 +834,15 @@ void UpdatePanel()
    int panelMax=chartW;
    if(InpShowDetails && chartW>0)
       panelMax=(int)MathMax(DETAILS_PANEL_FLOOR+2*pad,chartW-gap-detailsW-UI_X);
-   int settingSize=11,groupW[9],badgeW[15],settingsRow[2];
+   int settingSize=11,groupW[7],badgeW[13],settingsRow[7],rowOf[7],rowGroups[7],settingRows=2;
    int settingGap=18,settingLabelPad=8,settingBadgePad=12,settingChipGap=4;
    for(int pass=0;pass<4;pass++)
    {
       settingSize=pass<3?11-pass:9;
-      // Tight charts retain the compact minimum; wider charts get roomier groups.
       settingGap=pass==3?12:18; settingLabelPad=pass==3?4:8;
       settingBadgePad=pass==3?8:12; settingChipGap=pass==3?2:4;
-      settingsRow[0]=4*settingGap; settingsRow[1]=3*settingGap;
-      for(int g=0;g<9;g++)
+      settingsRow[0]=3*settingGap; settingsRow[1]=2*settingGap;
+      for(int g=0;g<7;g++)
       {
          groupW[g]=UIWidth(groups[g],settingSize)+settingLabelPad;
          for(int j=0;j<count[g];j++)
@@ -850,12 +850,27 @@ void UpdatePanel()
             int k=start[g]+j; badgeW[k]=UIWidth(values[k],settingSize)+settingBadgePad;
             groupW[g]+=badgeW[k]+(j>0?settingChipGap:0);
          }
-         settingsRow[g<5?0:1]+=groupW[g];
+         settingsRow[g<4?0:1]+=groupW[g];
       }
       if((int)MathMax(settingsRow[0],settingsRow[1])+20<=panelMax-2*UI_X-2*pad || pass==3) break;
    }
-   for(int g=0;g<9;g++) UIGrowStep(groups[g],settingSize,step);
-   for(int i=0;i<15;i++) UIGrowStep(values[i],settingSize,step);
+   // Preserve the requested two-row grouping where it fits. On tighter charts,
+   // wrap whole setting groups rather than overlapping or hiding their values.
+   int settingBudget=(int)MathMax(1,panelMax-2*UI_X-2*pad-20);
+   for(int r=0;r<7;r++) { settingsRow[r]=0; rowGroups[r]=0; }
+   int row=0;
+   for(int g=0;g<7;g++)
+   {
+      if((g==4 || (rowGroups[row]>0 && settingsRow[row]+settingGap+groupW[g]>settingBudget)) && rowGroups[row]>0) row++;
+      rowOf[g]=row;
+      if(rowGroups[row]>0) settingsRow[row]+=settingGap;
+      settingsRow[row]+=groupW[g]; rowGroups[row]++;
+   }
+   settingRows=row+1;
+   int settingsWidth=0;
+   for(int r=0;r<settingRows;r++) settingsWidth=(int)MathMax(settingsWidth,settingsRow[r]);
+   for(int g=0;g<7;g++) UIGrowStep(groups[g],settingSize,step);
+   for(int i=0;i<13;i++) UIGrowStep(values[i],settingSize,step);
    // The three plan rows are stacked in one column, so they share one set of
    // column widths: the widest Entry/Lot/SL/TP across the lanes. SL and TP
    // amounts stay beside their price; if that does not fit the stacked row,
@@ -896,8 +911,8 @@ void UpdatePanel()
                autoMin=(int)MathMax(autoMin,UIWidth(part)+UIWidth(autoQuote[i])+24);
          }
    }
-   int minW=(int)MathMax(leftHead+UIWidth(statsLine)+UIWidth(clock)+30,
-                         (int)MathMax(settingsRow[0],settingsRow[1])+20);
+   int minW=(int)MathMax(leftHead+UIWidth(statsLine)+UIWidth(timerLabel)+UIWidth(clock)+55,
+                         settingsWidth+20);
    minW=(int)MathMax(minW,UI_READ_MIN_W+gap+autoMin);
    int inner=minW;
    int panelWidth=inner+2*pad;
@@ -935,7 +950,8 @@ void UpdatePanel()
    // is fine, but the columns are not stretched across the panel.
    // Keep any extra reading gutters from consuming the space needed by the
    // first broker row and the two quote badges.
-   if(inner<leftMin+gap+autoMin) { inner=leftMin+gap+autoMin; panelWidth=inner+2*pad; }
+   int headerMin=leftHead+UIWidth(statsLine)+UIWidth(timerLabel)+UIWidth(clock)+55;
+   if(inner<(int)MathMax(leftMin+gap+autoMin,headerMin)) { inner=(int)MathMax(leftMin+gap+autoMin,headerMin); panelWidth=inner+2*pad; }
    int spare=inner-leftMin-gap-autoMin;
    int extra=spare>0?(int)MathMin(UI_READ_SPREAD,spare/8):0;
    for(int c=0;c<8;c++) readW[c]+=extra;
@@ -978,8 +994,8 @@ void UpdatePanel()
       distanceRows[i]=compactPlan[i]?0:UIWrappedRows(planDistance[i],leftW-20);
       autoRows[i]=UIAutoFlow(autos[i],i,0,0,autoW,autoLead,step,false,"",autoQuote[i]); autoTotal+=autoRows[i]*step+4;
    }
-   int headerH=step+6,marketY=y+headerH,settingsY=marketY+marketRows*step+gap;
-   int settingsH=(3+timerRows)*step+10,readTitleY=settingsY+settingsH+gap,readHeaderY=readTitleY+step;
+   int headerH=step+6,timerY=y+headerH,marketY=timerY+timerRows*step,settingsY=marketY+marketRows*step+gap;
+   int settingsH=(1+settingRows)*step+10,readTitleY=settingsY+settingsH+gap,readHeaderY=readTitleY+step;
    int readY=readHeaderY+step;
    // One stacked plan row per lane; its header line carries the signal chips.
    int cardH[3],planTotalH=0;
@@ -1011,16 +1027,19 @@ void UpdatePanel()
    int statsX=bx+brandW+symbolW+typeW+stateW+14;
    int statsW=UIWidth(statsLine)+12;
    UIBox("stats",statsX,y-2,statsW,step,UI_SURFACE,UI_BORDER);
+   int timerX=statsX+statsW+8;
+   UIBox("timerBadge",timerX,y-2,UIWidth(timerLabel)+12,step,UI_SURFACE,UI_BORDER);
    int quoteX=autoX+UIWidth("AUTO EXECUTION")+12;
    UIBox("bidBox",quoteX,autoTitleY-2,UIWidth("Bid: "+bid)+10,step,UI_SURFACE,UI_BORDER);
    UIBox("askBox",quoteX+UIWidth("Bid: "+bid)+16,autoTitleY-2,UIWidth("Ask: "+ask)+10,step,UI_SURFACE,UI_BORDER);
-   int settingX[9],badgeX[15],sx=x+10;
-   for(int g=0;g<9;g++)
+   int settingX[7],badgeX[13],sx=x+10,positionInRow=0;
+   for(int g=0;g<7;g++)
    {
-      if(g==5) sx=x+10;
-      int row=g<5?0:1, gapCount=row==0?4:3, gapIndex=row==0?g:g-5;
-      int extra=inner-20-settingsRow[row];
-      settingX[g]=sx; int cy=settingsY+step+4+(row==0?0:step);
+      int r=rowOf[g];
+      if(g==0 || r!=rowOf[g-1]) { sx=x+10; positionInRow=0; }
+      int gapCount=rowGroups[r]-1;
+      int extra=inner-20-settingsRow[r];
+      settingX[g]=sx; int cy=settingsY+step+4+r*step;
       int chipX=sx+UIWidth(groups[g],settingSize)+settingLabelPad;
       for(int j=0;j<count[g];j++)
       {
@@ -1029,13 +1048,18 @@ void UpdatePanel()
          chipX+=badgeW[k]+settingChipGap;
       }
       sx+=groupW[g];
-      if(gapIndex<gapCount)
+      if(positionInRow<gapCount)
       {
-         int between=settingGap+extra/gapCount+(gapIndex<extra%gapCount?1:0);
+         int between=settingGap+extra/gapCount+(positionInRow<extra%gapCount?1:0);
          UIBox("settingDivider"+IntegerToString(g),sx+between/2,cy,1,step-4,UI_BORDER,UI_BORDER);
          sx+=between;
       }
+      else ObjectDelete(0,(string)UI_PREFIX+"settingDivider"+IntegerToString(g));
+      positionInRow++;
    }
+   // Remove objects from the previous nine-group layout after an EA upgrade.
+   for(int g=7;g<9;g++) { UIText("settingKey"+IntegerToString(g),0,0,"",clrSilver,settingSize); ObjectDelete(0,(string)UI_PREFIX+"settingDivider"+IntegerToString(g)); }
+   for(int k=13;k<15;k++) { UIText("settingValue"+IntegerToString(k),0,0,"",clrWhite,settingSize); ObjectDelete(0,(string)UI_PREFIX+"settingBadge"+IntegerToString(k)); }
    int rx=x+10;
    for(int c=0;c<8;c++)
    {
@@ -1088,21 +1112,21 @@ void UpdatePanel()
    UIText("stateText",bx+brandW+symbolW+typeW+10,y,state,stateInk,UI_SIZE);
    UIText("statsText",statsX+6,y,statsLine,UI_MUTED,UI_SIZE,
           "Broker-confirmed trade diary for this symbol and account: T today, A all time. S accepted orders; W/L reconciled wins/losses. Break-even is recorded separately in the diary.");
+   UIText("timerStatus",timerX+6,y,timerLabel,clrWhite,UI_SIZE,timerTip);
    UIText("bidText",quoteX+5,autoTitleY,"Bid: "+bid,clrWhite,UI_SIZE);
    UIText("askText",quoteX+UIWidth("Bid: "+bid)+21,autoTitleY,"Ask: "+ask,clrWhite,UI_SIZE);
    UIText("clock",x+inner-UIWidth(clock),y,clock,clrWhite,UI_SIZE);
+   UIWrapped("timerDetail",x,timerY,timerDetail?timer:"",inner,step,clrSilver,timerTip,g_uiTimerNotes);
    UIWrapped("marketDetail",x,marketY,g_marketDetail,inner,step,clrSilver,"",g_uiMarketNotes);
    UIText("settingsTitle",x+10,settingsY+3,"SETTINGS",UI_MUTED,UI_SIZE);
-   string settingsTip="Input settings only. Allow Against Trend controls alignment, not whether a timeframe is enabled. SL Placement OFF sends new orders without a broker stop loss. Other trading and broker rules still apply.";
-   string trendTip="Trend to Follow is the selected input. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane. Diary Details controls display only.";
-   string timerTip="The daily timer uses the PC/VPS local clock and gates new entries, not open positions.";
-   for(int g=0;g<9;g++)
+   string settingsTip="Input settings only. SL Placement OFF sends new orders without a broker stop loss. Other trading and broker rules still apply.";
+   string trendTip="Trend to Follow selects the reference; Allow Against Trend controls alignment, not whether a timeframe is enabled. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane.";
+   for(int g=0;g<7;g++)
    {
-      int cy=settingsY+step+4+(g<5?0:step); string tip=g<5?settingsTip:(g==8?timerTip:trendTip);
+      int cy=settingsY+step+4+rowOf[g]*step; string tip=g<4?settingsTip:trendTip;
       UIText("settingKey"+IntegerToString(g),settingX[g],cy,groups[g],clrSilver,settingSize,tip);
       for(int j=0;j<count[g];j++) { int k=start[g]+j; UIText("settingValue"+IntegerToString(k),badgeX[k]+settingBadgePad/2,cy,values[k],clrWhite,settingSize,tip); }
    }
-   UIWrapped("timerDetail",x+10,settingsY+3*step+4,timerDetail?timer:"",inner-20,step,clrSilver,timerTip,g_uiTimerNotes);
    UIText("readTitle",x,readTitleY,"MARKET READINGS",UI_MUTED,UI_SIZE);
    UIText("planTitle",x,planTitleY,"TRADING PLANS",UI_MUTED,UI_SIZE);
    UIText("autoTitle",autoX,autoTitleY,"AUTO EXECUTION",UI_MUTED,UI_SIZE);

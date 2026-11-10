@@ -8,10 +8,18 @@ values={n.targets[0].id:ast.literal_eval(n.value) for n in tree.body if isinstan
 stubs=values['stubs']; diary=values['diary_stubs']
 reset=values['main'][values['main'].index('void resetWorld()'):values['main'].index('int main()')]
 auto=(root/'MT_AutoRuntime.mqh').read_text().replace('#include "MT_AutoPolicy.mqh"','').replace('#include "MT_TradeDiaryRuntime.mqh"','')
+# The production inputs live in the plan runtime, which is stubbed here.
+input_names=('InpAutoTrading','InpPlaceStopLoss','InpAllowAutoM5','InpAllowAutoM15','InpAllowAutoM30','InpUseAutoSchedule','InpAutoStartTime','InpAutoEndTime')
+inputs='\n'.join(line for line in (root/'MT_PlanRuntime.mqh').read_text().splitlines()
+                 if line.startswith('input ') and any(re.search(r'\b'+n+r'\b',line) for n in input_names))
+auto=inputs+'\n'+auto
 auto=re.sub(r'^input ', '', auto, flags=re.M)
 main=r'''
 void setLocal(int hour,int minute){localTime=1700006400+hour*3600+minute*60;}
 int main(){int f=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
+ ck(InpUseAutoSchedule && InpAutoStartTime=="09:15" && InpAutoEndTime=="17:00","default daily window");
+ P4ScheduleInit();setLocal(9,14);ck(!P4ScheduleOpen(),"default window closed before 09:15");
+ setLocal(9,15);ck(P4ScheduleOpen(),"default window opens at 09:15");setLocal(17,0);ck(!P4ScheduleOpen(),"default window closes at 17:00");
  int m=-1;ck(P4ParseClock(" 8:05 ",m)&&m==485,"valid local time");
  for(string invalid:{"", "24:00", "09:60", "1:2:3", "-1:00", "09: 00", "12x34", "123:45"})ck(!P4ParseClock(invalid,m),"invalid time rejected");
  resetWorld();InpUseAutoSchedule=true;InpAutoStartTime="08:00";InpAutoEndTime="17:00";P4ScheduleInit();
