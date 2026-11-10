@@ -4,6 +4,11 @@ from pathlib import Path
 import re, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
 s=(root/'MT_AutoRuntime.mqh').read_text().replace('#include "MT_AutoPolicy.mqh"','').replace('#include "MT_TradeDiaryRuntime.mqh"','')
+# The production inputs live in the plan runtime, which is stubbed here.
+input_names=('InpAutoTrading','InpPlaceStopLoss','InpAllowAutoM5','InpAllowAutoM15','InpAllowAutoM30','InpUseAutoSchedule','InpAutoStartTime','InpAutoEndTime')
+inputs='\n'.join(line for line in (root/'MT_PlanRuntime.mqh').read_text().splitlines()
+                 if line.startswith('input ') and any(re.search(r'\b'+n+r'\b',line) for n in input_names))
+s=inputs+'\n'+s
 s=re.sub(r'^input ', '', s,flags=re.M)
 stubs=r'''
 #include <algorithm>
@@ -255,12 +260,13 @@ bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
  connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
- g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;diaryRequestLot=0;InpMinimumLot=false;InpBypassRisk=false;equity=10000;volMin=0.01;volMax=100;volStep=0.01;InpPlaceStopLoss=true;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
+ InpAllowAutoM5=InpAllowAutoM15=InpAllowAutoM30=true;g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;diaryRequestLot=0;InpMinimumLot=false;InpBypassRisk=false;equity=10000;volMin=0.01;volMax=100;volStep=0.01;InpPlaceStopLoss=true;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
  for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
  InpAutoTrading=false;P4Init();
 }
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
- P4Init();check(g_p4Ready && !InpAutoTrading && InpPlaceStopLoss,"initialization defaults auto off and stop placement on");
+ check(InpAllowAutoM5 && InpAllowAutoM15 && InpAllowAutoM30 && !InpAutoTrading && !InpPlaceStopLoss && InpUseAutoSchedule && InpAutoStartTime=="09:15" && InpAutoEndTime=="17:00","requested execution and timer defaults");
+ InpUseAutoSchedule=false;InpPlaceStopLoss=true;P4Init();check(g_p4Ready && !InpAutoTrading,"initialization defaults auto off");
  check(P4Line(0).find("Starting")!=string::npos && P4Line(0).find("no active order")==string::npos,"initial state does not invent an empty broker scan");
  double levelValues[]={98,99,100,100.02,101,102};bool equivalent=true;
  for(int d:{-1,1})for(bool market:{false,true})for(long stops:{0,10,100})for(double entry:levelValues)for(double sl:levelValues)for(double tp:levelValues){
@@ -790,6 +796,37 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
  orders[0].position=900;part=Position{};part.id=900;part.ticket=901;part.magic=P4Magic(0);part.type=POSITION_TYPE_BUY;part.entry=99.9;part.sl=0;part.tp=101;part.lot=0.02;part.symbol=_Symbol;part.comment="MT4-M5";positions.push_back(part);deals.push_back({900,DEAL_ENTRY_IN,0.02});
  uptime+=6000;P4Process(false);check(cancels==1 && positions.size()==1 && P4Line(0).find("NO SL")!=string::npos && P4Tooltip(0).find("remainder")!=string::npos,"partial no-SL fill retains warning and cancellation explanation");
+ // Every timeframe switch blocks only its lane; the master still overrides all.
+ for(int lane=0;lane<3;lane++){
+   resetWorld();InpAutoTrading=true;
+   if(lane==0)InpAllowAutoM5=false;else if(lane==1)InpAllowAutoM15=false;else InpAllowAutoM30=false;
+   for(int j=0;j<3;j++){plans[j]={1,true,false,99.9,99,101,0.05};g_p3[j].score=2;}
+   P4Process(true);P4Process(false);
+   check(sends==2 && orders.size()==2 && P4Line(lane).find("Auto: OFF")!=string::npos && P4Tooltip(lane).find("timeframe is disabled")!=string::npos,"disabled lane stays off while other lanes place");
+   bool none=true;for(auto &o:orders)if(o.magic==P4Magic(lane))none=false;check(none,"no order for disabled lane");
+   InpAutoTrading=false;uptime+=6000;P4Process(false);
+   check(orders.empty() && cancels==2,"master off cancels all enabled lanes' pending orders");
+ }
+ // Disabling a lane, including via EA reinitialization, requests cancellation;
+ // rejection is retried and a later re-enable does not evade confirmation/bar wait.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
+ P4Close();InpAllowAutoM5=false;P4Init();sendMode=3;uptime+=6000;P4Process(false);
+ check(orders.size()==1 && cancels==1 && g_p4[0].cancel && P4Line(0).find("Auto: OFF")!=string::npos && P4Line(0).find("Timeframe OFF: cancel pending")!=string::npos && P4Tooltip(0).find("cancellation")!=string::npos,"disabled lane requests pending cancellation and reports failure");
+ InpAllowAutoM5=true;sendMode=0;uptime+=6000;P4Process(false);P4Process(true);
+ check(orders.empty() && sends==1 && cancels==2 && g_p4[0].cooldown==2,"re-enabled lane still confirms cancellation and waits for fresh bar");
+ laneBars[0].push_back(1002);plans[0].bar=1001;uptime+=6000;P4Process(true);
+ check(sends==2 && orders.size()==1,"lane can trade after cancellation and next own bar");
+ // Turning a lane off retains an existing position and its broker exits.
+ resetWorld();InpAutoTrading=true;plans[1]={1,true,true,100.02,99,101,0.05};g_p3[1].score=3;P4Process(true);P4Process(false);
+ P4Close();InpAllowAutoM15=false;P4Init();P4Process(false);
+ check(positions.size()==1 && positions[0].sl==99 && positions[0].tp==101 && modifies==0 && P4Line(1).find("Auto: OFF | BUY OPEN")!=string::npos,"disabled lane preserves open position and exits");
+ // A disabled lane still exposes uncertain broker state instead of hiding REVIEW.
+ resetWorld();InpAutoTrading=true;InpAllowAutoM30=false;g_p4View[2].state=P4_UNCERTAIN;g_p4View[2].note="REVIEW: order history unavailable";
+ check(P4Line(2).find("Auto: OFF")!=string::npos && P4Line(2).find("REVIEW")!=string::npos && P4Tooltip(2).find("disabled")!=string::npos,"disabled lane keeps review visible");
+ // A cancellation/fill race retains the filled position rather than replacing it.
+ resetWorld();InpAutoTrading=true;plans[2]={1,true,false,99.9,99,101,0.05};g_p3[2].score=2;P4Process(true);P4Process(false);
+ InpAllowAutoM30=false;sendMode=4;uptime+=6000;P4Process(false);P4Process(false);
+ check(sends==1 && orders.empty() && positions.size()==1 && P4Line(2).find("Auto: OFF | BUY OPEN")!=string::npos,"lane cancellation race keeps filled position");
  // The broker still must support TP and its lifetime, but SL support is only required when enabled.
  resetWorld();orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_LIMIT|SYMBOL_ORDER_TP;
  check(!P4ProtectionAllowed(true),"SL capability required when SL placement enabled");

@@ -36,7 +36,13 @@ int main(){int fails=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<
  d=saved;d[1].position=102;ck(!P5ClosedTrade(d,101,201,0.01,false,false,r),"wrong position rejected");
  d=saved;d[2].profit=numeric_limits<double>::quiet_NaN();ck(!P5ClosedTrade(d,101,201,0.01,false,false,r),"missing money rejected");
  d=saved;d[2].fee=EMPTY_VALUE;ck(!P5ClosedTrade(d,101,201,0.01,false,false,r),"missing fee sentinel rejected");
- d=saved;d[1].timeMs=1000;ck(!P5ClosedTrade(d,101,201,0.01,false,false,r),"ambiguous deal time held");
+ d=saved;d[1].timeMs=1000;ck(P5ClosedTrade(d,101,201,0.01,false,false,r),"same millisecond entry and exit accepted");
+ d={{1,101,201,1,1000,.04,100,0,0,0,0},{2,101,301,2,2000,.04,101,1,0,0,0},
+    {3,101,201,1,3000,.06,100,0,0,0,0},{4,101,302,2,4000,.06,101,1,0,0,0}};
+ ck(P5ClosedTrade(d,101,201,0.01,false,false,r) && r.net==2,"interleaved partial fills and exits accepted");
+ d[1].timeMs=500;string why;ck(!P5ClosedTrade(d,101,201,0.01,false,false,r,why) && why=="Exit volume precedes available entry volume","impossible chronology held with reason");
+ d[1].timeMs=2000;d[1].volume=.05;d[3].volume=.05;
+ ck(!P5ClosedTrade(d,101,201,0.01,false,false,r,why) && why=="Exit volume precedes available entry volume","over-exit before later fill held");
  d=saved;d[2].profit=-1;ck(P5ClosedTrade(d,101,201,0.01,false,false,r) && r.outcome==-1,"negative realized net is loss");
  if(!fails)cout<<"Broker-trade aggregation kernel checks passed\n";
  return fails?1:0;}

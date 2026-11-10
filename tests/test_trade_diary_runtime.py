@@ -14,6 +14,7 @@ stubs=stubs.replace('struct Lane{int score=0,volumeState=-1;};','struct Lane{int
 stubs=stubs.replace('struct Deal {unsigned long position=0;int how=0;double vol=0;unsigned long order=0;};','struct Deal {unsigned long position=0;int how=0;double vol=0;unsigned long order=0;long time=0,reason=0;double price=0,profit=0,commission=0,swap=0,fee=0;};')
 stubs=stubs.replace('return p==DEAL_POSITION_ID?d.position:p==DEAL_ORDER?d.order:d.how;', 'return p==DEAL_POSITION_ID?d.position:p==DEAL_ORDER?d.order:p==DEAL_ENTRY?d.how:p==DEAL_TIME_MSC?d.time:p==DEAL_TYPE?(d.how==DEAL_ENTRY_IN?DEAL_TYPE_BUY:DEAL_TYPE_SELL):d.reason;')
 stubs=stubs.replace('double HistoryDealGetDouble(unsigned long tk,int){return deals[tk-1].vol;}','double HistoryDealGetDouble(unsigned long tk,int p){auto d=deals[tk-1];return p==DEAL_VOLUME?d.vol:p==DEAL_PRICE?d.price:p==DEAL_PROFIT?d.profit:p==DEAL_COMMISSION?d.commission:p==DEAL_SWAP?d.swap:d.fee;}')
+stubs=stubs.replace('bool HistoryOrderGetDouble(unsigned long tk,int p,double &x){if(readFailure)return false;', 'bool missingRemaining=false; bool HistoryOrderGetDouble(unsigned long tk,int p,double &x){if(readFailure || (missingRemaining && p==ORDER_VOLUME_CURRENT))return false;')
 stubs=stubs.replace('return p==ORDER_STATE?history[tk].state:history[tk].position;', 'return p==ORDER_STATE?history[tk].state:p==ORDER_MAGIC?history[tk].magic:p==ORDER_TYPE?history[tk].type:history[tk].position;')
 extra=r'''
 string IntegerToString(int x){return to_string(x);}
@@ -29,7 +30,7 @@ int P3TPPercentInput(int){return 85;} int P3Choice(int){return 0;} bool P3Agains
 kernel=(root/'MT_TradeDiary.mqh').read_text().replace('#include "MT_Phase3.mqh"','')
 kernel=re.sub(r'const P5Deal &(\w+)\[\]',r'const vector<P5Deal> &\1',kernel)
 runtime=(root/'MT_TradeDiaryRuntime.mqh').read_text().replace('#include "MT_TradeDiary.mqh"','')
-runtime=re.sub(r'\b(P5Row|P5Deal) (\w+)\[\];',r'vector<\1> \2;',runtime)
+runtime=re.sub(r'\b(P5Row|P5Deal|string) (\w+)\[\];',r'vector<\1> \2;',runtime)
 main=r'''
 int main(){int fails=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';fails++;}};
  P5Init();ck(g_p5Ready,"initialized");
@@ -44,12 +45,24 @@ int main(){int fails=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<
  deals={{200,DEAL_ENTRY_IN,.05,100,1700000000001L,1,99.9,0,-.10,0,0}};
  uptime+=6000;P5Track(0,1,1,100,200,1000,123);ck(g_p5[0].state==2,"position open not win");
  positions.clear();deals.push_back({200,DEAL_ENTRY_OUT,.02,300,1700000001001L,2,101,.20,-.02,0,-.01});
- uptime+=6000;P5Track(0,0,0,0,0,0,123);ck(g_p5[0].state==6,"partial closure held");
+ uptime+=6000;P5Track(0,0,0,0,0,0,123);ck(g_p5[0].state==6 && g_p5Reason[0]=="Entry and exit volumes incomplete or different","partial closure held with reason");
+ ck(P5Detail(0).find("Entry and exit volumes incomplete or different")!=string::npos,"details show review reason");
+ connected=false;csvLines.clear();uptime+=6000;P5Track(0,0,0,0,0,0,123);
+ ck(g_p5[0].state==6 && g_p5Reason[0]=="Terminal disconnected" && csvLines.size()==2 && csvLines[1].back()=="Terminal disconnected","reason-only changes automatically refresh CSV");
+ connected=true;uptime+=6000;P5Track(0,0,0,0,0,0,123);
+ csvLines.clear();P5Export();ck(csvLines[0].back()=="review_reason" && csvLines[1].back()==g_p5Reason[0],"CSV shows per-row review reason");
+ P5Close();P5Init();uptime+=6000;P5Track(0,0,0,0,0,0,123);
+ ck(g_p5[0].state==6 && g_p5Reason[0]=="Entry and exit volumes incomplete or different","review reason recomputed after restart");
  deals[0].vol=.02;
  uptime+=6000;P5Track(0,0,0,0,0,0,123);ck(g_p5[0].state==6,"matched subset without full order fill held");
  deals[0].vol=.05;deals.push_back({200,DEAL_ENTRY_OUT,.03,301,1700000002001L,2,101,.30,-.03,-.04,0});
- uptime+=6000;P5Track(0,0,0,0,0,0,123);ck(g_p5[0].state==3 && abs(g_p5[0].net-.30)<1e-9,"complete deals including costs");
+ // Recover a previously saved REVIEW even if FILLED remaining is stale/unavailable.
+ history[100].lot=.05;missingRemaining=true;P5Close();P5Init();
+ uptime+=6000;P5Track(0,0,0,0,0,0,123);ck(g_p5[0].state==3 && abs(g_p5[0].net-.30)<1e-9 && g_p5Reason[0]=="","old review recovers from complete deals when filled remaining unavailable");
+ missingRemaining=false;uptime+=6000;P5Track(0,0,0,0,0,0,123);
+ ck(g_p5[0].state==3,"stale filled remaining does not undo verified closure");
  ck(P5Summary(0,terminalTime).find("All S 1 W 1 L 0 BE 0")!=string::npos,"closed net win");
+ csvLines.clear();P5Export();ck(csvLines[1].back()=="","resolved row clears reason in CSV");
  P5Close();P5Init();ck(g_p5Ready && g_p5[0].state==3 && abs(g_p5[0].net-.30)<1e-9 && g_p5[0].stopInput==1 && g_p5[0].tpPercentInput==85,"completed trade and input snapshot persisted");
  {csvLines.clear();ck(P5Export(),"CSV export works");auto head=csvLines[0],row=csvLines[1];
   auto field=[&](string key){for(size_t i=0;i<head.size();i++)if(head[i]==key)return row[i];return string("missing");};
@@ -64,7 +77,15 @@ int main(){int fails=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<
  uptime+=6000;P5Track(1,0,0,0,0,0,123);ck(g_p5[j].state==4 && g_p5[j].accepted==1,"canceled unfilled not win");
  // Late broker history must be rechecked even after an unfilled classification.
  history[101].position=201;history[101].lot=0;deals={{201,DEAL_ENTRY_IN,.05,101,1700000003001L,1,99.9,0,-.10,0,0},{201,DEAL_ENTRY_OUT,.05,302,1700000004001L,2,99,-.50,-.10,0,0}};
- uptime+=6000;P5Track(1,0,0,0,0,0,123);ck(g_p5[j].state==3 && g_p5[j].net<0,"late fill after cancellation reconciled");
+ missingRemaining=true;uptime+=6000;P5Track(1,0,0,0,0,0,123);
+ ck(g_p5[j].state==6 && g_p5Reason[j]=="Remaining order volume unavailable","canceled fill needs remaining volume");
+ missingRemaining=false;history[101].lot=.03;uptime+=6000;P5Track(1,0,0,0,0,0,123);
+ ck(g_p5[j].state==6 && g_p5Reason[j]=="Entry deals do not match confirmed order fill volume","canceled order fill mismatch held");
+ history[101].lot=0;uptime+=6000;P5Track(1,0,0,0,0,0,123);ck(g_p5[j].state==3 && g_p5[j].net<0,"late fill after cancellation reconciled");
+ plan.bar=1003;int part=P5Begin(1,plan,current,true,85);P5SendResult(part,102,10009,false);
+ Order partial=o;partial.ticket=102;partial.position=202;partial.state=ORDER_STATE_CANCELED;partial.lot=.03;history[102]=partial;
+ deals={{202,DEAL_ENTRY_IN,.02,102,1700000003001L,1,99.9,0,-.1,0,0},{202,DEAL_ENTRY_OUT,.02,303,1700000004001L,2,101,.5,-.1,0,0}};
+ uptime+=6000;P5Track(1,0,0,0,0,0,123);ck(g_p5[part].state==3 && g_p5[part].net>0,"canceled partial closure matches actual filled volume");
  int k=P5Begin(2,plan,current,true,85);P5SendResult(k,0,10006,true);ck(g_p5[k].state==5 && !g_p5[k].accepted,"definite rejection not accepted");
  plan.bar=1002;int a=P5Begin(2,plan,current,true,85),b=P5Begin(2,plan,current,true,85);
  P5Bind(2,1,1,999,0,1002);ck(g_p5[a].order==0 && g_p5[b].order==0,"ambiguous intents cannot bind to a later journal");
@@ -99,10 +120,15 @@ with tempfile.TemporaryDirectory() as t:
 # Exercise the production execution source with the real diary source, rather
 # than only the no-op diary callbacks used in the Phase 4 regression suite.
 auto=(root/'MT_AutoRuntime.mqh').read_text().replace('#include "MT_AutoPolicy.mqh"','').replace('#include "MT_TradeDiaryRuntime.mqh"','')
+# The production inputs live in the plan runtime, which is stubbed here.
+input_names=('InpAutoTrading','InpPlaceStopLoss','InpAllowAutoM5','InpAllowAutoM15','InpAllowAutoM30','InpUseAutoSchedule','InpAutoStartTime','InpAutoEndTime')
+inputs='\n'.join(line for line in (root/'MT_PlanRuntime.mqh').read_text().splitlines()
+                 if line.startswith('input ') and any(re.search(r'\b'+n+r'\b',line) for n in input_names))
+auto=inputs+'\n'+auto
 auto=re.sub(r'^input ', '', auto, flags=re.M)
 integration=r'''
 int main(){int f=0;auto ck=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
- P5Init();P4Init();InpAutoTrading=true;
+ InpUseAutoSchedule=false;InpPlaceStopLoss=true;P5Init();P4Init();InpAutoTrading=true;
  plans[0]={1,true,false,99.9,99,101,0.05,1000};g_p3[0].score=2;
  P4Process(true);ck(sends==1 && g_p5.size()==1 && g_p5[0].order>0 && g_p5[0].accepted==0,"pre-send snapshot and returned order");
  uptime+=6000;P4Process(false);ck(g_p5[0].state==1 && g_p5[0].accepted==1,"live order reconciled through execution loop");

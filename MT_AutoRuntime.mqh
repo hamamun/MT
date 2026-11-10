@@ -4,11 +4,16 @@
 #include "MT_AutoPolicy.mqh"
 #include "MT_TradeDiaryRuntime.mqh"
 
-input bool InpAutoTrading=false; // Auto Trading
-input bool InpPlaceStopLoss=true; // Stop Loss Placement
-input bool InpUseAutoSchedule=false; // Use daily trading timer (PC/VPS local time)
-input string InpAutoStartTime="08:00"; // Timer start (local HH:MM)
-input string InpAutoEndTime="17:00"; // Timer stop (local HH:MM)
+// Shared inputs are declared in MT_PlanRuntime.mqh before this runtime.
+
+// Master and per-timeframe switches are independent of the daily timer.
+bool P4LaneEnabled(int lane)
+{
+   if(lane==0) return(InpAllowAutoM5);
+   if(lane==1) return(InpAllowAutoM15);
+   if(lane==2) return(InpAllowAutoM30);
+   return(false);
+}
 
 int g_p4ScheduleStart=-1, g_p4ScheduleEnd=-1;
 bool g_p4ScheduleValid=true, g_p4ScheduleSeen=false, g_p4ScheduleWasOpen=false;
@@ -962,13 +967,14 @@ void P4Process(bool allowEntry)
       if(g_p4View[lane].state==P4_EMPTY || g_p4View[lane].state==P4_OPEN) g_p4CancelNote[lane]="";
       P3Plan plan; P3MakePlan(lane,plan);
       bool hedging=AccountInfoInteger(ACCOUNT_MARGIN_MODE)==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
-      P4_ACTION action=P4Decide(InpAutoTrading && P4ScheduleOpen(),plan.signal,g_p4View[lane].state,
+      P4_ACTION action=P4Decide(InpAutoTrading && P4LaneEnabled(lane) && P4ScheduleOpen(),plan.signal,g_p4View[lane].state,
                                 g_p4View[lane].direction,hedging,P4CanTrade(),plan.valid);
       string cancelWhy="";
       if(action==P4_CANCEL_REMAINDER)
       {
          if(g_p4View[lane].state==P4_PARTIAL) cancelWhy="Partial fill: cancel remainder";
          else if(!InpAutoTrading) cancelWhy="Auto OFF: cancel pending";
+         else if(!P4LaneEnabled(lane)) cancelWhy="Timeframe OFF: cancel pending";
          else if(!P4ScheduleOpen()) cancelWhy="Timer paused: cancel pending";
          else if(plan.signal==P3_WAIT) cancelWhy="Signal WAIT: cancel pending";
          else if(plan.signal==0) cancelWhy="No signal: cancel pending";
@@ -1033,7 +1039,7 @@ void P4Process(bool allowEntry)
          }
          P4Cancel(lane,g_p4View[lane].order);
       }
-      else if(g_p4View[lane].state==P4_EMPTY && InpAutoTrading)
+      else if(g_p4View[lane].state==P4_EMPTY && InpAutoTrading && P4LaneEnabled(lane))
       {
          if(g_p4CheckBar[lane]!=plan.bar || g_p4CheckScore[lane]!=g_p3[lane].score)
             g_p4CheckNote[lane]="";
@@ -1142,6 +1148,7 @@ string P4Explain(const string note)
    if(StringFind(note,"target does not clear spread")>=0) return("The limit's target distance is not larger than the current spread. MT requests cancellation of the existing limit.");
    if(StringFind(note,"Partial fill: cancel remainder")>=0 || StringFind(note,"Entry remainder pending")>=0) return("A partially filled position has an unfilled entry remainder; MT requests its cancellation.");
    if(StringFind(note,"Timer paused: cancel pending")>=0) return("The daily timer blocks new entries. MT requests cancellation of its pending limit; open positions remain open.");
+   if(StringFind(note,"Timeframe OFF: cancel pending")>=0) return("Auto trading is off for this timeframe, so MT requests cancellation of its pending limit; any open position remains open.");
    if(StringFind(note,"Auto OFF: cancel pending")>=0) return("Auto Trading is off, so MT requests cancellation of its pending limit; any open position remains open.");
    if(StringFind(note,"Signal WAIT: cancel pending")>=0) return("This timeframe's signal is WAIT, so MT requests cancellation of its pending limit.");
    if(StringFind(note,"No signal: cancel pending")>=0 || StringFind(note,"Signal changed: cancel pending")>=0) return("The signal no longer matches the pending limit, so MT requests cancellation.");
@@ -1182,6 +1189,7 @@ string P4Explain(const string note)
 string P4Tooltip(int lane)
 {
    string mode=InpAutoTrading?"Auto Trading is ON. ":"Auto Trading is OFF; no new entries will be requested. ";
+   mode+=P4LaneEnabled(lane)?"This timeframe is enabled. ":"This timeframe is disabled; no new entries will be requested. ";
    if(InpUseAutoSchedule && !P4ScheduleOpen()) mode+="The daily timer blocks new entries. ";
    if(!g_p4Ready) return(mode+"The trading coordinator or journal is unavailable; inspect the Experts log.");
    P4View v=g_p4View[lane];
@@ -1196,14 +1204,14 @@ string P4Tooltip(int lane)
 string P4Line(int lane)
 {
    string tf=P4TF(lane);
-   string head=tf+" | Auto: "+(InpAutoTrading?"ON":"OFF");
+   string head=tf+" | Auto: "+(InpAutoTrading && P4LaneEnabled(lane)?"ON":"OFF");
    if(InpUseAutoSchedule && !P4ScheduleOpen()) head+=" | TIMER PAUSED";
    if(!g_p4Ready) return(head+" | coordinator unavailable");
    P4View v=g_p4View[lane];
    if(v.state!=P4_PENDING && v.state!=P4_OPEN && v.state!=P4_PARTIAL)
    {
       if(v.note!="") return(head+(v.state==P4_EMPTY && v.note!="Starting"?" | no active order":"")+" | "+v.note);
-      return(InpAutoTrading?head+" | no active order":head);
+      return(InpAutoTrading && P4LaneEnabled(lane)?head+" | no active order":head);
    }
    int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
    string s=head+" | "+(v.direction>0?"BUY ":"SELL ")+(v.state==P4_PENDING?"LIMIT":"OPEN")+

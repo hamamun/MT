@@ -12,6 +12,9 @@ struct P5Row
    double planEntry, planStop, planTarget, lot, bid, ask, equity, balance, entryVolume, exitVolume, entryPrice, exitPrice, profit, commission, swap, fee, net, brokerEntry, brokerStop, brokerTarget;
 };
 P5Row g_p5[];
+// Diagnostics are recomputed from broker history on each poll, not persisted
+// in the versioned binary. CSV and details expose the latest reason per row.
+string g_p5Reason[];
 int g_p5Lock=INVALID_HANDLE, g_p5Flags=0;
 bool g_p5Ready=false, g_p5ExportReady=false;
 string g_p5File="";
@@ -23,7 +26,7 @@ bool P5Export()
    int h=FileOpen(tmp,FILE_WRITE|FILE_CSV|FILE_ANSI|g_p5Flags,',');
    if(h==INVALID_HANDLE) return(false);
    ResetLastError();
-   FileWrite(h,"server","account","symbol","currency","lane","direction","score","gt","ct","st","regime","volume","market","trend_choice","allow_against","bypass","minimum","strategy","bar_proxy","state","accepted","retcode","exit_reason","order","position","plan_bar","request_ms","entry_ms","exit_ms","plan_entry","plan_sl","plan_tp","lot","bid","ask","equity","balance","entry_volume","exit_volume","entry_price","exit_price","profit","commission","swap","fee","net","broker_entry","broker_sl","broker_tp","stop_placement_input","tp_percent_input","request_spread_price","plan_risk_price","plan_reward_price","plan_reward_risk","entry_slippage_vs_original_plan_price","holding_seconds");
+   FileWrite(h,"server","account","symbol","currency","lane","direction","score","gt","ct","st","regime","volume","market","trend_choice","allow_against","bypass","minimum","strategy","bar_proxy","state","accepted","retcode","exit_reason","order","position","plan_bar","request_ms","entry_ms","exit_ms","plan_entry","plan_sl","plan_tp","lot","bid","ask","equity","balance","entry_volume","exit_volume","entry_price","exit_price","profit","commission","swap","fee","net","broker_entry","broker_sl","broker_tp","stop_placement_input","tp_percent_input","request_spread_price","plan_risk_price","plan_reward_price","plan_reward_risk","entry_slippage_vs_original_plan_price","holding_seconds","review_reason");
    for(int i=0;i<ArraySize(g_p5);i++)
    {
       P5Row r=g_p5[i];
@@ -38,7 +41,8 @@ bool P5Export()
          DoubleToString(MathAbs(r.planTarget-r.planEntry),(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)),
          MathAbs(r.planEntry-r.planStop)>0?DoubleToString(MathAbs(r.planTarget-r.planEntry)/MathAbs(r.planEntry-r.planStop),4):"",
          r.state==3?DoubleToString(r.direction*(r.entryPrice-r.planEntry),(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)):"",
-         r.state==3 && r.exitMs>=r.entryMs?DoubleToString((double)(r.exitMs-r.entryMs)/1000.0,3):"");
+         r.state==3 && r.exitMs>=r.entryMs?DoubleToString((double)(r.exitMs-r.entryMs)/1000.0,3):"",
+         (r.state==0 || r.state==6)?(i<ArraySize(g_p5Reason) && g_p5Reason[i]!=""?g_p5Reason[i]:"Awaiting broker reconciliation"):"");
    }
    FileFlush(h); bool ok=(GetLastError()==0); FileClose(h);
    return(ok && FileMove(tmp,g_p5Flags,dest,g_p5Flags|FILE_REWRITE));
@@ -204,6 +208,10 @@ void P5Init()
    g_p5Lock=FileOpen(g_p5File+".lock",FILE_READ|FILE_WRITE|FILE_BIN|g_p5Flags);
    if(g_p5Lock==INVALID_HANDLE) { Print("MT trade diary: locked or unavailable"); return; }
    if(!P5Load()) { Print("MT trade diary: unreadable; preserving file"); return; }
+   ArrayResize(g_p5Reason,0);
+   int count=ArraySize(g_p5);
+   if(ArrayResize(g_p5Reason,count)!=count) { Print("MT trade diary: diagnostic allocation failed"); return; }
+   for(int i=0;i<count;i++) g_p5Reason[i]="";
    g_p5Ready=true;
    if(!P5Save()) { g_p5Ready=false; Print("MT trade diary: save failed"); }
 }
@@ -213,7 +221,9 @@ void P5Init()
 int P5Begin(int lane, const P3Plan &plan, const MqlTick &quote, bool stopInput, int tpPercentInput)
 {
    if(!g_p5Ready || lane<0 || lane>2 || quote.time_msc<=0) return(-1);
-   int n=ArraySize(g_p5); if(ArrayResize(g_p5,n+1)!=n+1) { g_p5Ready=false; return(-1); }
+   int n=ArraySize(g_p5);
+   if(ArrayResize(g_p5Reason,n+1)!=n+1 || ArrayResize(g_p5,n+1)!=n+1) { g_p5Ready=false; return(-1); }
+   g_p5Reason[n]="Awaiting broker reconciliation";
    P5Row r={};
    r.lane=lane; r.direction=plan.signal; r.score=g_p3[lane].score;
    r.gt=g_p3[lane].gt; r.ct=g_p3[lane].ct; r.st=g_p3[lane].st;
@@ -311,9 +321,10 @@ bool P5DiscoverPosition(ulong order, datetime from, ulong &position)
 
 // Evaluate only deals belonging to the confirmed position. Failed property
 // reads, partial exits and ambiguous identities remain REVIEW, not W/L.
-bool P5GatherClosed(P5Row &row, bool positionOpen, bool pending)
+bool P5GatherClosed(P5Row &row, bool positionOpen, bool pending, string &diagnostic)
 {
-   if(row.position<=0 || row.order<=0 || !HistorySelectByPosition((ulong)row.position)) return(false);
+   if(row.position<=0 || row.order<=0) { diagnostic="Order or position ID unavailable"; return(false); }
+   if(!HistorySelectByPosition((ulong)row.position)) { diagnostic="Position deal history unavailable"; return(false); }
    P5Deal deals[]; int count=HistoryDealsTotal();
    long lastExit=0; int reason=-1;
    for(int i=0;i<count;i++)
@@ -326,12 +337,14 @@ bool P5GatherClosed(P5Row &row, bool positionOpen, bool pending)
          !HistoryDealGetInteger(ticket,DEAL_TIME_MSC,time) || !HistoryDealGetInteger(ticket,DEAL_REASON,why) ||
          !HistoryDealGetDouble(ticket,DEAL_VOLUME,volume) || !HistoryDealGetDouble(ticket,DEAL_PRICE,price) ||
          !HistoryDealGetDouble(ticket,DEAL_PROFIT,profit) || !HistoryDealGetDouble(ticket,DEAL_COMMISSION,commission) ||
-         !HistoryDealGetDouble(ticket,DEAL_SWAP,swap) || !HistoryDealGetDouble(ticket,DEAL_FEE,fee)) return(false);
-      if((ulong)pos!=(ulong)row.position || order<=0) return(false);
+         !HistoryDealGetDouble(ticket,DEAL_SWAP,swap) || !HistoryDealGetDouble(ticket,DEAL_FEE,fee))
+      { diagnostic="Deal properties unavailable"; return(false); }
+      if((ulong)pos!=(ulong)row.position || order<=0) { diagnostic="Deal position or order ID invalid"; return(false); }
       int mapped=kind==DEAL_ENTRY_IN?1:((kind==DEAL_ENTRY_OUT || kind==DEAL_ENTRY_OUT_BY)?2:0);
       if(mapped==0 || (type!=DEAL_TYPE_BUY && type!=DEAL_TYPE_SELL) ||
-         ((type==DEAL_TYPE_BUY?1:-1)!=(mapped==1?row.direction:-row.direction))) return(false);
-      int n=ArraySize(deals); if(ArrayResize(deals,n+1)!=n+1) return(false);
+         ((type==DEAL_TYPE_BUY?1:-1)!=(mapped==1?row.direction:-row.direction)))
+      { diagnostic="Unsupported deal entry type or direction"; return(false); }
+      int n=ArraySize(deals); if(ArrayResize(deals,n+1)!=n+1) { diagnostic="Deal collection allocation failed"; return(false); }
       deals[n].ticket=ticket; deals[n].position=(ulong)pos; deals[n].order=(ulong)order;
       deals[n].entry=mapped; deals[n].timeMs=time; deals[n].volume=volume; deals[n].price=price;
       deals[n].profit=profit; deals[n].commission=commission; deals[n].swap=swap; deals[n].fee=fee;
@@ -339,7 +352,7 @@ bool P5GatherClosed(P5Row &row, bool positionOpen, bool pending)
    }
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
    P5TradeResult result;
-   if(!P5ClosedTrade(deals,(ulong)row.position,(ulong)row.order,step,positionOpen,pending,result)) return(false);
+   if(!P5ClosedTrade(deals,(ulong)row.position,(ulong)row.order,step,positionOpen,pending,result,diagnostic)) return(false);
    row.entryVolume=result.entryVolume; row.exitVolume=result.exitVolume;
    row.entryPrice=result.entryPrice; row.exitPrice=result.exitPrice;
    row.entryMs=result.entryMs; row.exitMs=result.exitMs; row.exitReason=reason;
@@ -347,9 +360,12 @@ bool P5GatherClosed(P5Row &row, bool positionOpen, bool pending)
    row.state=3; row.accepted=1; return(true);
 }
 
-void P5Reconcile(P5Row &r, long magic)
+void P5Reconcile(P5Row &r, long magic, string &diagnostic)
 {
-   if(r.order<=0 || (MQLInfoInteger(MQL_TESTER)==0 && !TerminalInfoInteger(TERMINAL_CONNECTED))) return;
+   diagnostic="";
+   if(r.order<=0) { diagnostic="Order ticket unavailable"; return; }
+   if(MQLInfoInteger(MQL_TESTER)==0 && !TerminalInfoInteger(TERMINAL_CONNECTED))
+   { diagnostic="Terminal disconnected"; return; }
    ulong order=(ulong)r.order;
    bool liveOrder=OrderSelect(order), historyFinal=false;
    long state=0, position=0; double initial=0, remaining=0;
@@ -361,8 +377,8 @@ void P5Reconcile(P5Row &r, long magic)
          (type!=ORDER_TYPE_BUY_LIMIT && type!=ORDER_TYPE_SELL_LIMIT && type!=ORDER_TYPE_BUY && type!=ORDER_TYPE_SELL) ||
          ((type==ORDER_TYPE_BUY_LIMIT || type==ORDER_TYPE_BUY ? 1 : -1)!=r.direction) ||
          !OrderGetDouble(ORDER_PRICE_OPEN,entry) || !OrderGetDouble(ORDER_SL,stop) || !OrderGetDouble(ORDER_TP,target) ||
-         !OrderGetInteger(ORDER_POSITION_ID,position) || position<0) { r.state=6; return; }
-      if(r.position>0 && position>0 && r.position!=position) { r.state=6; return; }
+         !OrderGetInteger(ORDER_POSITION_ID,position) || position<0) { r.state=6; diagnostic="Live order identity or properties unavailable"; return; }
+      if(r.position>0 && position>0 && r.position!=position) { r.state=6; diagnostic="Order and saved position IDs differ"; return; }
       if(position>0) r.position=position;
       r.brokerEntry=entry; r.brokerStop=stop; r.brokerTarget=target; r.accepted=1; r.state=1;
    }
@@ -370,7 +386,8 @@ void P5Reconcile(P5Row &r, long magic)
    {
       datetime now=TimeCurrent();
       datetime from=(datetime)MathMax(1,r.requestMs/1000-86400);
-      if(now<=0 || !HistorySelect(from,now+60) || !HistoryOrderSelect(order)) { if(r.state!=3) r.state=6; return; }
+      if(now<=0 || !HistorySelect(from,now+60) || !HistoryOrderSelect(order))
+      { if(r.state!=3) r.state=6; diagnostic="Entry order history unavailable"; return; }
       string symbol=""; long objectMagic=0, type=0;
       if(!HistoryOrderGetString(order,ORDER_SYMBOL,symbol) || !HistoryOrderGetInteger(order,ORDER_MAGIC,objectMagic) ||
          symbol!=_Symbol || objectMagic!=magic || !HistoryOrderGetInteger(order,ORDER_TYPE,type) ||
@@ -378,13 +395,17 @@ void P5Reconcile(P5Row &r, long magic)
          ((type==ORDER_TYPE_BUY_LIMIT || type==ORDER_TYPE_BUY ? 1 : -1)!=r.direction) ||
          !HistoryOrderGetInteger(order,ORDER_STATE,state) ||
          !HistoryOrderGetInteger(order,ORDER_POSITION_ID,position) || position<0 ||
-         !HistoryOrderGetDouble(order,ORDER_VOLUME_INITIAL,initial) ||
-         !HistoryOrderGetDouble(order,ORDER_VOLUME_CURRENT,remaining) ||
-         !P3Positive(initial) || !MathIsValidNumber(remaining) || remaining<0 || remaining>initial+1e-8)
-      { if(r.state!=3) r.state=6; return; }
+         !HistoryOrderGetDouble(order,ORDER_VOLUME_INITIAL,initial) || !P3Positive(initial))
+      { if(r.state!=3) r.state=6; diagnostic="Order identity, state or initial volume unavailable"; return; }
       historyFinal=(state==ORDER_STATE_FILLED || state==ORDER_STATE_CANCELED || state==ORDER_STATE_EXPIRED || state==ORDER_STATE_REJECTED);
-      if(!historyFinal) { if(r.state!=3) r.state=6; return; }
-      if(r.position>0 && position>0 && r.position!=position) { r.state=6; return; }
+      if(!historyFinal) { if(r.state!=3) r.state=6; diagnostic="Entry order not final"; return; }
+      // FILLED means the original volume was filled. Some brokers expose an
+      // unavailable or stale remaining-volume field on a historical order.
+      if(state!=ORDER_STATE_FILLED &&
+         (!HistoryOrderGetDouble(order,ORDER_VOLUME_CURRENT,remaining) ||
+          !MathIsValidNumber(remaining) || remaining<0 || remaining>initial+1e-8))
+      { if(r.state!=3) r.state=6; diagnostic="Remaining order volume unavailable"; return; }
+      if(r.position>0 && position>0 && r.position!=position) { r.state=6; diagnostic="Order and saved position IDs differ"; return; }
       if(position>0) r.position=position;
       double value=0;
       if(HistoryOrderGetDouble(order,ORDER_PRICE_OPEN,value) && P3Positive(value)) r.brokerEntry=value;
@@ -399,22 +420,27 @@ void P5Reconcile(P5Row &r, long magic)
    if(r.position>0)
    {
       bool present=false;
-      if(!P5PositionPresent((ulong)r.position,magic,present)) { r.state=6; return; }
+      if(!P5PositionPresent((ulong)r.position,magic,present)) { r.state=6; diagnostic="Position scan or identity unavailable"; return; }
       if(present) { r.state=2; r.accepted=1; return; }
       // A final order and full matching deal history must independently prove
       // closure; a vanished position or successful request alone is not proof.
       P5Row evaluated=r;
-      double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP), filled=initial-remaining;
-      if(!historyFinal || !P3Positive(step) || !P3Positive(filled) ||
-         !P5GatherClosed(evaluated,false,liveOrder) ||
-         MathAbs(evaluated.entryVolume-filled)>step*1e-7) r.state=6;
+      double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+      double filled=state==ORDER_STATE_FILLED?initial:initial-remaining;
+      if(!historyFinal) { r.state=6; diagnostic="Entry order still active"; }
+      else if(!P3Positive(step)) { r.state=6; diagnostic="Broker volume step unavailable"; }
+      else if(!P3Positive(filled)) { r.state=6; diagnostic="Order fill volume unavailable or inconsistent"; }
+      else if(!P5GatherClosed(evaluated,false,liveOrder,diagnostic)) r.state=6;
+      else if(MathAbs(evaluated.entryVolume-filled)>step*1e-7)
+      { r.state=6; diagnostic="Entry deals do not match confirmed order fill volume"; }
       else r=evaluated;
       return;
    }
    if(!liveOrder && historyFinal)
    {
       // A partial entry without a visible position identifier is unknown.
-      if(MathAbs(initial-remaining)>1e-8 || state==ORDER_STATE_FILLED) { r.state=6; return; }
+      if(MathAbs(initial-remaining)>1e-8 || state==ORDER_STATE_FILLED)
+      { r.state=6; diagnostic="Filled order position ID unavailable"; return; }
       r.state=(state==ORDER_STATE_REJECTED)?5:4;
    }
 }
@@ -426,20 +452,29 @@ void P5Track(int lane, int active, int direction, ulong order, ulong position, d
    if(!g_p5Ready || lane<0 || lane>2) return;
    P5Bind(lane,active,direction,order,position,planBar);
    if(!g_p5Ready) return;
+   int total=ArraySize(g_p5);
+   if(ArraySize(g_p5Reason)!=total && ArrayResize(g_p5Reason,total)!=total) return;
    ulong now=GetTickCount64();
    if(g_p5Poll[lane]!=0 && now-g_p5Poll[lane]<5000) return;
-   g_p5Poll[lane]=now; bool changed=false;
+   g_p5Poll[lane]=now; bool changed=false, reasonChanged=false;
    for(int i=0;i<ArraySize(g_p5);i++)
    {
       if(g_p5[i].lane!=lane || g_p5[i].state==5) continue;
       // Refresh recent completed deals for broker cost/history corrections.
       if(g_p5[i].state==3 && TimeCurrent()>0 && g_p5[i].exitMs/1000 < (long)TimeCurrent()-86400) continue;
       if(g_p5[i].state==4 && TimeCurrent()>0 && g_p5[i].requestMs/1000 < (long)TimeCurrent()-86400) continue;
-      P5Row before=g_p5[i], after=before;
-      P5Reconcile(after,magic);
+      P5Row before=g_p5[i], after=before; string diagnostic="";
+      P5Reconcile(after,magic,diagnostic);
+      if(after.state!=0 && after.state!=6) diagnostic="";
+      if(diagnostic!=g_p5Reason[i]) { g_p5Reason[i]=diagnostic; reasonChanged=true; }
       if(P5Changed(before,after)) { g_p5[i]=after; changed=true; }
    }
    if(changed && !P5Save()) { g_p5Ready=false; Print("MT trade diary: reconciliation save failed"); }
+   else if(!changed && reasonChanged)
+   {
+      g_p5ExportReady=P5Export();
+      if(!g_p5ExportReady) Print("MT trade diary: CSV export unavailable; binary diary retained");
+   }
 }
 
 // lane -1 totals every lane of this symbol, for the panel's single header line.
@@ -541,6 +576,13 @@ string P5Detail(int lane)
    for(int i=0;i<ArraySize(g_p5);i++) if(g_p5[i].lane==lane)
    { if(g_p5[i].state==1) pending++; else if(g_p5[i].state==2) opened++; else if(g_p5[i].state==0 || g_p5[i].state==6) review++; else if(g_p5[i].state==4) ended++; }
    string base=StringFormat("%s | Pending %d | Open %d | Review %d | Unfilled %d",tf,pending,opened,review,ended);
+   // Include the most recent unresolved row; CSV contains every reason.
+   for(int i=ArraySize(g_p5)-1;i>=0;i--) if(g_p5[i].lane==lane && (g_p5[i].state==0 || g_p5[i].state==6))
+   {
+      string why=(i<ArraySize(g_p5Reason) && g_p5Reason[i]!="")?g_p5Reason[i]:"Awaiting broker reconciliation";
+      base+=" | Diagnosis order "+StringFormat("%I64d",g_p5[i].order)+": "+why;
+      break;
+   }
    for(int i=ArraySize(g_p5)-1;i>=0;i--) if(g_p5[i].lane==lane)
    {
       P5Row r=g_p5[i];

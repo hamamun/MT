@@ -153,9 +153,9 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(objects["MT_stats"].x>objects["MT_marketState"].x+objects["MT_marketState"].w && objects["MT_bidText_0"].y==objects["MT_autoTitle_0"].y && objects["MT_askText_0"].y==objects["MT_autoTitle_0"].y && objects["MT_bidBox"].x>objects["MT_autoTitle_0"].x+UIWidth("AUTO EXECUTION") && objects["MT_askBox"].x+objects["MT_askBox"].w<=objects["MT_bg"].x+objects["MT_bg"].w,"Bid and Ask sit beside auto execution, not in the top header");
  check(objects["MT_autoRow0"].y==objects["MT_readings"].y && objects["MT_autoTitle_0"].y==objects["MT_readTitle_0"].y && objects["MT_autoRow0"].x>=objects["MT_readings"].x+objects["MT_readings"].w,"auto rows and readings box align at the top without horizontal overlap");
  check(objects["MT_clock_0"].y==objects["MT_symbol_0"].y,"server clock remains in top header");
- check(Label("settingKey1")=="Allow Against Trend" && Label("settingValue1")=="M5 ON" && Label("settingValue2")=="M15 ON" && Label("settingValue3")=="M30 ON","separate timeframe setting chips");
- check(Label("settingValue7")=="M5 AUTO" && Label("settingValue8")=="M15 AUTO" && Label("settingValue9")=="M30 AUTO" && Label("settingValue11")=="M5 85%" && Label("settingValue13")=="M30 85%","trend and TP chips");
- check(Label("settingValue6")=="OFF" && Label("settingValue14")=="OFF","SL placement and timer inputs");
+ check(Label("settingKey6")=="Allow Against Trend" && Label("settingValue10")=="M5 ON" && Label("settingValue11")=="M15 ON" && Label("settingValue12")=="M30 ON","separate timeframe setting chips");
+ check(Label("settingValue7")=="M5 AUTO" && Label("settingValue8")=="M15 AUTO" && Label("settingValue9")=="M30 AUTO" && Label("settingValue4")=="M5 85%" && Label("settingValue6")=="M30 85%","trend and TP chips");
+ check(Label("settingValue1")=="OFF" && Label("timerStatus")=="Timer: OFF","SL placement and timer inputs");
  // MARKET READINGS keeps its compact eight-column row with SG last.
  check(Label("col7")=="SG" && Label("col0")=="TF" && Label("col6")=="SC","readings table ends with SG to the right of SC");
  check(objects["MT_col7_0"].x>objects["MT_col6_0"].x && objects["MT_col6_0"].x>objects["MT_col5_0"].x,"SG column is placed right of SC");
@@ -203,7 +203,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  }
  check(PlanValue(0,0)=="1.12196" && PlanValue(0,1)=="0.01" && PlanValue(0,2)=="1.12306" && (Label("planMoney0_2")+Wrapped("planMoneyRows0_2_"))=="(-1.10 USD)" && PlanValue(0,3)=="1.12135" && (Label("planMoney0_3")+Wrapped("planMoneyRows0_3_"))=="(+0.61 USD)","full plan levels and amounts, with separate SL and TP");
  check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL (unprotected)")!=string::npos,"broker no-SL warning retained");
- check(Label("settingValue6")=="OFF" && AutoText(0).find("SL 1.12306 (-1.02 USD)")!=string::npos,"broker-confirmed SL remains visible when placement is off");
+ check(Label("settingValue1")=="OFF" && AutoText(0).find("SL 1.12306 (-1.02 USD)")!=string::npos,"broker-confirmed SL remains visible when placement is off");
  for(int lane=0;lane<3;lane++) for(int col=0;col<4;col++){
   string n=to_string(lane)+"_"+to_string(col);Obj card=objects["MT_plan"+to_string(lane)];
   for(string prefix:{"planHeading","planValue"}){Obj text=objects["MT_"+prefix+n+"_0"];if(text.text.empty())continue;check(text.x>=card.x && text.x+int(text.text.size()*text.size*0.8)<=card.x+card.w && text.y>=card.y && text.y+text.size+4<=card.y+card.h,"aligned plan labels stay inside their stacked row");}
@@ -216,25 +216,36 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  for(auto &pair:objects){auto o=pair.second;if(o.type==OBJ_LABEL)check(o.x>=bg.x && o.x+int(o.text.size()*o.size*0.8)<=bg.x+bg.w && o.y>=bg.y && o.y+o.size+4<=bg.y+bg.h,"all labels fit background");}
  // Both rows use the whole settings box while every label and badge remains separate.
  auto checkSettings=[&](){
-  Obj box=objects["MT_settings"];int first[9]={0,1,4,5,6,7,10,11,14},last[9]={0,3,4,5,6,9,10,13,14};
-  check(objects["MT_settingKey0_0"].x==box.x+10 && objects["MT_settingKey5_0"].x==box.x+10,"settings rows start at padded left edge");
-  for(int g=0;g<9;g++){
+  Obj box=objects["MT_settings"];int first[7]={0,1,2,3,4,7,10},last[7]={0,1,2,3,6,9,12};
+  string names[7]={"Auto Trading","SL Placement","Bypass Risk","Minimum Lot","TP %","Trend to Follow","Allow Against Trend"};
+  check(objects["MT_settingKey0_0"].x==box.x+10 && objects["MT_settingKey4_0"].x==box.x+10,"execution and strategy settings start new rows");
+  for(int g=0;g<7;g++){
    Obj key=objects["MT_settingKey"+to_string(g)+"_0"];
    Obj firstBadge=objects["MT_settingBadge"+to_string(first[g])];
    Obj lastBadge=objects["MT_settingBadge"+to_string(last[g])];
-   check(key.x+int(key.text.size()*key.size*0.8)<=firstBadge.x,"setting key and badge do not overlap");
+   check(Label("settingKey"+to_string(g))==names[g],"setting groups in requested order");
+   check(key.x+int(key.text.size()*key.size*0.8)<=firstBadge.x && lastBadge.x+lastBadge.w<=box.x+box.w-10,"setting group fits its box");
    for(int k=first[g];k<last[g];k++)check(objects["MT_settingBadge"+to_string(k)].x+objects["MT_settingBadge"+to_string(k)].w<objects["MT_settingBadge"+to_string(k+1)].x,"lane badges separated");
-   if(g==4 || g==8) check(lastBadge.x+lastBadge.w==box.x+box.w-10,"settings row spans padded width");
-   else {
-    Obj next=objects["MT_settingKey"+to_string(g+1)+"_0"], divider=objects["MT_settingDivider"+to_string(g)];
-    check(lastBadge.x+lastBadge.w<divider.x && divider.x<next.x,"settings groups and dividers are separated");
+   if(g<6){Obj next=objects["MT_settingKey"+to_string(g+1)+"_0"];
+    if(next.y==key.y){Obj divider=objects["MT_settingDivider"+to_string(g)];check(lastBadge.x+lastBadge.w<divider.x && divider.x<next.x,"settings groups and dividers separated");}
+    else check(next.y>key.y && next.x==box.x+10,"settings groups wrap cleanly");
    }
   }
+  check(!objects.count("MT_settingKey7_0") && !objects.count("MT_settingKey8_0") && !objects.count("MT_settingBadge13") && !objects.count("MT_settingBadge14"),"diary and timer settings removed");
  };
- checkSettings();check(objects["MT_settingKey0_0"].size==9,"narrow chart uses compact readable setting font");
- for(int g:{0,1,2,3,5,6,7}) {int end=(g<5?g==0?0:g==1?3:g==2?4:5:g==5?9:g==6?10:13); Obj last=objects["MT_settingBadge"+to_string(end)],next=objects["MT_settingKey"+to_string(g+1)+"_0"];check(next.x-(last.x+last.w)>=12,"settings groups retain visible spacing on a compact chart");}
+ checkSettings();
+ // The compact timer badge follows diary totals without overlapping the server clock.
+ {Obj stats=objects["MT_stats"],badge=objects["MT_timerBadge"],clk=objects["MT_clock_0"];
+  check(badge.x>=stats.x+stats.w && badge.x+badge.w<=clk.x && badge.y==stats.y,"timer badge is beside summary and before clock");
+  check(objects["MT_timerStatus_0"].tip.find("Timer: OFF")!=string::npos && objects["MT_timerStatus_0"].tip.find("PC/VPS local")!=string::npos,"timer tooltip includes full status and local-clock context");}
+ timer="Timer: ON 09:15-17:00 (PC/VPS local)";UpdatePanel();
+ check(Label("timerStatus")=="Timer: ON" && Wrapped("timerDetail")==timer && objects["MT_timerStatus_0"].tip.find(timer)!=string::npos,"active window preserved under header and in tooltip");
+ check(objects["MT_timerDetail0_0"].y>objects["MT_timerStatus_0"].y && objects["MT_timerDetail0_0"].y<objects["MT_settings"].y,"timer detail stays below header above settings");
+ timer="Timer: OFF";chartWidth=480;UpdatePanel();checkSettings();
+ check(objects["MT_settingKey6_0"].y>objects["MT_settingKey4_0"].y,"narrow chart wraps strategy groups without overlap");
+ chartWidth=850;UpdatePanel();checkSettings();
  chartWidth=1290;UpdatePanel();checkSettings();
- check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue14_0"].size==11,"screenshot-width chart uses larger setting font");
+ check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue12_0"].size==11,"screenshot-width chart uses larger setting font");
  check(objects["MT_bg"].x+objects["MT_bg"].w<=chartWidth,"compact panel fits a wide chart");
  check(Label("planMoney0_2")=="(-1.10 USD)" && Wrapped("planMoneyRows0_2_").empty(),"wide plan uses inline cash and removes stacked cash");
  for(int lane=0;lane<3;lane++) for(int col=2;col<4;col++){
@@ -242,8 +253,8 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   check(money.y==value.y && money.x>=value.x+int(value.text.size()*value.size*0.8) && money.x+int(money.text.size()*money.size*0.8)<=cell.x+cell.w,"inline amounts align with prices and fit their own cells");
  }
  chartWidth=1500;UpdatePanel();checkSettings();
- check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue14_0"].size==11,"wide chart uses larger setting font");
- check(objects["MT_settingKey4_0"].x>objects["MT_settings"].x+objects["MT_settings"].w*3/4,"wide settings do not bunch at left");
+ check(objects["MT_settingKey0_0"].size==11 && objects["MT_settingValue12_0"].size==11,"wide chart uses larger setting font");
+ check(objects["MT_settingKey6_0"].x>objects["MT_settings"].x+objects["MT_settings"].w/2,"wide settings do not bunch at left");
  // Match the supplied mock: two idle cards flank one active card, with the
  // active lane wide enough for its own fields rather than widening all lanes.
  int threeActiveWidth=objects["MT_bg"].w;
@@ -260,7 +271,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  plans[0]=savedPlan0;plans[2]=savedPlan2;UpdatePanel();
  against[1]=false; choices[0]=P3_FOLLOW_CT;percentages[1]=0;InpAutoTrading=false;
  timer="Timer: CLOCK UNAVAILABLE | New entries blocked";UpdatePanel();checkSettings();
- check(Label("settingValue0")=="OFF" && Label("settingValue2")=="M15 OFF" && Label("settingValue7")=="M5 CT" && Label("settingValue12")=="M15 INVALID" && Label("settingValue14")=="CLOCK UNAVAILABLE" && Wrapped("timerDetail")==timer,"settings display actual values and retain complete timer warning");
+ check(Label("settingValue0")=="OFF" && Label("settingValue11")=="M15 OFF" && Label("settingValue7")=="M5 CT" && Label("settingValue5")=="M15 INVALID" && Label("timerStatus")=="Timer: CLOCK UNAVAILABLE" && Wrapped("timerDetail")==timer,"settings display actual values and retain complete timer warning");
  against[1]=true;choices[0]=P3_AUTO;percentages[1]=85;InpAutoTrading=true;timer="Timer: OFF";
  chartWidth=850;UpdatePanel();checkSettings();check(Wrapped("timerDetail").empty(),"stale timer detail cleared after resize and refresh");
  check((Label("planMoney0_2")+Wrapped("planMoneyRows0_2_"))=="(-1.10 USD)","plan rows keep SL and TP amounts in account currency");
@@ -327,8 +338,8 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  int tallRow=objects["MT_autoRow1"].h;autos[1]="M15 | Auto: OFF";UpdatePanel();
  check(AutoText(1).empty() && objects["MT_autoRow1"].h<tallRow,"long auto fields cleared and its row shrinks");
  timer="Timer: PAUSED 08:00-17:00 | Opens in 2h00m (PC/VPS local)";UpdatePanel();
- check(Label("settingValue14")=="PAUSED" && Wrapped("timerDetail")==timer,"complete timer and countdown visible");
- timer="Timer: INVALID | New entries blocked";UpdatePanel();check(Label("settingValue14")=="INVALID" && Wrapped("timerDetail")==timer,"invalid timer visible");timer="Timer: OFF";
+ check(Label("timerStatus")=="Timer: PAUSED" && Wrapped("timerDetail")==timer && objects["MT_timerStatus_0"].tip.find(timer)!=string::npos,"complete timer and countdown visible");
+ timer="Timer: INVALID | New entries blocked";UpdatePanel();check(Label("timerStatus")=="Timer: INVALID" && Wrapped("timerDetail")==timer,"invalid timer visible");timer="Timer: OFF";
  // "Show diary details" opens a second window beside the panel. TRADE
  // STATISTICS keeps its own content and footprint, so on a chart wide enough
  // for both the main panel is untouched by the input.
@@ -339,7 +350,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(!objects.count("MTD_bg"),"diary window absent while the input is off");
  InpShowDetails=true;UpdatePanel();
  Obj panel=objects["MT_bg"],window=objects["MTD_bg"];
- check(objects.count("MTD_bg") && Label("settingValue10")=="ON","diary details open a separate window");
+ check(objects.count("MTD_bg") && !objects.count("MT_settingKey7_0"),"diary details open a separate window");
  check(panel.x==plainPanel.x && panel.y==plainPanel.y && panel.w==plainPanel.w && panel.h==plainPanel.h,
        "wide chart keeps the main panel exactly as it was without details");
  check(objects["MT_statsTFHeader_0"].y==plainStatsY && objects["MT_diary"].y+objects["MT_diary"].h==plainBottom,
@@ -376,6 +387,8 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  g_uiDetailsPage=0;UpdatePanel();string smallPages;int smallCount=g_uiDetailsPages;
  for(int page=0;page<smallCount;page++){smallPages+=DetailText();if(page+1<smallCount){UIHandleDetailsClick("MTD_next");UpdatePanel();}}
  check(NoSpaces(smallPages).find(string(180,'x'))!=string::npos,"long warning survives across narrow-screen pages");
+ {UIDetail parsed;UIReadDetail("M5 | Pending 0 | Open 0 | Review 1 | Unfilled 0 | Diagnosis order 123: Entry history unavailable | Last: BUY REVIEW | Net: -- | CSV unavailable","M5",parsed);
+  check(parsed.ok && parsed.warning.find("Diagnosis order 123: Entry history unavailable")!=string::npos && parsed.warning.find("CSV export unavailable")!=string::npos,"review diagnosis and CSV warning both preserved");}
  details[0]="M5 | Pending 1 | Open 1 | Review 0 | Unfilled 2 | Last: SELL OPEN | Net: -- | CSV unavailable";
  chartHeight=725;g_uiDetailsPage=0;chartWidth=priorWide;UpdatePanel();
  check(objects["MTD_bg"].w>0 && objects["MTD_bg"].x==UI_X && objects["MTD_bg"].x+objects["MTD_bg"].w<=chartWidth,"narrow chart uses a visible overlay when side column cannot fit");
@@ -391,10 +404,11 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  lanes[0]="M5 | unexpected "+string(180,'x');plans[0]="unexpected plan "+string(120,'p');autos[0]="unexpected order "+string(100,'o');UpdatePanel();
  check(Wrapped("readFallback0_")==lanes[0] && Wrapped("planNote0_")==plans[0] && AutoText(0).find("unexpected order")!=string::npos,"unexpected formats preserved");
  InpShowDetails=true;UpdatePanel();int openWindowW=objects["MTD_bg"].w;
- g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');int beforeClosed=p2Updates;UpdatePanel();
+ timer="Timer: PAUSED 09:15-17:00 | Opens in 2h00m (PC/VPS local)";g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');int beforeClosed=p2Updates;UpdatePanel();
  check(p2Updates==beforeClosed+1,"closed presentation still refreshes readings");
  check(Label("stateText")=="close" && Label("clock").empty() && Wrapped("marketDetail")==g_marketDetail,"collapsed view keeps the complete closed-market detail");
  check(Label("statsText")=="T S 2 W 1 L 0   |   A S 5 W 3 L 1","closed header keeps labeled today/all totals without BE");
+ check(Label("timerStatus")=="Timer: PAUSED" && objects["MT_timerStatus_0"].tip.find(timer)!=string::npos && objects["MT_timerBadge"].x>=objects["MT_stats"].x+objects["MT_stats"].w,"closed header retains timer and full countdown tooltip");
  check(!objects.count("MT_settings") && !objects.count("MT_plan0") && !objects.count("MT_autoRow0") && !objects.count("MT_diary") && !objects.count("MT_bidBox"),"market closed removes every expanded panel section");
  check(objects.count("MTD_bg") && objects["MTD_bg"].w==openWindowW,"diary window keeps its size when the panel collapses");
  check(objects["MTD_bg"].y>objects["MT_bg"].y+objects["MT_bg"].h && objects["MTD_bg"].x+objects["MTD_bg"].w<=chartWidth,
@@ -408,7 +422,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(Label("closedDetail")==g_marketDetail && Wrapped("marketDetail").empty() && objects["MT_closedDetail_0"].y==objects["MT_closedDetail_1"].y && objects["MT_bg"].h<closedHeight,"normal closed notice remains one complete line with segmented labels");
  InpShowDetails=false;UpdatePanel();check(!objects.count("MTD_bg"),"closed market permits hiding details");
  InpShowDetails=true;UpdatePanel();check(objects.count("MTD_bg") && objects["MTD_bg"].y>objects["MT_bg"].y+objects["MT_bg"].h,"details can be initialized while the market is closed");
- g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();check(objects.count("MT_settings") && objects.count("MT_plan0") && objects.count("MT_autoRow0") && Label("marketDetail0").empty(),"market reopening restores all sections and clears closed notice");
+ timer="Timer: OFF";g_marketState=MARKET_OPEN;g_marketDetail="";UpdatePanel();check(objects.count("MT_settings") && objects.count("MT_plan0") && objects.count("MT_autoRow0") && Label("marketDetail0").empty(),"market reopening restores all sections and clears closed notice");
  check(objects.count("MTD_bg") && objects["MTD_bg"].x+objects["MTD_bg"].w<=chartWidth,"reopening keeps the diary on the chart");
  diaries[2]="M30 | Trade diary: unavailable";UpdatePanel();
  check(objects.count("MTD_bg"),"unavailable lane keeps diary viewport accessible");

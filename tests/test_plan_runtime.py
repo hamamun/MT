@@ -3,6 +3,25 @@
 from pathlib import Path
 import re, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
+# Input order and labels are determined by declaration order after includes.
+expected=[
+ ('InpAutoTrading','Auto trading'), ('InpPlaceStopLoss','Stop Loss Placement'),
+ ('InpBypassRisk','Bypass Risk'), ('InpMinimumLot','Minimum Lot use'),
+ ('InpTPPercentM5','TP% for M5 (lower = closer)'),
+ ('InpTPPercentM15','TP% for M15 (lower = closer)'),
+ ('InpTPPercentM30','TP% for M30 (lower = closer)'),
+ ('InpTrendM5','trend to follow M5'), ('InpTrendM15','trend to follow M15'),
+ ('InpTrendM30','trend to follow M30'), ('InpAgainstM5','Allow against trend M5'),
+ ('InpAgainstM15','Allow against trend M15'), ('InpAgainstM30','Allow against trend M30'),
+ ('InpAllowAutoM5','Allow autotrading M5'), ('InpAllowAutoM15','Allow autotrading M15'),
+ ('InpAllowAutoM30','Allow autotrading M30'),
+ ('InpUseAutoSchedule','Use Daily trading timer (PC/VPS local time)'),
+ ('InpAutoStartTime','Timer Start (Local HH:MM)'), ('InpAutoEndTime','Timer Stop (Local HH:MM)'),
+ ('InpShowDetails','Show diary Details')]
+inputs=re.findall(r'^input\s+\w+\s+(\w+)\s*=\s*[^;]+;\s*//\s*(.+)$',
+                  (root/'MT_PlanRuntime.mqh').read_text(),re.M)
+assert inputs==expected, 'MT5 input order or labels changed'
+assert not re.search(r'^input\s', (root/'MT_AutoRuntime.mqh').read_text(),re.M)
 s=(root/'MT_Plan.mqh').read_text().replace('#include "MT_Phase3.mqh"','')+'\n'+(root/'MT_PlanRuntime.mqh').read_text().replace('#include "MT_Plan.mqh"','')
 s=re.sub(r'const (MqlRates|int) &(\w+)\[\]',r'const vector<\1> &\2',s)
 s=re.sub(r'\bdouble (\w+)\[\];',r'vector<double> \1;',s)
@@ -75,7 +94,11 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  vector<int> scores(1100,2),gts(1100,1),cts(1100,1),status(1100,1);
  P3Reset();P3ResetSnapshots();
  // Each lane routes its own selected percentile, including M5.
- check(InpTPPercentM5==85 && InpTPPercentM15==85 && InpTPPercentM30==85,"all three percentile inputs default to 85");
+ check(InpTPPercentM5==81 && InpTPPercentM15==83 && InpTPPercentM30==85,"timeframe percentile defaults");
+ check(InpAllowAutoM5 && InpAllowAutoM15 && InpAllowAutoM30,"all timeframe trading switches default on");
+ check(!InpAutoTrading && !InpPlaceStopLoss && !InpBypassRisk && !InpMinimumLot && !InpShowDetails && InpUseAutoSchedule && InpAutoStartTime=="09:15" && InpAutoEndTime=="17:00","requested boolean and timer defaults");
+ check(InpTrendM5==P3_AUTO && InpTrendM15==P3_AUTO && InpTrendM30==P3_AUTO && !InpAgainstM5 && !InpAgainstM15 && !InpAgainstM30,"trend and against-trend defaults");
+ InpAgainstM5=InpAgainstM15=InpAgainstM30=true; // Remaining tests exercise countertrend plans explicitly.
  InpTPPercentM5=60;InpTPPercentM15=75;InpTPPercentM30=90;fill(scores.begin(),scores.end(),3);
  for(int lane=0;lane<3;lane++){
    int expectedCount=0;int pc=lane==0?60:(lane==1?75:90);

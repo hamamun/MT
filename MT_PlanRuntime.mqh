@@ -2,18 +2,27 @@
 #define MT_PLAN_RUNTIME_MQH
 #include "MT_Plan.mqh"
 
-input P3_TREND_CHOICE InpTrendM5 = P3_AUTO;       // Trend to follow M5
-input P3_TREND_CHOICE InpTrendM15 = P3_AUTO;      // Trend to follow M15
-input P3_TREND_CHOICE InpTrendM30 = P3_AUTO;      // Trend to follow M30
-input bool InpAgainstM5 = true;                    // Allow against trend M5
-input bool InpAgainstM15 = true;                   // Allow against trend M15
-input bool InpAgainstM30 = true;                   // Allow against trend M30
-input bool InpBypassRisk = false;                   // Bypass risk
-input bool InpMinimumLot = false;                  // Minimum lot use
-input int InpTPPercentM5 = 85;                    // TP % for M5
-input int InpTPPercentM15 = 85;                   // TP % for M15
-input int InpTPPercentM30 = 85;                   // TP % for M30
-input bool InpShowDetails = false;                 // Show diary details
+// Keep the MT5 Inputs tab in the order used by traders; retain input names.
+input bool InpAutoTrading = false;                    // Auto trading
+input bool InpPlaceStopLoss = false;                  // Stop Loss Placement
+input bool InpBypassRisk = false;                     // Bypass Risk
+input bool InpMinimumLot = false;                     // Minimum Lot use
+input int InpTPPercentM5 = 81;                        // TP% for M5 (lower = closer)
+input int InpTPPercentM15 = 83;                       // TP% for M15 (lower = closer)
+input int InpTPPercentM30 = 85;                       // TP% for M30 (lower = closer)
+input P3_TREND_CHOICE InpTrendM5 = P3_AUTO;           // trend to follow M5
+input P3_TREND_CHOICE InpTrendM15 = P3_AUTO;          // trend to follow M15
+input P3_TREND_CHOICE InpTrendM30 = P3_AUTO;          // trend to follow M30
+input bool InpAgainstM5 = false;                      // Allow against trend M5
+input bool InpAgainstM15 = false;                     // Allow against trend M15
+input bool InpAgainstM30 = false;                     // Allow against trend M30
+input bool InpAllowAutoM5 = true;                     // Allow autotrading M5
+input bool InpAllowAutoM15 = true;                    // Allow autotrading M15
+input bool InpAllowAutoM30 = true;                    // Allow autotrading M30
+input bool InpUseAutoSchedule = true;                 // Use Daily trading timer (PC/VPS local time)
+input string InpAutoStartTime = "09:15";               // Timer Start (Local HH:MM)
+input string InpAutoEndTime = "17:00";                 // Timer Stop (Local HH:MM)
+input bool InpShowDetails = false;                    // Show diary Details
 
 struct P3LaneData
 {
