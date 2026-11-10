@@ -111,6 +111,7 @@ using datetime=long; using ushort=unsigned short; using uint=unsigned int; using
 #define POSITION_SL 45
 #define POSITION_TP 46
 #define POSITION_VOLUME 47
+#define POSITION_PROFIT 48
 #define POSITION_COMMENT 48
 #define DEAL_POSITION_ID 50
 #define DEAL_ENTRY 51
@@ -191,7 +192,7 @@ bool P3MakePlan(int i,P3Plan &p){p=plans[i];return p.valid;}
 bool P3MakePlanAt(int i,const MqlTick &,P3Plan &p){p=plans[i];return p.valid;}
 string P3LotText(double x){return DoubleToString(x,2);}
 struct Order {unsigned long ticket=0,position=0;long magic=0;int type=0,state=0;double entry=0,sl=0,tp=0,lot=0,initial=0;string symbol,comment;};
-struct Position {unsigned long ticket=0,id=0;long magic=0;int type=0;double entry=0,sl=0,tp=0,lot=0;string symbol,comment;};
+struct Position {unsigned long ticket=0,id=0;long magic=0;int type=0;double entry=0,sl=0,tp=0,lot=0,profit=0;string symbol,comment;};
 struct Deal {unsigned long position=0;int how=0;double vol=0;unsigned long order=0;};
 vector<Order> orders;vector<Position> positions;map<unsigned long,Order> history;vector<Deal> deals;unsigned long historyPosition=0,historyOrder=0;
 int selectedOrder=-1,selectedPosition=-1;
@@ -204,7 +205,7 @@ long OrderGetInteger(int p){auto &o=orders[selectedOrder];return p==ORDER_MAGIC?
 double OrderGetDouble(int p){auto &o=orders[selectedOrder];return p==ORDER_PRICE_OPEN?o.entry:p==ORDER_SL?o.sl:p==ORDER_TP?o.tp:p==ORDER_VOLUME_INITIAL?o.initial:o.lot;}
 string PositionGetString(int p){return p==POSITION_SYMBOL?positions[selectedPosition].symbol:positions[selectedPosition].comment;}
 long PositionGetInteger(int p){auto &o=positions[selectedPosition];return p==POSITION_MAGIC?o.magic:p==POSITION_IDENTIFIER?o.id:o.type;}
-double PositionGetDouble(int p){auto &o=positions[selectedPosition];return p==POSITION_PRICE_OPEN?o.entry:p==POSITION_SL?o.sl:p==POSITION_TP?o.tp:o.lot;}
+double PositionGetDouble(int p){auto &o=positions[selectedPosition];return p==POSITION_PRICE_OPEN?o.entry:p==POSITION_SL?o.sl:p==POSITION_TP?o.tp:p==POSITION_PROFIT?o.profit:o.lot;}
 bool HistorySelect(datetime,datetime){historySelectCalls++;if(!historySelectOk)return false;historySelected=true;selectedDeals.clear();for(int i=0;i<(int)deals.size();i++)selectedDeals.push_back(i);return true;}
 bool HistorySelectByPosition(unsigned long id){historyPosition=id;if(!positionSelectOk)return false;selectedDeals.clear();for(int i=0;i<(int)deals.size();i++)if(deals[i].position==id)selectedDeals.push_back(i);return true;}int HistoryDealsTotal(){return selectedDeals.size();}
 unsigned long HistoryDealGetTicket(int i){return selectedDeals[i]+1;}long HistoryDealGetInteger(unsigned long tk,int p){auto &d=deals[tk-1];return p==DEAL_POSITION_ID?d.position:p==DEAL_ORDER?d.order:d.how;}
@@ -217,7 +218,7 @@ bool OrderGetInteger(int p,long &x){if(readFailure)return false;x=OrderGetIntege
 bool OrderGetDouble(int p,double &x){if(readFailure)return false;x=OrderGetDouble(p);return true;}
 bool PositionGetString(int p,string &x){if(readFailure)return false;x=PositionGetString(p);return true;}
 bool PositionGetInteger(int p,long &x){if(readFailure)return false;x=PositionGetInteger(p);return true;}
-bool PositionGetDouble(int p,double &x){if(readFailure)return false;x=PositionGetDouble(p);return true;}
+bool missingFloating=false; bool PositionGetDouble(int p,double &x){if(readFailure || (missingFloating && p==POSITION_PROFIT))return false;x=PositionGetDouble(p);return true;}
 bool HistoryOrderSelect(unsigned long tk){historyOrder=tk;return history.count(tk) && (!historyRequiresSelect || historySelected);}
 long HistoryOrderGetInteger(unsigned long tk,int p){return p==ORDER_STATE?history[tk].state:history[tk].position;}
 bool HistoryOrderGetInteger(unsigned long tk,int p,long &x){if(readFailure)return false;x=HistoryOrderGetInteger(tk,p);return true;}
@@ -259,7 +260,7 @@ bool oldLiveLevels(const MqlTick &quote,const P3Plan &plan){
 }
 void resetWorld(){
  P4Close(); handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();currencies.clear();quotes.clear();pairs.clear();
- connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
+ connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;calcOk=true;readFailure=false;missingFloating=false;tester=false;accountCurrency="USD";historySelectOk=true;positionSelectOk=true;historyRequiresSelect=false;historySelected=false;historySelectCalls=0;selectedDeals.clear();
  InpAllowAutoM5=InpAllowAutoM15=InpAllowAutoM30=true;g_marketState=MARKET_OPEN;uptime=10000;localTime=1700035200;InpUseAutoSchedule=false;InpAutoStartTime="08:00";InpAutoEndTime="17:00";sendMode=0;sends=0;cancels=0;modifies=0;diaryRequestLot=0;InpMinimumLot=false;InpBypassRisk=false;equity=10000;volMin=0.01;volMax=100;volStep=0.01;InpPlaceStopLoss=true;for(auto &b:laneBars)b={700,800,900,1000,1001};nextTicket=500;expiration=SYMBOL_EXPIRATION_GTC;symbolFill=SYMBOL_FILLING_FOK;symbolExec=SYMBOL_TRADE_EXECUTION_MARKET;calcMode=SYMBOL_CALC_MODE_FOREX;orderMode=51;stopLifetime=SYMBOL_ORDERS_GTC;
  for(int i=0;i<3;i++){plans[i]=P3Plan{};g_p3[i].score=0;g_p3[i].volumeState=-1;}
  InpAutoTrading=false;P4Init();
@@ -752,14 +753,14 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
    resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};
    plans[0]={direction,true,true,direction>0?100.02:100.0,direction>0?99.0:101.0,direction>0?101.0:99.0,0.05};g_p3[0].score=direction*3;
    P4Process(true);check(sends==1 && lastRequest.action==TRADE_ACTION_DEAL && lastRequest.sl==0 && lastRequest.tp==plans[0].target,"no-SL market request retains TP");
-   P4Process(false);check(positions.size()==1 && positions[0].sl==0 && P4Line(0).find("NO SL (unprotected)")!=string::npos && P4Tooltip(0).find("No broker-side stop loss")!=string::npos,"unprotected open position visible");
+   P4Process(false);check(positions.size()==1 && positions[0].sl==0 && P4Line(0).find("SL -- (-- USD)")!=string::npos && P4Line(0).find("NO SL")==string::npos && P4Tooltip(0).find("No broker-side stop loss")!=string::npos,"unprotected open position visible");
    P4Close();InpPlaceStopLoss=true;P4Init();P4Process(false);check(positions.size()==1 && P4Line(0).find("SL/TP missing: REVIEW")!=string::npos && modifies==0,"reenabling does not silently change an open position");
  }
  // Both BUY and SELL limit orders remain pending without SL, and still require TP.
  for(int direction:{1,-1}){
    resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};
    plans[0]={direction,true,false,direction>0?99.9:100.5,direction>0?99.0:101.0,direction>0?101.0:99.0,0.05};g_p3[0].score=direction*2;
-   P4Process(true);P4Process(false);check(sends==1 && orders.size()==1 && orders[0].sl==0 && orders[0].tp==plans[0].target && P4Line(0).find("NO SL (unprotected)")!=string::npos && cancels==0,"no-SL limit remains pending with TP and warning");
+   P4Process(true);P4Process(false);check(sends==1 && orders.size()==1 && orders[0].sl==0 && orders[0].tp==plans[0].target && P4Line(0).find("SL -- (-- USD)")!=string::npos && P4Line(0).find("NO SL")==string::npos && cancels==0,"no-SL limit remains pending with TP and warning");
    orders[0].tp=0;uptime+=6000;P4Process(false);check(cancels==1 && orders.empty(),"missing TP still cancels an unprotected pending");
  }
  // A no-SL pending replan stays no-SL and its write-ahead journal survives restart.
@@ -795,7 +796,23 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  // An SL-free partial fill retains its position but cancels the remainder.
  resetWorld();InpAutoTrading=true;InpPlaceStopLoss=false;current={100,100.02,terminalTime};plans[0]={1,true,false,99.9,99,101,0.05};g_p3[0].score=2;P4Process(true);P4Process(false);
  orders[0].position=900;part=Position{};part.id=900;part.ticket=901;part.magic=P4Magic(0);part.type=POSITION_TYPE_BUY;part.entry=99.9;part.sl=0;part.tp=101;part.lot=0.02;part.symbol=_Symbol;part.comment="MT4-M5";positions.push_back(part);deals.push_back({900,DEAL_ENTRY_IN,0.02});
- uptime+=6000;P4Process(false);check(cancels==1 && positions.size()==1 && P4Line(0).find("NO SL")!=string::npos && P4Tooltip(0).find("remainder")!=string::npos,"partial no-SL fill retains warning and cancellation explanation");
+ positions[0].sl=99;positions[0].profit=2.34;P4Refresh(0);
+ check(g_p4View[0].state==P4_PARTIAL && P4Line(0).find("P/L +2.34 USD")!=string::npos && P4Line(0).find("Pending SL --")!=string::npos && P4Tooltip(0).find("pending remainder has no broker-side stop")!=string::npos,"partial position P/L and separately unprotected remainder remain visible");
+ positions[0].sl=0;
+ uptime+=6000;P4Process(false);check(cancels==1 && positions.size()==1 && P4Line(0).find("SL -- (-- USD)")!=string::npos && P4Tooltip(0).find("remainder")!=string::npos,"partial no-SL fill retains warning and cancellation explanation");
+ // Live floating P/L is broker POSITION_PROFIT, in account currency, and
+ // cannot affect broker-state safety when the optional read fails.
+ resetWorld();InpAutoTrading=true;plans[0]={1,true,true,100.02,99,101,0.05};g_p3[0].score=3;P4Process(true);P4Process(false);
+ positions[0].profit=12.34;P4Process(false);
+ check(P4Line(0).find("P/L +12.34 USD")!=string::npos && P4Tooltip(0).find("excluding swap and commissions")!=string::npos,"positive broker floating P/L displayed");
+ positions[0].profit=-7.8;accountCurrency="EUR";P4Process(false);
+ check(P4Line(0).find("P/L -7.80 EUR")!=string::npos && P4Line(0).find("P/L -7.80 USD")==string::npos,"negative P/L stays in account currency without invented conversion");
+ positions[0].profit=0;P4Process(false);check(P4Line(0).find("P/L 0.00 EUR")!=string::npos,"zero floating P/L");
+ missingFloating=true;P4Process(false);check(g_p4View[0].state==P4_OPEN && P4Line(0).find("P/L --")!=string::npos,"missing floating P/L does not affect state and is unavailable");
+ missingFloating=false;positions[0].profit=numeric_limits<double>::quiet_NaN();P4Process(false);check(P4Line(0).find("P/L --")!=string::npos,"invalid P/L not displayed");
+ positions[0].profit=1;P4Process(false);current.time=terminalTime-30;check(P4Line(0).find("P/L --")!=string::npos,"stale quote does not show P/L as live");current.time=terminalTime;
+ resetWorld();InpAutoTrading=true;plans[1]={1,true,false,99.9,99,101,0.05};g_p3[1].score=2;P4Process(true);P4Process(false);
+ check(g_p4View[1].state==P4_PENDING && P4Line(1).find("P/L ")==string::npos,"unfilled pending limit does not invent P/L");
  // Every timeframe switch blocks only its lane; the master still overrides all.
  for(int lane=0;lane<3;lane++){
    resetWorld();InpAutoTrading=true;

@@ -31,6 +31,8 @@ using datetime=long long;using uint=unsigned int;using color=int;using ENUM_TIME
 #define PERIOD_M30 30
 #define CHART_WIDTH_IN_PIXELS 1
 #define CHART_HEIGHT_IN_PIXELS 3
+#define CHART_SHOW_TRADE_HISTORY 4
+#define CHART_SHOW_TRADE_LEVELS 5
 #define TERMINAL_SCREEN_DPI 2
 #define SYMBOL_DIGITS 3
 #define OBJ_LABEL 1
@@ -75,6 +77,9 @@ datetime ServerNow(){return now;} void UpdateState(datetime){} bool ChartSupport
 string FormatClock(datetime t){return t==100?"2026.11.05 11:45:53":"2026.11.06 08:00:00";}
 struct MqlTick {double bid=1.12194,ask=1.12202;}; MqlTick quote; bool hasQuote=true,quoteFresh=true;
 bool SymbolInfoTick(string,MqlTick &q){q=quote;return hasQuote;} bool P4FreshQuote(const MqlTick&){return quoteFresh;}
+bool showHistory=true,showLevels=true;int chartChanges=0;
+bool ChartGetInteger(int,int p,int,long &v){if(p==CHART_SHOW_TRADE_HISTORY)v=showHistory;else if(p==CHART_SHOW_TRADE_LEVELS)v=showLevels;else return false;return true;}
+bool ChartSetInteger(int,int p,bool value){chartChanges++;if(p==CHART_SHOW_TRADE_HISTORY)showHistory=value;else if(p==CHART_SHOW_TRADE_LEVELS)showLevels=value;else return false;return true;}
 long SymbolInfoInteger(string,int){return 5;} long TerminalInfoInteger(int){return 96;} long ChartGetInteger(int,int p,int){return p==CHART_HEIGHT_IN_PIXELS?chartHeight:chartWidth;}
 string DoubleToString(double v,int digits){ostringstream o;o<<fixed<<setprecision(digits)<<v;return o.str();}
 string EnumToString(int){return "PERIOD_H1";} string IntegerToString(int x){return to_string(x);}
@@ -98,10 +103,11 @@ string ObjectName(int,int i){auto it=objects.begin();advance(it,i);return it->fi
 int ObjectsTotal(int){return int(objects.size());}
 void ObjectsDeleteAll(int,string prefix){clearCount++;for(auto it=objects.begin();it!=objects.end();)if(it->first.find(prefix)==0)it=objects.erase(it);else ++it;}
 void ChartRedraw(){}
+void Print(string){}
 int p2Updates=0;void P2Update();
 string lanes[3]={"M5 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: ~8b | SC: -3/3 (33%L)","M15 | GT: DOWN | CT: DOWN | ST: DOWN | RG: MIXED | PT: 0b+ | SC: -3/3 (50%L)","M30 | GT: FLAT | CT: DOWN | ST: MIXED | RG: MIXED | PT: ~8b | SC: -3/3 (50%L)"};
 string plans[3]={"M5 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12306 (-1.10 USD) | TP: 1.12135 (+0.61 USD)","M15 | Signal: SELL | Volume: OK | MARKET Entry: 1.12196 | Lot: 0.01 | SL: 1.12367 (-1.71 USD) | TP: 1.11999 (+1.97 USD)","M30 | Signal: SELL | Volume: OK | MARKET Entry: 1.12194 | Lot: 0.01 | SL: 1.12336 (-1.42 USD) | TP: 1.12136 (+0.58 USD)"};
-string autos[3]={"M5 | Auto: ON | SELL OPEN | Entry 1.12204 | Lot 0.01 | SL 1.12306 (-1.02 USD) | TP 1.12148 (+0.56 USD)","M15 | Auto: ON | SELL OPEN | Entry 1.12196 | Lot 0.01 | SL -- (-- USD) | TP 1.11999 (+1.97 USD) | Position NO SL (unprotected)","M30 | Auto: ON | SELL OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD)"};
+string autos[3]={"M5 | Auto: ON | SELL OPEN | Entry 1.12204 | Lot 0.01 | SL 1.12306 (-1.02 USD) | TP 1.12148 (+0.56 USD) | P/L +3.70 USD","M15 | Auto: ON | SELL OPEN | Entry 1.12196 | Lot 0.01 | SL -- (-- USD) | TP 1.11999 (+1.97 USD) | P/L -1.50 USD","M30 | Auto: ON | SELL OPEN | Entry 1.12239 | Lot 0.01 | SL 1.12336 (-0.97 USD) | TP 1.12157 (+0.82 USD) | P/L 0.00 USD"};
 string diaries[3]={"M5 | Trades Today S 2 W 0 L 0 BE 0 | All S 2 W 0 L 0 BE 0","M15 | Trades Today S 2 W 0 L 0 BE 0 | All S 2 W 0 L 0 BE 0","M30 | Trades Today S 3 W 0 L 0 BE 0 | All S 3 W 0 L 0 BE 0"};
 string tips[3]={"M5 broker tooltip","M15 broker tooltip","M30 broker tooltip"}; string timer="Timer: OFF";
 string P3PlanLine(int i){return plans[i];} string P4Line(int i){return autos[i];} string P4Tooltip(int i){return tips[i];}
@@ -144,6 +150,8 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(P2Line(1)=="M15 | GT: DOWN | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT","partial reading formatting preserved");
  UIClearReading(0);check(P2Line(0)=="M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT","cleared reading fallback");
  BuildPanel(); Obj bg=objects["MT_bg"];
+ check(!showHistory && !showLevels && chartChanges==2,"panel hides markers and levels on the chart");
+ UpdatePanel();check(chartChanges==2,"panel refresh does not repeatedly override chart settings");
  quoteFresh=false;UpdatePanel();check(Label("bidText")=="Bid: --" && Label("askText")=="Ask: --" && Label("autoQuote0")=="Bid: --","stale quotes are not displayed as current");
  quoteFresh=true;g_marketState=MARKET_OFFLINE;UpdatePanel();check(Label("bidText")=="Bid: --" && Label("askText")=="Ask: --" && Label("stateText")=="DISCONNECTED","disconnected cached quotes stay unavailable");
  g_marketState=MARKET_OPEN;UpdatePanel();check(Label("bidText")=="Bid: 1.12194" && Label("askText")=="Ask: 1.12202","fresh quotes restore normally");
@@ -192,6 +200,13 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
    if(part.text.find("Lot ")==0)lotOnLine=part.y==objects["MT_autoStyleText"+n+"_0"].y;}
   check(entryOnLine && lotOnLine,"normal broker Entry and Lot sit on the same line beside OPEN");
  }
+ // Entry, lot, broker levels, floating P/L, and TP distance appear once in order.
+ {string text=AutoText(0);size_t d=text.find("TP distance (price):");
+  check(text.find("Entry ")<text.find("Lot ") && text.find("Lot ")<text.find("SL ") && text.find("SL ")<text.find("TP ") && text.find("TP ")<text.find("P/L ") && text.find("P/L ")<d && d!=string::npos && text.find("TP distance (price):",d+1)==string::npos,"auto trade fields are ordered and TP distance appears once");
+  check(text.find("P/L +3.70 USD")!=string::npos && UIValueColor("P/L +3.70 USD")==clrLime && UIValueColor("P/L -1.50 USD")==clrTomato && UIValueColor("P/L --")==clrSilver,"floating profit, loss and unavailable colors");
+  string missing=AutoText(1);check(missing.find("SL -- (-- USD)")!=string::npos && missing.find("NO SL")==string::npos && UIValueColor("SL -- (-- USD)")==clrOrange,"unprotected stop is colored without extra label");
+  bool orange=false;for(int j=0;j<g_uiAutoParts[1];j++){auto o=objects["MT_autoText1_"+to_string(j)+"_0"];if(o.text.find("SL --")==0)orange=o.ink==clrOrange;}
+  check(orange,"actual missing SL field is orange");}
  for(int lane=0;lane<3;lane++){
   string n=to_string(lane);Obj card=objects["MT_plan"+n];
   for(auto &pair:objects){const string &key=pair.first;const Obj &o=pair.second;
@@ -202,7 +217,7 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
   if(lane<2)check(card.y+card.h<=objects["MT_plan"+to_string(lane+1)].y,"stacked plan boxes never overlap");
  }
  check(PlanValue(0,0)=="1.12196" && PlanValue(0,1)=="0.01" && PlanValue(0,2)=="1.12306" && (Label("planMoney0_2")+Wrapped("planMoneyRows0_2_"))=="(-1.10 USD)" && PlanValue(0,3)=="1.12135" && (Label("planMoney0_3")+Wrapped("planMoneyRows0_3_"))=="(+0.61 USD)","full plan levels and amounts, with separate SL and TP");
- check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL (unprotected)")!=string::npos,"broker no-SL warning retained");
+ check(AutoText(1).find("SL -- (-- USD)")!=string::npos && AutoText(1).find("Position NO SL")==string::npos,"broker missing SL shown without redundant warning");
  check(Label("settingValue1")=="OFF" && AutoText(0).find("SL 1.12306 (-1.02 USD)")!=string::npos,"broker-confirmed SL remains visible when placement is off");
  for(int lane=0;lane<3;lane++) for(int col=0;col<4;col++){
   string n=to_string(lane)+"_"+to_string(col);Obj card=objects["MT_plan"+to_string(lane)];
@@ -432,13 +447,18 @@ int main(){int fails=0;auto check=[&](bool b,const char *msg){if(!b){cerr<<"FAIL
  check(objects.count("MTD_bg"),"diary window present before the chart becomes unsupported");
  g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED - next open "+string(130,'x');UpdatePanel();
  InpShowDetails=false;
- _Period=60;UpdatePanel();check(Label("unsupportedNotice")=="Incompatible chart. Switch to M5/M15/M30." && !objects.count("MT_plan0") && !objects.count("MT_settings"),"unsupported cleanup and notice");
+ _Period=60;UpdatePanel();check(showHistory && showLevels,"unsupported chart restores original chart settings");check(Label("unsupportedNotice")=="Incompatible chart. Switch to M5/M15/M30." && !objects.count("MT_plan0") && !objects.count("MT_settings"),"unsupported cleanup and notice");
  check(!objects.count("MTD_bg") && !objects.count("MTD_title"),"unsupported chart removes the diary window too");
  _Period=5;g_marketState=MARKET_OPEN;g_marketDetail="";lanes[0]="M5 | GT: WAIT | CT: WAIT | ST: WAIT | RG: WAIT | PT: -- | SC: WAIT";plans[0]="M5 | Signal: WAIT";autos[0]="M5 | Auto: OFF | Signal WAIT";UpdatePanel();
+ check(!showHistory && !showLevels,"supported chart hides markers and levels again");
  check(Label("reading0_1")=="WAIT" && Label("planSignalText0")=="WAIT" && AutoText(0).find("Signal WAIT")!=string::npos && Label("unsupportedNotice").empty(),"WAIT and supported restore");
  g_symbol=string(150,'X');UpdatePanel();check(Label("symbol")==g_symbol && objects["MT_bg"].w>bg.w,"long symbol segments and dynamic width");
  measureFailure=true;UpdatePanel();check(Label("planSignalText0")=="WAIT" && objects["MT_bg"].h>0,"font measurement fallback");
- objects["OTHER_object"].type=OBJ_LABEL;PanelRemove();check(objects.count("OTHER_object") && !objects.count("MT_bg"),"cleanup limited to MT prefix");
+ objects["OTHER_object"].type=OBJ_LABEL;PanelRemove();check(showHistory && showLevels,"panel removal restores chart settings");check(objects.count("OTHER_object") && !objects.count("MT_bg"),"cleanup limited to MT prefix");
+ // Originally hidden settings remain hidden after removal; no forced enable.
+ showHistory=false;showLevels=true;BuildPanel();check(!showHistory && !showLevels,"honors originally hidden history");PanelRemove();check(!showHistory && showLevels,"only changed chart setting is restored");
+ // A user who re-enables a setting while attached keeps that choice on removal.
+ showHistory=true;showLevels=true;BuildPanel();showHistory=true;PanelRemove();check(showHistory && showLevels,"user change to chart visibility is not undone");
  if(fails)return 1;cout<<"Separate panel layout and content regression checks passed.\n";return 0;}
 '''
 with tempfile.TemporaryDirectory() as tmp:

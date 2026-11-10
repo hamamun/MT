@@ -126,7 +126,8 @@ struct P4View
    P4_SLOT_STATE state;
    int direction;
    ulong order, position;
-   double entry, sl, tp, lot;
+   double entry, sl, tp, lot, floatingProfit;
+   bool floatingValid, pendingNoSL;
    string note;
 };
 P4Journal g_p4[3];
@@ -457,13 +458,13 @@ bool P4Linked(ulong order, ulong position)
 void P4Refresh(int lane)
 {
    P4View v; v.state=P4_EMPTY; v.direction=0; v.order=0; v.position=0;
-   v.entry=0; v.sl=0; v.tp=0; v.lot=0; v.note="";
+   v.entry=0; v.sl=0; v.tp=0; v.lot=0; v.floatingProfit=0; v.floatingValid=false; v.pendingNoSL=false; v.note="";
    if(!P4Connected())
    { v.state=P4_UNCERTAIN; v.note="Disconnected"; g_p4View[lane]=v; return; }
    int positions=0,orders=0; ulong positionId=0,orderTicket=0; int posDir=0,orderDir=0;
    double posEntry=0,posSL=0,posTP=0,posLot=0,ordEntry=0,ordSL=0,ordTP=0,ordLot=0,ordInitial=0;
    string posComment="",ordComment="";
-   bool orderPending=false;
+   bool orderPending=false, posProfitValid=false; double posProfit=0.0;
    long magic=P4Magic(lane);
    for(int i=0;i<PositionsTotal();i++)
    {
@@ -479,6 +480,9 @@ void P4Refresh(int lane)
          !PositionGetString(POSITION_COMMENT,posComment) || !P3Positive(posEntry) || !P3Positive(posLot) ||
          !MathIsValidNumber(posSL) || posSL<0.0 || !MathIsValidNumber(posTP) || posTP<0.0)
       { v.state=P4_UNCERTAIN; v.note="Position data unavailable"; g_p4View[lane]=v; return; }
+      // Floating P/L is presentation data: unavailable profit must not alter
+      // the broker state machine or permit/deny an execution decision.
+      posProfitValid=PositionGetDouble(POSITION_PROFIT,posProfit) && MathIsValidNumber(posProfit) && posProfit!=EMPTY_VALUE;
       positions++; positionId=(ulong)id; posDir=type==POSITION_TYPE_BUY?1:-1;
    }
    for(int i=0;i<OrdersTotal();i++)
@@ -559,12 +563,10 @@ void P4Refresh(int lane)
    {
       v.state=orders>0?P4_PARTIAL:P4_OPEN; v.direction=posDir; v.position=positionId; v.order=orderTicket;
       v.entry=posEntry; v.sl=posSL; v.tp=posTP; v.lot=posLot;
+      v.floatingProfit=posProfit; v.floatingValid=posProfitValid; v.pendingNoSL=orders>0 && ordSL<=0.0;
       if((InpPlaceStopLoss && posSL<=0.0) || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
-      else if(posSL<=0.0) v.note="Position NO SL (unprotected)";
       if(orders>0 && ((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0))
       { if(v.note!="") v.note+="; "; v.note+="Pending SL/TP missing: REVIEW"; }
-      else if(orders>0 && ordSL<=0.0)
-      { if(v.note!="") v.note+="; "; v.note+="Pending NO SL (unprotected)"; }
       if(orders>0) { if(v.note!="") v.note+="; "; v.note+="Entry remainder pending"; }
    }
    else if(orders>0)
@@ -572,7 +574,6 @@ void P4Refresh(int lane)
       v.state=P4_PENDING; v.direction=orderDir; v.order=orderTicket;
       v.entry=ordEntry; v.sl=ordSL; v.tp=ordTP; v.lot=ordLot;
       if((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0) v.note="SL/TP missing: REVIEW";
-      else if(ordSL<=0.0) v.note="NO SL (unprotected)";
    }
    else if(g_p4[lane].active!=0)
    {
@@ -1195,6 +1196,9 @@ string P4Tooltip(int lane)
    P4View v=g_p4View[lane];
    if((v.state==P4_PENDING || v.state==P4_OPEN || v.state==P4_PARTIAL) && v.sl<=0.0)
       mode+="No broker-side stop loss is present. ";
+   if(v.pendingNoSL) mode+="The pending remainder has no broker-side stop loss. ";
+   if(v.state==P4_OPEN || v.state==P4_PARTIAL)
+      mode+="P/L is the broker's current floating position profit in account currency, excluding swap and commissions; -- means unavailable or stale. ";
    if(v.note!="") return(mode+P4Explain(v.note));
    if(v.state==P4_PENDING) return(mode+"A broker-confirmed limit is waiting. Distance is from BUY Ask or SELL Bid.");
    if(v.state==P4_OPEN || v.state==P4_PARTIAL) return(mode+"A broker-confirmed position is open. Displayed SL and TP are broker values.");
@@ -1229,7 +1233,15 @@ string P4Line(int lane)
    s+=" | Lot "+P3LotText(v.lot)+" | SL "+(v.sl>0?DoubleToString(v.sl,digits):"--")+
       " ("+P4Money(v.direction,v.lot,v.entry,v.sl)+") | TP "+(v.tp>0?DoubleToString(v.tp,digits):"--")+
       " ("+P4Money(v.direction,v.lot,v.entry,v.tp)+")";
-   if(v.sl<=0.0 && StringFind(v.note,"NO SL")<0) s+=" | NO SL (unprotected)";
+   if(v.state==P4_OPEN || v.state==P4_PARTIAL)
+   {
+      MqlTick q; string currency=AccountInfoString(ACCOUNT_CURRENCY);
+      bool fresh=SymbolInfoTick(_Symbol,q) && P4FreshQuote(q);
+      string floating=(v.floatingValid && fresh && currency!="")?
+         (v.floatingProfit>0?"+":"")+DoubleToString(v.floatingProfit,2)+" "+currency:"--";
+      s+=" | P/L "+floating;
+      if(v.pendingNoSL && v.sl>0.0) s+=" | Pending SL --";
+   }
    if(v.note!="") s+=" | "+v.note;
    return(s);
 }
