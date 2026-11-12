@@ -295,6 +295,45 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(nativeRow==2 && g_p5[nativeRow].bypass==1,"native diary keeps shared bypass only");
  P5Close();P5Init();check(g_p5Ready && g_p5.size()==3 && g_p5[1].bypass==3 && g_p5[2].bypass==1,"both bypass flags and native record survive restart");
  InpCrfRiskBypass=false;InpBypassRisk=false;calcOk=true;
+
+ // Confirm the panel receives the actual failed entry gate and timer refresh
+ // cannot replace an order-check failure with a fictional occupied slot.
+ P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
+ laneBars[1]={700,800,900,1000,1001};sends=0;uptime=400000;sendMode=0;checkOk=true;permission=true;hedging=true;
+ InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpAllowAutoM15=true;InpUseAutoSchedule=false;
+ InpMinimumLot=false;InpBypassRisk=false;InpCrfRiskBypass=false;orderMode=51;g_marketState=MARKET_OPEN;current=q;
+ P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;
+ forecast=CRFForecastState{};forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_bar=1000;forecast.last_entry=100;
+ forecast.active_stop=99;forecast.active_target=102;forecast.last_estimate.duration_high=4;g_crfTakeover=1;g_crfAttemptedSignalBar=0;
+ g_crfEntryReason="";g_crfOrderCheckReason="";g_crfEntryReasonSignal=0;
+ CRFProcessExecution(false);check(g_crfStatus=="Waiting for market tick to check entry","timer doesn't invent slot blocker before first entry check");
+ g_crfAttemptedSignalBar=1000;CRFProcessExecution(false);
+ check(g_crfStatus.find("already used or display-only")!=string::npos,"old/consumed confirmation is not misreported as watching");
+ g_crfAttemptedSignalBar=0;g_crfTakeover=1;g_crfReleaseBar=0;
+ InpAutoTrading=false;CRFProcessExecution(true);check(g_crfStatus=="Auto trading OFF" && sends==0,"master off reported");InpAutoTrading=true;
+ connected=false;CRFProcessExecution(true);check(g_crfStatus=="Broker disconnected: REVIEW" && sends==0,"disconnection is distinct from slot occupancy");connected=true;
+ permission=false;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Trading permission unavailable" && sends==0,"permission blocker reported");permission=true;
+ InpUseAutoSchedule=true;g_p4ScheduleValid=false;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Daily timer settings invalid","invalid timer reported");
+ g_p4ScheduleValid=true;g_p4ScheduleStart=0;g_p4ScheduleEnd=1;CRFProcessExecution(true);
+ check(g_crfStatus=="CRF entry: Daily timer paused","paused timer reported");InpUseAutoSchedule=false;
+ hedging=false;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Hedging account required","account mode blocker reported");hedging=true;
+ g_marketState=1;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Market not open","market blocker reported");g_marketState=MARKET_OPEN;
+ current.time=0;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Fresh quote unavailable","stale quote reported");current=q;
+ orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;CRFProcessExecution(true);
+ check(g_crfStatus.find("Broker market order / SL / TP")!=string::npos,"required broker protection blocker reported");orderMode=51;
+ g_crfReleaseBar=1000;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Waiting for next closed M15 bar after release","release cooldown reported accurately");g_crfReleaseBar=0;
+ g_p4[1].cooldown=1;g_p4[1].waitBar=1000;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Waiting for next closed M15 bar after previous trade","execution cooldown reported accurately");g_p4[1].cooldown=0;
+ calcOk=false;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: CRF lot sizing unavailable","lot sizing failure reported");calcOk=true;
+ symbolFill=0;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Broker filling mode unavailable","filling mode failure reported");symbolFill=SYMBOL_FILLING_FOK;
+ checkOk=false;uptime+=6000;CRFProcessExecution(true);
+ check(g_crfStatus.find("CRF entry: Order check:")==0 && g_crfStatus.find("Not enough money")!=string::npos && sends==0,"broker order check code and message reported");
+ CRFProcessExecution(false);check(g_crfStatus.find("Last entry attempt: Order check:")==0 && g_crfStatus.find("Not enough money")!=string::npos,"timer retains last order-check reason");
+ CRFProcessExecution(true);check(g_crfStatus.find("Not enough money")!=string::npos && g_crfStatus.find("retry delay")!=string::npos,"retry delay preserves broker reason");
+ checkOk=true;uptime+=6000;moveOnCheck=true;CRFProcessExecution(true);
+ check(g_crfStatus=="CRF entry: Quote changed during order check; retrying" && sends==0,"changed quote correctly reported without sending");
+ moveOnCheck=false;current=q;uptime+=6000;sendMode=2;CRFProcessExecution(true);
+ check(g_crfStatus.find("Order rejected:")==0 && sends==1,"definite broker rejection is not reported as placed");
+ CRFRefreshBroker();CRFProcessExecution(false);check(g_crfStatus.find("Order rejected:")!=string::npos,"rejection survives timer reconciliation");
  if(!f)cout<<"CRF execution integration stub checks passed\n";
  return f?1:0;}
 '''

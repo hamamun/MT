@@ -127,7 +127,7 @@ string CRFAutoLine()
       string expiry=shift>=1?IntegerToString((int)MathMax(0,g_crfOrderDuration-(shift-1)))+" bars":"--";
       return line+" | CRF strategy 30007 | order #"+StringFormat("%I64u",g_p4[3].order)+" | Expires in "+expiry+" | "+g_crfStatus;
    }
-   return head+" | CRF | "+g_crfStatus;
+   return head+" | "+g_crfStatus;
 }
 
 void CRFDashboardRows(string &rows[])

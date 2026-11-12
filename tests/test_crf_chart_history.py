@@ -120,6 +120,7 @@ int main(){int failures=0;auto check=[&](bool ok,const char*m){if(!ok){cerr<<"FA
  check(g_crfChartReady && equalChart(objects,expectedChart()),"new bar after reconstruction stays synchronized");
  // Broken data and chart-object failures clear partial drawings and retry.
  CRFRemoveObjects();CRFChartHistoryReset();sync_ok=false;CRFChartHistoryStep();check(g_crfChartError && objects.empty(),"unsynchronized history reported and no partial chart");
+ check(CRFChartHistoryStatus().find("historical CRF drawings unavailable")!=string::npos && CRFChartHistoryStatus().find("chart history unavailable")==string::npos,"label describes historical CRF drawings rather than MT5 history");
  sync_ok=true;partial=true;uptime+=5001;CRFChartHistoryStep();
  check(g_crfChartError && objects.empty(),"partial history copy is not presented as complete");
  partial=false;uptime+=5001;for(int i=0;i<50 && !g_crfChartReady;i++){uptime+=100;CRFChartHistoryStep();}

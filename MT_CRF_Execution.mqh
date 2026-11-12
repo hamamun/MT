@@ -7,6 +7,11 @@
 CRFObserver g_crfObserver;
 bool g_crfObserverAvailable=false, g_crfForecastCurrent=false;
 string g_crfStatus="Starting";
+// Last actual entry check, scoped to the signal so timer refreshes cannot
+// replace a broker rejection with a misleading generic slot message.
+string g_crfEntryReason="", g_crfOrderCheckReason="";
+long g_crfEntryReasonSignal=0;
+bool CRFEntryBlocked(const string reason) { g_crfEntryReason=reason; return false; }
 
 CRFParameters CRFInputParameters()
 {
@@ -61,6 +66,7 @@ bool CRFNativeLaneBlocked(int lane)
 void CRFInitRuntime()
 {
    g_crfObserverAvailable=false; g_crfForecastCurrent=false; g_crfStatus="Waiting for coordinator";
+   g_crfEntryReason=""; g_crfOrderCheckReason=""; g_crfEntryReasonSignal=0;
    if(!g_p4Ready) return;
    if(InpMode==MT_CRF_MODE_MT) { g_crfStatus="MT only"; return; }
    CRFParameters p=CRFInputParameters();
@@ -285,34 +291,81 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
 
 bool CRFPlaceMarket(const MqlTick &q)
 {
-   if(!g_p4Ready || !g_p5Ready || !g_crfObserverAvailable || !g_crfForecastCurrent || InpMode==MT_CRF_MODE_MT || !InpAutoTrading || !P4LaneEnabled(1) ||
-      !P4CanTrade() || !P4ScheduleOpen() || !P4ScheduleBarReady(1) || g_marketState!=MARKET_OPEN ||
-      AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING ||
-      !P4FreshQuote(q) || !CRFProtectionAllowed() || g_crfCloseKind!=0 || !CRFLaterM15Bar()) return false;
+   if(g_crfEntryReasonSignal!=g_crfObserver.forecast.signal_bar) g_crfOrderCheckReason="";
+   g_crfEntryReason="";
+   g_crfEntryReasonSignal=g_crfObserver.forecast.signal_bar;
+   if(!g_p4Ready) return CRFEntryBlocked("Execution coordinator unavailable: REVIEW");
+   if(!g_p5Ready) return CRFEntryBlocked("Trade diary unavailable: REVIEW");
+   if(!g_crfObserverAvailable || !g_crfForecastCurrent) return CRFEntryBlocked("Forecast unavailable");
+   if(InpMode==MT_CRF_MODE_MT) return CRFEntryBlocked("CRF disabled in MT-only mode");
+   if(!InpAutoTrading) return CRFEntryBlocked("Auto trading OFF");
+   if(!P4LaneEnabled(1)) return CRFEntryBlocked("M15 autotrading OFF");
+   if(!P4CanTrade()) return CRFEntryBlocked("Trading permission unavailable");
+   if(!P4ScheduleOpen())
+   {
+      if(!g_p4ScheduleValid) return CRFEntryBlocked("Daily timer settings invalid");
+      int minute=0;
+      if(!P4ScheduleLocalMinute(minute)) return CRFEntryBlocked("Daily timer local clock unavailable");
+      return CRFEntryBlocked("Daily timer paused");
+   }
+   if(!P4ScheduleBarReady(1)) return CRFEntryBlocked("Timer: waiting for next closed M15 bar");
+   if(g_marketState!=MARKET_OPEN) return CRFEntryBlocked("Market not open");
+   if(AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+      return CRFEntryBlocked("Hedging account required");
+   if(!P4FreshQuote(q)) return CRFEntryBlocked("Fresh quote unavailable");
+   if(!CRFProtectionAllowed()) return CRFEntryBlocked("Broker market order / SL / TP or protection lifetime unavailable");
+   if(g_crfCloseKind!=0) return CRFEntryBlocked("Previous close awaiting broker reconciliation");
+   if(!CRFLaterM15Bar()) return CRFEntryBlocked("Waiting for next closed M15 bar after release");
    CRFForecastState f=g_crfObserver.forecast;
-   if(f.signal_bar<=0 || f.signal_bar==g_crfAttemptedSignalBar || f.active_direction==0 || !CRFAutoFilterReady(f)) return false;
+   if(f.signal_bar<=0 || f.active_direction==0) return CRFEntryBlocked("Forecast unavailable");
+   if(f.signal_bar==g_crfAttemptedSignalBar) return CRFEntryBlocked("Signal already used or not eligible for replay");
+   if(!CRFAutoFilterReady(f)) return CRFEntryBlocked("Forecast auto filters not met");
    P4Refresh(1); P4Refresh(3);
+   if(!g_p4Ready) return CRFEntryBlocked("Execution coordinator unavailable: REVIEW");
    CRFExposure exposure;
-   if(!g_p4Ready || !CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),exposure) ||
-      exposure.kind!=CRF_EXPOSURE_EMPTY || g_p4View[1].state!=P4_EMPTY || g_p4View[3].state!=P4_EMPTY ||
-      g_p4[1].active!=0 || g_p4[3].active!=0 || !P4CooldownReady(1) || !g_p4Ready) return false;
+   if(!CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),exposure) || exposure.kind==CRF_EXPOSURE_REVIEW)
+      return CRFEntryBlocked("Broker state unavailable: REVIEW");
+   if(exposure.kind!=CRF_EXPOSURE_EMPTY) return CRFEntryBlocked("M15 slot occupied; broker reconciliation required");
+   if(g_p4View[1].state!=P4_EMPTY || g_p4View[3].state!=P4_EMPTY || g_p4[1].active!=0 || g_p4[3].active!=0)
+      return CRFEntryBlocked("M15 execution state awaiting reconciliation");
+   if(!P4CooldownReady(1)) return CRFEntryBlocked(g_p4Ready?"Waiting for next closed M15 bar after previous trade":"Execution coordinator unavailable: REVIEW");
+   if(!g_p4Ready) return CRFEntryBlocked("Execution coordinator unavailable: REVIEW");
    P3Plan plan;
-   if(!CRFMakeRequestPlan(f,q,plan)) return false;
-   ENUM_ORDER_TYPE_FILLING fill; if(!P4FillMode(true,fill)) return false;
-   ulong now=GetTickCount64(); if(g_p4Attempt[3]!=0 && now-g_p4Attempt[3]<5000) return false;
+   string reason=CRFLiveEntryReason(f,q,plan);
+   if(reason!="") return CRFEntryBlocked(reason);
+   if(!CRFMakeRequestPlan(f,q,plan)) return CRFEntryBlocked("CRF lot sizing unavailable");
+   ENUM_ORDER_TYPE_FILLING fill;
+   if(!P4FillMode(true,fill)) return CRFEntryBlocked("Broker filling mode unavailable");
+   ulong now=GetTickCount64();
+   if(g_p4Attempt[3]!=0 && now-g_p4Attempt[3]<5000)
+      return CRFEntryBlocked(g_crfOrderCheckReason!=""?g_crfOrderCheckReason+"; retry delay":"Request retry delay");
    MqlTradeRequest request={}; MqlTradeCheckResult check={}; MqlTradeResult result={};
    request.action=TRADE_ACTION_DEAL; request.symbol=_Symbol; request.magic=(ulong)P4Magic(3);
    request.volume=plan.lot; request.type=plan.signal>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
    request.price=plan.signal>0?q.ask:q.bid; request.sl=plan.stop; request.tp=plan.target;
    request.deviation=10; request.type_filling=fill; request.type_time=ORDER_TIME_GTC; request.comment="MT4-CRF";
    g_p4Attempt[3]=now;
-   if(!OrderCheck(request,check) || check.retcode!=0 || !P4ScheduleOpen()) return false;
+   ResetLastError();
+   if(!OrderCheck(request,check) || check.retcode!=0)
+   {
+      string why=StringFormat("Order check: %u (error %d)",check.retcode,GetLastError());
+      if(check.comment!="") why+=" "+check.comment;
+      g_crfOrderCheckReason=why;
+      return CRFEntryBlocked(why);
+   }
+   g_crfOrderCheckReason="";
+   if(!P4ScheduleOpen()) return CRFEntryBlocked("Daily timer paused during order check");
    CRFExposure again; MqlTick latest;
-   if(!CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),again) ||
-      again.kind!=CRF_EXPOSURE_EMPTY || !SymbolInfoTick(_Symbol,latest) || !P4FreshQuote(latest) ||
-      latest.bid!=q.bid || latest.ask!=q.ask || !P4CanTrade() || !InpAutoTrading || !P4LaneEnabled(1)) return false;
+   if(!CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),again) || again.kind==CRF_EXPOSURE_REVIEW)
+      return CRFEntryBlocked("Broker state unavailable after order check: REVIEW");
+   if(again.kind!=CRF_EXPOSURE_EMPTY) return CRFEntryBlocked("M15 slot changed during order check");
+   if(!SymbolInfoTick(_Symbol,latest) || !P4FreshQuote(latest)) return CRFEntryBlocked("Fresh quote unavailable after order check");
+   if(latest.bid!=q.bid || latest.ask!=q.ask) return CRFEntryBlocked("Quote changed during order check; retrying");
+   if(!P4CanTrade()) return CRFEntryBlocked("Trading permission unavailable after order check");
+   if(!InpAutoTrading || !P4LaneEnabled(1)) return CRFEntryBlocked("Autotrading switched off during order check");
    P3Plan livePlan;
-   if(CRFLiveEntryReason(f,latest,livePlan)!="") return false;
+   reason=CRFLiveEntryReason(f,latest,livePlan);
+   if(reason!="") return CRFEntryBlocked(reason);
    // Reserve the shared native M15 lane before saving CRF intent. P4Save
    // writes the native journal first, so a crash between the two saves can
    // only leave a conservative REVIEW reservation, never an unguarded send.
@@ -321,20 +374,28 @@ bool CRFPlaceMarket(const MqlTick &q)
    g_p4[3].active=1; g_p4[3].direction=plan.signal; g_p4[3].cancel=0;
    g_p4[3].order=0; g_p4[3].position=0; g_p4[3].birthBar=0; g_p4[3].planBar=plan.bar;
    g_crfOrderSignalBar=plan.bar; g_crfAttemptedSignalBar=plan.bar; g_crfOrderDuration=f.last_estimate.duration_high;
-   if(!P4Persist()) return false;
+   if(!P4Persist()) return CRFEntryBlocked("Execution journal unavailable: REVIEW");
    int row=P5BeginCrf(plan,q);
    if(row<0)
    {
-      P4Clear(3); if(CRFNativeReserved()) P4Clear(1); P4Persist(); g_crfStatus="Diary unavailable: REVIEW"; return false;
+      P4Clear(3); if(CRFNativeReserved()) P4Clear(1); P4Persist(); return CRFEntryBlocked("Trade diary unavailable: REVIEW");
    }
-   bool sent=OrderSend(request,result);
+   ResetLastError();
+   bool sent=OrderSend(request,result); int sendError=GetLastError();
    P5SendResult(row,result.order,result.retcode,result.deal==0 && P4DefiniteReject(result.retcode));
    if(result.order>0) g_p4[3].order=result.order;
    else if(result.deal==0 && P4DefiniteReject(result.retcode))
    { P4Clear(3); if(CRFNativeReserved()) P4Clear(1); }
-   if(!P4Persist()) return false;
+   if(!P4Persist()) return CRFEntryBlocked("Execution journal unavailable: REVIEW");
    g_p4View[3].state=P4_UNCERTAIN; g_p4View[3].note="CRF order awaiting broker";
-   if(!sent) PrintFormat("MT CRF order result %u error %d; awaiting broker",result.retcode,GetLastError());
+   if(result.deal==0 && P4DefiniteReject(result.retcode))
+   {
+      g_crfStatus=StringFormat("Order rejected: %u (error %d)",result.retcode,sendError);
+      if(result.comment!="") g_crfStatus+=" "+result.comment;
+      g_crfEntryReason=g_crfStatus;
+   }
+   else g_crfStatus=StringFormat("Order request %u; awaiting broker reconciliation",result.retcode);
+   if(!sent) PrintFormat("MT CRF order result %u error %d; awaiting broker",result.retcode,sendError);
    return true;
 }
 
@@ -373,6 +434,7 @@ void CRFProcessExecution(bool allowEntry)
 {
    if(!g_p4Ready) return;
    CRFExposure v;
+   if(!P4Connected()) { g_crfStatus="Broker disconnected: REVIEW"; return; }
    if(!CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),v) || v.kind==CRF_EXPOSURE_REVIEW)
    { g_crfStatus="Broker state: REVIEW"; return; }
    if(CRFNativeReserved() && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY &&
@@ -445,17 +507,28 @@ void CRFProcessExecution(bool allowEntry)
          g_crfStatus=CRFQualityBlockedStatus(f);
          if(f.pending.direction!=0) g_crfStatus+="; candidate waiting confirmation";
       }
+      else if(g_p4[3].active!=0 || g_p4View[3].state!=P4_EMPTY)
+         g_crfStatus="CRF request awaiting broker reconciliation";
+      else if(f.active_direction!=0 && f.signal_bar>0 && f.signal_bar==g_crfAttemptedSignalBar &&
+              g_crfEntryReasonSignal==f.signal_bar && g_crfEntryReason!="")
+         g_crfStatus="Last entry attempt: "+g_crfEntryReason;
+      else if(f.active_direction!=0 && f.signal_bar>0 && f.signal_bar==g_crfAttemptedSignalBar)
+      {
+         g_crfStatus="Confirmed signal already used or display-only after restart/catch-up";
+         if(f.pending.direction!=0) g_crfStatus+="; candidate waiting confirmation";
+      }
       else g_crfStatus=f.pending.direction!=0?"Candidate waiting confirmation":"Watching M15 closed candles";
       return;
    }
    if(v.kind==CRF_EXPOSURE_MT_PENDING) { g_crfStatus="Waiting for M15 pending cancellation"; return; }
    if(v.kind==CRF_EXPOSURE_MT_OPEN)
    {
-      if(InpMode!=MT_CRF_MODE_BOTH || !InpCrfCloseProfitableM15 || !InpAutoTrading)
-      { g_crfStatus="Waiting for M15 slot"; return; }
+      if(InpMode!=MT_CRF_MODE_BOTH) { g_crfStatus="Existing MT M15 position open (CRF-only mode)"; return; }
+      if(!InpCrfCloseProfitableM15) { g_crfStatus="Existing MT M15 position open; takeover close disabled"; return; }
+      if(!InpAutoTrading) { g_crfStatus="Auto trading OFF; existing MT M15 position open"; return; }
       MqlTick q; double net=0,buffer=0;
       if(!SymbolInfoTick(_Symbol,q) || !CRFNetAndCloseBuffer(v,q,net,buffer))
-      { g_crfStatus="Waiting for closing: costs or history unavailable"; return; }
+      { g_crfStatus="M15 close blocked: position, quote or costs unavailable"; return; }
       if(net<=buffer) { g_crfStatus="Waiting for closing | net "+DoubleToString(net,2); return; }
       P3Plan livePlan; string reason=CRFLiveEntryReason(f,q,livePlan);
       if(reason!="") { g_crfStatus="CRF entry: "+reason; return; }
@@ -465,17 +538,20 @@ void CRFProcessExecution(bool allowEntry)
    }
    if(v.kind==CRF_EXPOSURE_EMPTY)
    {
-      g_crfStatus="CRF confirmed; waiting for M15 slot";
+      if(!InpAutoTrading) { g_crfStatus="Auto trading OFF"; return; }
       if(allowEntry)
       {
-         MqlTick q; P3Plan livePlan;
-         if(SymbolInfoTick(_Symbol,q))
+         MqlTick q;
+         if(!SymbolInfoTick(_Symbol,q))
          {
-            string reason=CRFLiveEntryReason(f,q,livePlan);
-            if(reason!="") g_crfStatus="CRF entry: "+reason;
-            else if(CRFPlaceMarket(q)) g_crfStatus="CRF order requested";
+            g_crfEntryReasonSignal=f.signal_bar; g_crfEntryReason="Fresh quote unavailable";
+            g_crfStatus="CRF entry: "+g_crfEntryReason;
          }
+         else if(!CRFPlaceMarket(q)) g_crfStatus="CRF entry: "+g_crfEntryReason;
       }
+      else if(g_crfEntryReasonSignal==f.signal_bar && g_crfEntryReason!="")
+         g_crfStatus="Last entry attempt: "+g_crfEntryReason;
+      else g_crfStatus="Waiting for market tick to check entry";
    }
 }
 #endif
