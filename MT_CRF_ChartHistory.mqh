@@ -24,8 +24,8 @@ void CRFChartHistoryReset()
 }
 string CRFChartHistoryStatus()
 {
-   if(g_crfChartError) return " | chart history unavailable; retrying";
-   if(!g_crfChartReady) return " | rebuilding chart history";
+   if(g_crfChartError) return " | historical CRF drawings unavailable; retrying";
+   if(!g_crfChartReady) return " | rebuilding historical CRF drawings";
    return "";
 }
 void CRFChartHistoryFail(const string reason)

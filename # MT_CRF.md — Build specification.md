@@ -435,6 +435,10 @@ Keep MT's top header always (symbol, market state, clock, trade totals, timer, B
 | New reversal | `CRF: new SELL confirmed / fresh forecast` (not `→ MT`) |
 | Waiting for slot | `CRF: BUY confirmed / waiting for M15 slot (MT position negative or below cost buffer)` |
 
+The chart replay warning says `historical CRF drawings unavailable; retrying`: it concerns rebuilding CRF markers/lines, not MT5 broker trade history. More specific replay errors are in the Experts log. This display-only replay does not authorize or block entries; the live forecast still requires valid M15 candle history.
+
+For an eligible confirmation with an empty broker slot, the CRF auto row reports the actual failed entry check (including timer, permission, account mode, quote, SL/TP support, M15 cooldown, lot sizing, fill mode, broker `OrderCheck` code/comment, or a changing quote), rather than claiming the slot is occupied. A timer refresh labels the last tick's failure as the **last entry attempt**; it does not run `OrderCheck` or send orders. If no check has run yet, it says it is waiting for a market tick. An unclaimed restart/catch-up signal is identified as display-only or already used. A rejected request is labelled rejected; an ambiguous request remains awaiting broker reconciliation. These messages do not relax any safety or retry rules.
+
 ### 5.2 `MT + CRF` — M15 row takeover
 
 | Panel part | Idle / normal | While CRF candidate or active | After CRF ends |

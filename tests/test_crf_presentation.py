@@ -49,6 +49,8 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  InpAutoTrading=true;InpAllowAutoM15=false;
  check(CRFAutoLine().find("Auto: OFF")!=string::npos && CRFPlanLine().find("Auto OFF")!=string::npos && CRFHeaderStatus().find("Auto OFF")!=string::npos,"CRF presentation reports M15 switch off");
  InpAllowAutoM15=true;check(CRFAutoLine().find("Auto: ON")!=string::npos,"CRF auto reports enabled");
+ g_crfStatus="CRF entry: Daily timer paused";
+ check(CRFAutoLine().find("CRF | CRF")==string::npos && CRFAutoLine().find("Daily timer paused")!=string::npos,"auto row avoids duplicate CRF label and shows specific reason");
  check(CRFPlanLine().find("BUY (CRF)")!=string::npos && CRFPlanLine().find("Hammer")!=string::npos && CRFPlanLine().find("Meets selected filters")!=string::npos,"CRF plan details");
  vector<string> rows;CRFDashboardRows(rows);check(rows.size()==15 && rows[0].find("BUY")!=string::npos && rows[12].find("4 bars")!=string::npos,"active dashboard 15 rows");
  InpMode=MT_CRF_MODE_CRF;InpCrfAutoFollowthroughPct=55;f.last_estimate.ready=false;f.last_estimate.reason=3;f.last_estimate.confidence=19;
