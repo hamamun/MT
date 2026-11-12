@@ -572,6 +572,15 @@ bool UIHandleDetailsClick(const string name)
 int UIDetailsNaturalWidth()
 {
    int natural=DETAILS_MIN_W;
+   // CRF-only can open the forecast dashboard independently of the diary.
+   // Do not size that window from hidden or stale diary details.
+   if(!InpShowDetails)
+   {
+      string crf[]; CRFDashboardRows(crf);
+      for(int i=0;i<ArraySize(crf);i++)
+         natural=(int)MathMax(natural,2*DETAILS_PAD+UIWidth(crf[i])+2);
+      return(natural);
+   }
    for(int i=0;i<3;i++)
    {
       UIDetail d;
@@ -604,7 +613,9 @@ int UIDetailCompose(UIDetail &d[], int inner, int rowH, int x, int y, int first,
 {
    int row=0; visible=0;
    string tip="Broker diary: only fully reconciled trades are results. Win rate includes break-even in the denominator; costs are linked deal commission, swap and fee. Final exits use the last deal reason.";
-   for(int i=0;i<3;i++)
+   // The automatically opened CRF-only dashboard must not override the
+   // user's Show diary details input. The broker diary keeps recording.
+   if(InpShowDetails) for(int i=0;i<3;i++)
    {
       string title=d[i].tf;
       if(d[i].state!="") title+=" | "+d[i].state;
@@ -658,7 +669,7 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step, int top)
    if(chartH>0 && chartH-top<3*rowH+2*DETAILS_PAD) top=UI_Y;
    int available=chartH>0?(int)MathMax(1,chartH-top-UI_X):1000000;
    UIDetail d[3];
-   for(int i=0;i<3;i++)
+   if(InpShowDetails) for(int i=0;i<3;i++)
    {
       UIReadDetail(g_uiDetailText[i],g_uiDetailTF[i],d[i]);
       if(g_uiDetailText[i]=="") d[i].warning="Trade diary unavailable";
@@ -676,15 +687,16 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step, int top)
    g_uiDetailsW=width;
    UIBox("bg",x,top,width,height,UI_BG,UI_BORDER,UI_DETAILS_PREFIX);
    UIBox("title",x+1,top+1,width-2,rowH+4,UI_SURFACE,UI_BORDER,UI_DETAILS_PREFIX);
-   UIText("titleText",x+DETAILS_PAD,top+4,DETAILS_TITLE,UI_TITLE,UI_SIZE,"Broker diary details.",UI_DETAILS_PREFIX);
+   UIText("titleText",x+DETAILS_PAD,top+4,InpShowDetails?DETAILS_TITLE:"CRF DETAILS",UI_TITLE,UI_SIZE,
+          InpShowDetails?(InpMode==MT_CRF_MODE_MT?"Broker diary details.":"Broker diary and forecast details."):"Confirmed reversal forecast details.",UI_DETAILS_PREFIX);
    UIText("symbol",x+width-DETAILS_PAD-UIWidth(g_symbol),top+4,g_symbol,clrSilver,UI_SIZE,"",UI_DETAILS_PREFIX);
    int contentY=top+headerH+DETAILS_PAD;
    if(paged)
    {
-      UIDetailsButton("prev",x+DETAILS_PAD,contentY,28,rowH,"<","Previous diary page");
-      UIDetailsButton("next",x+DETAILS_PAD+34,contentY,28,rowH,">","Next diary page");
+      UIDetailsButton("prev",x+DETAILS_PAD,contentY,28,rowH,"<","Previous details page");
+      UIDetailsButton("next",x+DETAILS_PAD+34,contentY,28,rowH,">","Next details page");
       UIText("page",x+DETAILS_PAD+72,contentY,"Page "+IntegerToString(g_uiDetailsPage+1)+" / "+IntegerToString(g_uiDetailsPages),clrSilver,UI_SIZE,
-             "Use the arrows to see every diary row.",UI_DETAILS_PREFIX);
+             "Use the arrows to see every details row.",UI_DETAILS_PREFIX);
       contentY+=rowH+4;
    }
    else
@@ -796,7 +808,7 @@ void UpdatePanel()
       // overlapping it - and returns to the panel's right side on reopening.
       if((InpShowDetails || InpMode==MT_CRF_MODE_CRF))
       {
-         UIRefreshDetails(now);
+         if(InpShowDetails) UIRefreshDetails(now);
          int requested=g_uiDetailsShown?g_uiDetailsW:UIDetailsNaturalWidth();
          int wx=(int)MathMax(UI_X,chartW-UI_X-requested);
          int wy=UI_Y+2*pad+(rows+1)*step+6+gap;
@@ -826,7 +838,7 @@ void UpdatePanel()
    int detailsW=0;
    if((InpShowDetails || InpMode==MT_CRF_MODE_CRF))
    {
-      UIRefreshDetails(now);
+      if(InpShowDetails) UIRefreshDetails(now);
       detailsW=UIDetailsNaturalWidth();
    }
    string state="",clock=""; color stateInk=clrWhite;

@@ -91,7 +91,7 @@ string CRFPlanLine()
    if(SymbolInfoTick(_Symbol,q) && CRFMakeRequestPlan(f,q,plan)) lot=P3LotText(plan.lot);
    s+=" | Lot: "+lot+" | SL: "+CRFPriceText(f.active_stop)+" | TP: "+CRFPriceText(f.active_target);
    s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+" | "+CRFQualityText(f.last_estimate.reason)+
-      " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars | Auto "+(InpAutoTrading?"ON":"OFF");
+      " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars | Auto "+(InpAutoTrading && P4LaneEnabled(1)?"ON":"OFF");
    if(!P3HasBidBars()) s+=" | Bars: Last/unknown proxy";
    return s;
 }
@@ -101,7 +101,7 @@ string CRFHeaderStatus()
    CRFForecastState f=g_crfObserver.forecast;
    if(f.active_direction!=0)
    {
-      string text=CRFSide(f.active_direction)+" confirmed / expires in "+IntegerToString(f.remaining)+" bars / Auto "+(InpAutoTrading?"ON":"OFF");
+      string text=CRFSide(f.active_direction)+" confirmed / expires in "+IntegerToString(f.remaining)+" bars / Auto "+(InpAutoTrading && P4LaneEnabled(1)?"ON":"OFF");
       if(g_p4[3].order>0) text+=" / order #"+StringFormat("%I64u",g_p4[3].order);
       return text+" / "+g_crfStatus;
    }
@@ -111,7 +111,7 @@ string CRFHeaderStatus()
 }
 string CRFAutoLine()
 {
-   string head=(string)"M15 | Auto: "+(InpAutoTrading?"ON":"OFF");
+   string head=(string)"M15 | Auto: "+(InpAutoTrading && P4LaneEnabled(1)?"ON":"OFF");
    if(!g_p4Ready) return head+" | coordinator unavailable";
    P4View v=g_p4View[3];
    if(v.state==P4_OPEN || v.state==P4_PARTIAL || v.state==P4_PENDING)

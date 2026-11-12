@@ -256,8 +256,8 @@ MT's existing `InpAutoTrading` (default `false`) remains the **real-money master
 | Mode | CRF background scan | MT lanes | New MT orders | CRF orders | Panel |
 |---|---|---|---|---|---|
 | `MT only` | **Off** | Full, unchanged | Yes, existing rules | **No** | Current MT panel plus the mode badge; no CRF text/objects |
-| `MT + CRF` **(default)** | Always, on **M15** closed bars | M5/M30 normal; M15 switches to CRF during takeover | **Only M15 MT entries paused** during CRF takeover; M5/M30 continue; M15 resumes after CRF end + next M15 bar + reconciliation | Yes, in the **existing M15 auto row**, when `InpAutoTrading=true` and quality gate passes | Current MT panel + **2 small header lines**; M15 readings/plan/auto rows show CRF while active |
-| `CRF only` | Always, on **M15** closed bars | M5/M30 hidden; M15 row is CRF only | **No MT orders at all** | Yes, in the **existing M15 auto row**, when `InpAutoTrading=true` and quality gate passes | MT header/settings kept; only the M15-shaped readings/plan/auto rows remain, all CRF; full 15-row dashboard in the separate details window |
+| `MT + CRF` **(default)** | Always, on **M15** closed bars | M5/M30 normal; M15 switches to CRF during takeover | **Only M15 MT entries paused** during CRF takeover; M5/M30 continue; M15 resumes after CRF end + next M15 bar + reconciliation | Yes, in the **existing M15 auto row**, when `InpAutoTrading=true`, `InpAllowAutoM15=true` and the quality gate passes | Current MT panel + **2 small header lines**; M15 readings/plan/auto rows show CRF while active |
+| `CRF only` | Always, on **M15** closed bars | M5/M30 hidden; M15 row is CRF only | **No MT orders at all** | Yes, in the **existing M15 auto row**, when `InpAutoTrading=true`, `InpAllowAutoM15=true` and the quality gate passes | MT header/settings kept; only the M15-shaped readings/plan/auto rows remain, all CRF; full 15-row dashboard in the separate details window |
 
 **New input:** `InpCrfCloseProfitableM15` (default `true`) — see Section 2.4.
 
@@ -308,10 +308,12 @@ When `InpMode = MT + CRF`, a confirmed CRF forecast with `Meets selected filters
 
 With `true`:
 
-- **`net > closeCostBuffer`** → request a **market close** of that MT M15 position. Requires `InpAutoTrading=true`, market open, fresh quote, `OrderCheck`, filling mode and hedging account for the later CRF entry. Wait for `P4PositionClosed()` broker confirmation + next **M15** closed bar, then open the CRF order. Never two M15 positions.
+- **`net > closeCostBuffer`** → request a **market close** of that MT M15 position only if the active CRF forecast also passes the live-entry reward/risk check below. Requires `InpAutoTrading=true`, `InpAllowAutoM15=true`, market open, fresh quote, `OrderCheck`, filling mode and hedging account for the later CRF entry. Wait for `P4PositionClosed()` broker confirmation + next **M15** closed bar; then recheck the still-active forecast and live-entry conditions before any CRF order. Never two M15 positions.
 - **`net <= closeCostBuffer`** (negative, zero, or too small after costs) → **do not close**. M15 auto row and 2nd-row `CRF:` line show `Waiting for closing`. Re-check on every new M15 closed bar while the CRF forecast is still alive. If it later becomes `net > closeCostBuffer`, close and open CRF. If CRF hard expiry arrives first, the forecast expires with `Duration limit reached; no extension`; no trade, no extension, no forced close.
 - **Ambiguous close / partial close / multiple M15 objects / unavailable history** → `REVIEW`, no CRF order.
 - The closed MT trade keeps its `30004` / `30006` diary result. The new CRF trade is `30007`. Do not rewrite the MT result.
+
+**Live-entry reward/risk check:** The historical estimate quality remains based on the confirmation-bar forecast. Separately, before requesting a profitable native M15 takeover close and again immediately before any CRF market order, check the current fresh executable price (Ask for BUY, Bid for SELL) against the original CRF stop and target rounded to the broker tick. `reward / risk` must still be at least `InpCrfMinRewardRisk` (1.2). The original SL/TP are not moved to improve this ratio. Invalid levels, stale quotes or unsuitable spread also block the action. When the ratio is too low, the status reports `Below live R/R filter`; the EA may recheck while the original forecast remains active. `Bypass Risk` and `Minimum Lot use` do not bypass this check. Actual fills, slippage and costs can differ from the pre-request quote and are not guaranteed by the price-distance ratio.
 
 M5/M30 positions and pending limits are **never** touched by this rule. `CRF only` must reconcile any pre-existing MT positions or pending orders after a mode change or restart; it never closes an MT position under this input and must not enter while the M15 slot is occupied or ambiguous. `MT only` ignores it. `InpAutoTrading=false` blocks the close even when this input is `true`.
 
@@ -329,7 +331,8 @@ Do not edit the behaviour of:
 - `P4Decide()`, `P4Refresh()`, `P4Place()`, `P4Modify()`, `P4Cancel()`, pending 3-bar expiry, cooldown.
 - `MT_Panel.mqh` existing objects, `MT_TradeDiaryRuntime.mqh` schema, strategy IDs `30004` / `30006`.
 - `InpAutoTrading`, `InpPlaceStopLoss`, `InpUseAutoSchedule` (09:15–17:00 local), `InpAutoStartTime`, `InpAutoEndTime`, `InpAllowAutoM5/M15/M30`.
-- `InpAllowAutoM15` still gates **normal MT M15** entries; during a CRF takeover the M15 slot is CRF-owned, while `InpAllowAutoM5/M30` keep working normally.
+- `InpAllowAutoM15` gates both native MT M15 and CRF new entries. When off, CRF does not initiate a takeover or close an MT position for takeover; an already-open CRF position remains managed, including its broker SL/TP and software expiry (subject to the master switch). A disabled signal is not replayed as a new entry when re-enabled. `InpAllowAutoM5/M30` keep working normally.
+- CRF respects `Bypass Risk`: off uses 0.5% equity-based sizing from the live price and CRF stop; on uses the balance ladder (`balance / 1000 * 0.01`) without an MT-score multiplier. `Minimum Lot use` takes precedence. Broker volume limits and rounding apply in all cases; a below-minimum calculated lot rounds up to the broker minimum. Neither option bypasses CRF filters, mandatory broker SL/TP or broker checks.
 - **One approved exception:** with `InpCrfCloseProfitableM15=true`, CRF may close an MT-native M15 position (Section 2.4). `P4Decide()` for M5/M30 and all other open-position handling stay unchanged.
 - All 14 existing test files must still pass.
 
@@ -448,7 +451,7 @@ When `InpCrfCloseProfitableM15=true` and the MT M15 position is not profitable e
 - Header + settings stay; `Input mode: CRF only`.
 - M5 and M30 readings / plans / auto rows are hidden.
 - The **M15-shaped** readings / plan / auto rows are permanently CRF (same fields as 5.2).
-- The full **15-row `CONFIRMED REVERSAL FORECAST`** dashboard opens in the existing separate details window (same mechanism as `Show diary details`), so the main panel stays compact and M15-shaped.
+- The full **15-row `CONFIRMED REVERSAL FORECAST`** dashboard opens in the separate details window, so the main panel stays compact and M15-shaped. Diary rows appear there only when `Show diary details` is enabled; when it is off, the window contains only the CRF dashboard. The input controls display, not diary recording.
 - No new MT orders in any lane; `InpCrfCloseProfitableM15` has no effect. Reconcile any pre-existing MT M15 position or pending order and wait for the slot to become free.
 
 ### 5.4 `MT only`

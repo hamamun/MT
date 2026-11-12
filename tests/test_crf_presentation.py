@@ -46,6 +46,9 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  f.last_signal.direction=1;f.last_signal.variant=21;f.last_signal.stop=99;f.remaining=4;
  f.last_estimate.available=true;f.last_estimate.ready=true;f.last_estimate.reason=5;f.last_estimate.samples=6;f.last_estimate.duration=3;f.last_estimate.duration_low=2;f.last_estimate.duration_high=4;f.last_estimate.target=102;f.last_estimate.move_atr=1.5;
  check(CRFDisplayM15() && CRFReadingLine().find("~4b")!=string::npos,"CRF M15 state");
+ InpAutoTrading=true;InpAllowAutoM15=false;
+ check(CRFAutoLine().find("Auto: OFF")!=string::npos && CRFPlanLine().find("Auto OFF")!=string::npos && CRFHeaderStatus().find("Auto OFF")!=string::npos,"CRF presentation reports M15 switch off");
+ InpAllowAutoM15=true;check(CRFAutoLine().find("Auto: ON")!=string::npos,"CRF auto reports enabled");
  check(CRFPlanLine().find("BUY (CRF)")!=string::npos && CRFPlanLine().find("Hammer")!=string::npos && CRFPlanLine().find("Meets selected filters")!=string::npos,"CRF plan details");
  vector<string> rows;CRFDashboardRows(rows);check(rows.size()==15 && rows[0].find("BUY")!=string::npos && rows[12].find("4 bars")!=string::npos,"active dashboard 15 rows");
  check(CRFSetLevel("entry",1000,1001,100,clrAqua) && CRFSetMarker(1000,false,1,98),"finite line and marker objects created");

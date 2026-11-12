@@ -12,6 +12,7 @@ stubs=stubs.replace('unsigned long magic=0,order=0;double volume', 'unsigned lon
 stubs=stubs.replace('datetime bar=1000; bool barProxy=false;', 'datetime bar=1000; bool barProxy=false,priced=false;')
 stubs=stubs.replace(' sends++; if(sendMode==1)', ' if(r.position!=0){closeSends++;if(closeMode==1){out.order=777;out.retcode=TRADE_RETCODE_REJECT;return false;}out.retcode=10009;return true;}\n sends++; if(sendMode==1)')
 stubs=stubs.replace('int sendMode=0,sends=0,cancels=0,modifies=0;', 'int sendMode=0,sends=0,cancels=0,modifies=0,closeSends=0,closeMode=0;')
+stubs=stubs.replace('bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){', 'bool moveOnCheck=false; bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){if(moveOnCheck){current.bid=101.10;current.ask=101.12;}')
 extra=base['extra']+r'''
 bool FileCopy(string a,int,string b,int){if(diskFail||!files.count(a)||files.count(b))return false;files[b]=files[a];return true;}
 using ENUM_TIMEFRAMES=int;const int PERIOD_M15=1;
@@ -50,18 +51,61 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  MqlTick q=current;
  check(CRFNativeLaneBlocked(1) && !CRFNativeLaneBlocked(0) && !CRFNativeLaneBlocked(2),"combined mode blocks only M15");
  check(!CRFPlaceMarket(q) && sends==0,"master off blocks CRF entry");InpAutoTrading=true;
+ InpAllowAutoM15=false;
+ check(!CRFPlaceMarket(q) && sends==0,"M15 switch off blocks CRF entry in combined mode");
+ InpMode=MT_CRF_MODE_CRF;check(!CRFPlaceMarket(q) && sends==0,"M15 switch off blocks CRF entry in CRF-only mode");
+ InpMode=MT_CRF_MODE_BOTH;InpAllowAutoM15=true;
+ // A late market price must still satisfy the original 1.2 R/R filter.
+ // Prices are examples only; both sides use the executable quote and the
+ // same broker-tick rounded SL/TP that the eventual request carries.
+ P3Plan probe{};CRFForecastState rr=forecast;rr.active_target=101.2;
+ MqlTick boundary=q;boundary.bid=99.98;boundary.ask=100.0;
+ check(CRFLiveEntryReason(rr,boundary,probe)=="", "BUY at exactly 1.2 R/R is permitted");
+ MqlTick late=q;late.bid=100.59;late.ask=100.60;
+ check(CRFLiveEntryReason(rr,late,probe)=="Below live R/R filter", "BUY halfway to target is blocked");
+ rr.active_stop=99.003;rr.active_target=101.209;
+ check(CRFLiveEntryReason(rr,boundary,probe)=="" && MathAbs(probe.stop-99)<1e-8 && MathAbs(probe.target-101.2)<1e-8,"BUY ratio uses broker-rounded levels");
+ rr=forecast;rr.active_direction=-1;rr.active_stop=101;rr.active_target=98.8;
+ boundary.bid=100;boundary.ask=100.02;
+ check(CRFLiveEntryReason(rr,boundary,probe)=="", "SELL at exactly 1.2 R/R is permitted");
+ late.bid=99.4;late.ask=99.42;
+ check(CRFLiveEntryReason(rr,late,probe)=="Below live R/R filter", "SELL halfway to target is blocked");
+ rr.active_stop=100.997;rr.active_target=98.791;
+ check(CRFLiveEntryReason(rr,boundary,probe)=="" && MathAbs(probe.stop-101)<1e-8 && MathAbs(probe.target-98.8)<1e-8,"SELL ratio uses broker-rounded levels");
+ MqlTick stale=boundary;stale.time=terminalTime-20;
+ check(CRFLiveEntryReason(rr,stale,probe)!="", "stale quote fails closed");
+ rr.active_direction=0;check(CRFLiveEntryReason(rr,boundary,probe)!="", "inactive forecast fails closed");
+ rr=forecast;rr.active_target=101.2;late.bid=100.59;late.ask=100.60;
+ InpBypassRisk=true;check(!CRFMakeRequestPlan(rr,late,probe),"bypass risk cannot bypass live R/R");
+ InpMinimumLot=true;check(!CRFMakeRequestPlan(rr,late,probe),"minimum lot cannot bypass live R/R");
+ InpBypassRisk=false;InpMinimumLot=false;
+ // Test actual request plan sizing, independently of native MT score.
+ P3Plan normal{},bypass{},minimum{};equity=10000;InpBypassRisk=false;InpMinimumLot=false;
+ g_p3[1].score=-3;check(CRFMakeRequestPlan(forecast,q,normal) && MathAbs(normal.lot-0.49)<1e-8,"normal CRF sizing uses live stop and 0.5 percent equity despite opposing MT score");
+ calcOk=false;check(!CRFMakeRequestPlan(forecast,q,normal),"normal sizing blocks when stop loss calculation unavailable");
+ InpBypassRisk=true;g_p3[1].score=3;
+ check(CRFMakeRequestPlan(forecast,q,bypass) && MathAbs(bypass.lot-0.10)<1e-8,"bypass uses balance ladder and no MT score multiplier or loss calculation");
+ InpMinimumLot=true;check(CRFMakeRequestPlan(forecast,q,minimum) && MathAbs(minimum.lot-volMin)<1e-8,"minimum lot overrides bypass");
+ InpMinimumLot=false;volMax=0.05;check(CRFMakeRequestPlan(forecast,q,bypass) && MathAbs(bypass.lot-0.05)<1e-8,"bypass respects broker maximum");volMax=100;
+ MqlTick excessive=q;excessive.ask=101.1;check(!CRFMakeRequestPlan(forecast,excessive,bypass),"bypass does not bypass spread safety");
+ calcOk=true;InpBypassRisk=false;equity=1;check(CRFMakeRequestPlan(forecast,q,normal) && MathAbs(normal.lot-volMin)<1e-8,"normal below-minimum result uses broker minimum");equity=10000;
+ InpBypassRisk=true;calcOk=false;
  long oldMode=orderMode;orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;
- check(!CRFPlaceMarket(q) && sends==0,"CRF requires broker SL even if MT SL disabled");orderMode=oldMode;
+ check(!CRFPlaceMarket(q) && sends==0,"CRF requires broker SL even with bypass on and MT SL disabled");orderMode=oldMode;
+ checkOk=false;check(!CRFPlaceMarket(q) && sends==0,"bypass does not bypass OrderCheck");checkOk=true;uptime+=6000;
+ moveOnCheck=true;check(!CRFPlaceMarket(q) && sends==0,"price change between OrderCheck and final scan blocks entry");
+ moveOnCheck=false;current=q;uptime+=6000;
  check(CRFPlaceMarket(q) && sends==1 && lastRequest.magic==(ulong)P4Magic(3) && lastRequest.sl>0 && lastRequest.tp>0 && lastRequest.comment=="MT4-CRF","CRF market entry has distinct magic and mandatory protection");
  check(CRFNativeReserved(),"shared native M15 journal reserved while CRF is open");
  P4Refresh(1);check(g_p4View[1].state==P4_UNCERTAIN && g_p4View[1].note.find("no order ticket")!=string::npos,"original-compatible reservation is REVIEW, never free");
- check(g_p5.size()==1 && g_p5[0].strategy==30007 && g_p5[0].score==0 && g_p5[0].stopInput==1,"CRF diary identity");
+ check(g_p5.size()==1 && g_p5[0].strategy==30007 && g_p5[0].score==0 && g_p5[0].stopInput==1 && g_p5[0].bypass==1 && MathAbs(lastRequest.volume-0.10)<1e-8,"CRF bypass request and diary identity");
+ calcOk=true;InpBypassRisk=false;
  check(!CRFPlaceMarket(q) && sends==1,"no duplicate request while position visible");
  CRFRefreshBroker();check(g_p4View[3].state==P4_OPEN && g_p4[3].position!=0,"broker-confirmed CRF position");
  forecast.active_direction=0;CRFProcessExecution(false);check(closeSends==0 && g_p4[3].active==1,"candle touch does not close position");
  laneBars[1].insert(laneBars[1].end(),{1002,1003,1004,1005});uptime+=6000;
  InpAutoTrading=false;CRFProcessExecution(false);check(closeSends==0,"master off prevents CRF expiry close request");InpAutoTrading=true;
- closeMode=1;CRFProcessExecution(false);closeMode=0;
+ InpAllowAutoM15=false;closeMode=1;CRFProcessExecution(false);closeMode=0;InpAllowAutoM15=true;
  check(closeSends==1 && g_crfCloseKind==2,"contradictory rejection with order ticket retains durable close intent");
  CRFProcessExecution(false);check(closeSends==1,"unconfirmed close cannot be resent");
  P4Close();P4Init();check(g_p4Ready && g_crfCloseKind==2 && g_crfOrderSignalBar==1000,"close intent survives restart");
@@ -106,10 +150,22 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  deals[0].commission=-0.2;positions[0].profit=0.1;
  check(CRFNetAndCloseBuffer(ex,q,net,buffer) && net<=buffer,"below-cost position remains open");
  uptime+=6000;CRFProcessExecution(false);check(closeSends==0,"below-cost position not closed");
+ positions[0].profit=20;InpAllowAutoM15=false;
+ check(!CRFRequestPositionClose(1,ex,q) && closeSends==0,"disabled M15 blocks direct takeover close");
+ CRFProcessExecution(true);check(closeSends==0 && g_crfTakeover==0 && g_crfAttemptedSignalBar==1000 && g_crfStatus=="M15 autotrading OFF","disabled M15 releases takeover, consumes signal and leaves native position");
+ InpAllowAutoM15=true;CRFProcessExecution(true);check(closeSends==0,"re-enabling cannot replay disabled confirmation");
+ // Simulate a new confirmation, distinct from the consumed one.
+ forecast.signal_bar=1001;g_crfTakeover=1;
  positions[0].profit=20;InpCrfCloseProfitableM15=false;uptime+=6000;CRFProcessExecution(false);
  check(closeSends==0,"takeover close input off prevents close");
  InpCrfCloseProfitableM15=true;InpAutoTrading=false;CRFProcessExecution(false);check(closeSends==0,"master off prevents native close");
- InpAutoTrading=true;uptime+=6000;CRFProcessExecution(false);
+ InpAutoTrading=true;uptime+=6000;
+ current.bid=101.10;current.ask=101.12;
+ check(!CRFRequestPositionClose(1,ex,current) && closeSends==0,"direct takeover close blocked by deteriorated live R/R");
+ CRFProcessExecution(false);check(closeSends==0 && g_crfStatus=="CRF entry: Below live R/R filter", "profitable native position remains open when live R/R is too low");
+ current=q;uptime+=6000;moveOnCheck=true;
+ check(!CRFRequestPositionClose(1,ex,q) && closeSends==0,"price change between close check and final scan blocks takeover close");
+ moveOnCheck=false;current=q;uptime+=6000;CRFProcessExecution(false);
  check(closeSends==1 && g_crfCloseKind==1 && positions.size()==1,"profitable native close is requested, not assumed");
  CRFProcessExecution(false);check(closeSends==1 && sends==1,"unconfirmed native close neither repeated nor replaced");
  P4Close();P4Init();P4Process(false);CRFRefreshBroker();CRFProcessExecution(false);
@@ -117,7 +173,11 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  auto nativePos=positions[0];positions.clear();deals.push_back({nativePos.id,DEAL_ENTRY_OUT,nativePos.lot,999,1700000000002L,DEAL_REASON_TP,101,20,-.2,0,0});
  uptime+=6000;P4Process(false);CRFProcessExecution(false);
  check(g_crfCloseKind==0 && g_crfReleaseBar==1000 && !CRFPlaceMarket(q),"confirmed native close waits for later M15 close");
- laneBars[1].push_back(1002);uptime+=6000;check(CRFPlaceMarket(q) && sends==2,"CRF enters only after broker close and later bar");
+ laneBars[1].push_back(1002);uptime+=6000;
+ current.bid=101.10;current.ask=101.12;
+ CRFProcessExecution(true);check(sends==1 && g_crfStatus=="CRF entry: Below live R/R filter", "after close and cooldown, deteriorated live R/R prevents entry");
+ check(!CRFPlaceMarket(current) && sends==1,"direct CRF placement cannot bypass live R/R");
+ current=q;uptime+=6000;check(CRFPlaceMarket(q) && sends==2,"CRF can enter after price improves while forecast remains active");
 
  // An ambiguous send is durable and cannot be repeated across restart.
  P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
@@ -142,6 +202,18 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(P4Persist(),"orphan reservation persisted");P4Close();P4Init();CRFRefreshBroker();P4Refresh(1);
  CRFProcessExecution(false);check(!CRFNativeReserved() && g_p4[1].cooldown==2 && g_crfReleaseBar==1000,"orphan reservation recovers only after empty broker scan");
 
+ // Polling still updates the forecast with M15 disabled but must not create
+ // a takeover. Re-enabling can create one for a genuinely fresh event.
+ P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
+ P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);g_crfObserverAvailable=true;g_crfObserver.ready=true;g_crfForecastCurrent=false;
+ forecast=CRFForecastState{};forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_bar=1000;forecast.last_estimate.ready=true;
+ g_crfTakeover=0;g_crfAttemptedSignalBar=0;InpMode=MT_CRF_MODE_BOTH;InpAllowAutoM15=false;
+ CRFUpdateForecast();check(g_crfForecastCurrent && g_crfTakeover==0,"disabled M15 still forecasts but cannot claim takeover");
+ CRFProcessExecution(true);check(g_crfAttemptedSignalBar==1000 && g_crfStatus=="M15 autotrading OFF","disabled confirmation consumed");
+ InpAllowAutoM15=true;forecast.signal_bar=1001;forecast.last_bar=1001;g_crfForecastCurrent=false;CRFUpdateForecast();
+ check(g_crfTakeover==1,"fresh confirmation can claim takeover after M15 enabled");
+ InpAllowAutoM15=false;g_crfObserverAvailable=false;g_crfForecastCurrent=false;CRFProcessExecution(false);
+ check(g_crfTakeover==0 && g_crfStatus=="M15 autotrading OFF","disabled M15 releases unfilled takeover even if forecast is unavailable");
  if(!f)cout<<"CRF execution integration stub checks passed\n";
  return f?1:0;}
 '''
