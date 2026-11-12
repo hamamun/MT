@@ -7,7 +7,7 @@ source=source.replace("MT-test_trades.bin", "MT-test_crf_trades.bin")
 source=source.replace("root/'MT_TradeDiaryRuntime.mqh'", "root/'MT_CRF_TradeDiaryRuntime.mqh'")
 source=source.replace("root/'MT_AutoRuntime.mqh'", "root/'MT_CRF_AutoRuntime.mqh'")
 source=source.replace(".replace('#include \"MT_TradeDiaryRuntime.mqh\"','')", ".replace('#include \"MT_CRF_TradeDiaryRuntime.mqh\"','')")
-source=source.replace("extra=r'''", "extra=r'''\nbool FileCopy(string a,int,string b,int){if(diskFail||!files.count(a)||files.count(b))return false;files[b]=files[a];return true;}")
+source=source.replace("extra=r'''", "extra=r'''\nbool InpCrfRiskBypass=false;\nbool FileCopy(string a,int,string b,int){if(diskFail||!files.count(a)||files.count(b))return false;files[b]=files[a];return true;}")
 source=source.replace("auto=inputs+'\\n'+auto", "auto='using ENUM_TIMEFRAMES=int; const int PERIOD_M15=1; bool CRFNativeLaneBlocked(int){return false;}\\n'+inputs+'\\n'+auto")
 extra=r'''
  // CRF and MT requests on the same M15 bar must bind and reconcile only

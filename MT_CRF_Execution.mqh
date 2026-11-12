@@ -25,6 +25,26 @@ bool CRFLaterM15Bar()
    return shift>=2;
 }
 
+// Keep the reference forecast/indicator quality at 55%, including its saved
+// journal. This separate, user-selected gate affects auto trading only.
+// 0=eligible, 1=unavailable/invalid, 2=samples, 3=follow-through, 4=R/R.
+int CRFAutoFilterReason(const CRFForecastState &f)
+{
+   if(InpCrfAutoFollowthroughPct<1 || InpCrfAutoFollowthroughPct>100 ||
+      (f.active_direction!=1 && f.active_direction!=-1) || f.signal_bar<=0 ||
+      !f.last_estimate.available || !P3Positive(f.last_entry) ||
+      !P3Positive(f.last_signal.stop) || !P3Positive(f.last_signal.atr) ||
+      !P3Positive(f.last_estimate.move_atr) || !MathIsValidNumber(f.last_estimate.confidence) ||
+      f.last_estimate.confidence<0 || f.last_estimate.confidence>100.0000001) return 1;
+   if(f.last_estimate.samples<InpCrfMinimumAnalogs) return 2;
+   if(f.last_estimate.confidence<InpCrfAutoFollowthroughPct) return 3;
+   double riskATR=MathAbs(f.last_entry-f.last_signal.stop)/f.last_signal.atr;
+   if(!P3Positive(riskATR) || !MathIsValidNumber(riskATR*InpCrfMinRewardRisk)) return 1;
+   if(!InpCrfRiskBypass && f.last_estimate.move_atr<riskATR*InpCrfMinRewardRisk) return 4;
+   return 0;
+}
+bool CRFAutoFilterReady(const CRFForecastState &f) { return CRFAutoFilterReason(f)==0; }
+
 // Called by the copied MT engine, never by the original MT EA.
 bool CRFNativeLaneBlocked(int lane)
 {
@@ -35,7 +55,7 @@ bool CRFNativeLaneBlocked(int lane)
    if(InpMode==MT_CRF_MODE_MT || !P4LaneEnabled(1)) return false;
    if(!g_crfObserverAvailable || !g_crfForecastCurrent || !g_crfObserver.ready || g_crfTakeover!=0) return true;
    CRFForecastState f=g_crfObserver.forecast;
-   return f.active_direction!=0 && f.last_estimate.ready && f.signal_bar!=g_crfAttemptedSignalBar;
+   return f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar;
 }
 
 void CRFInitRuntime()
@@ -82,7 +102,7 @@ void CRFUpdateForecast()
       if(!P4Persist()) { g_crfObserverAvailable=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
    }
    CRFForecastState f=g_crfObserver.forecast;
-   if(P4LaneEnabled(1) && f.active_direction!=0 && f.last_estimate.ready && f.signal_bar!=g_crfAttemptedSignalBar && g_crfTakeover==0)
+   if(P4LaneEnabled(1) && f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar && g_crfTakeover==0)
    {
       g_crfTakeover=1;
       if(!P4Persist()) { g_crfObserverAvailable=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
@@ -101,12 +121,12 @@ bool CRFProtectionAllowed()
 }
 
 // The original quality filter is evaluated at the confirmation close. A late
-// market entry must also satisfy it at the live executable price, using the
-// same tick-normalized stop and target that will go to the broker.
+// market entry must also satisfy it at the live executable price unless the
+// CRF risk bypass is on. All live-level and spread checks remain mandatory.
 string CRFLiveEntryReason(const CRFForecastState &f, const MqlTick &q, P3Plan &plan)
 {
    ZeroMemory(plan);
-   if((f.active_direction!=1 && f.active_direction!=-1) || !f.last_estimate.ready ||
+   if((f.active_direction!=1 && f.active_direction!=-1) || !CRFAutoFilterReady(f) ||
       f.signal_bar<=0 || !P3Positive(f.last_entry) || !P3Positive(f.active_stop) ||
       !P3Positive(f.active_target) || !P4FreshQuote(q)) return "Forecast or quote unavailable";
    double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
@@ -123,7 +143,7 @@ string CRFLiveEntryReason(const CRFForecastState &f, const MqlTick &q, P3Plan &p
    double risk=plan.signal*(price-plan.stop), reward=plan.signal*(plan.target-price);
    if(!P3Positive(risk) || !P3Positive(reward) || !MathIsValidNumber(InpCrfMinRewardRisk*risk))
       return "Live R/R unavailable";
-   if(reward+tick*1e-8<InpCrfMinRewardRisk*risk) return "Below live R/R filter";
+   if(!InpCrfRiskBypass && reward+tick*1e-8<InpCrfMinRewardRisk*risk) return "Below live R/R filter";
    return "";
 }
 
@@ -137,7 +157,7 @@ bool CRFMakeRequestPlan(const CRFForecastState &f, const MqlTick &q, P3Plan &pla
    double price=plan.signal>0?q.ask:q.bid;
    double requested=0;
    if(InpMinimumLot) requested=minimum;
-   else if(InpBypassRisk)
+   else if(InpBypassRisk || InpCrfRiskBypass)
    {
       double balance=AccountInfoDouble(ACCOUNT_BALANCE);
       if(!P3Positive(balance)) return false;
@@ -270,7 +290,7 @@ bool CRFPlaceMarket(const MqlTick &q)
       AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING ||
       !P4FreshQuote(q) || !CRFProtectionAllowed() || g_crfCloseKind!=0 || !CRFLaterM15Bar()) return false;
    CRFForecastState f=g_crfObserver.forecast;
-   if(f.signal_bar<=0 || f.signal_bar==g_crfAttemptedSignalBar || f.active_direction==0 || !f.last_estimate.ready) return false;
+   if(f.signal_bar<=0 || f.signal_bar==g_crfAttemptedSignalBar || f.active_direction==0 || !CRFAutoFilterReady(f)) return false;
    P4Refresh(1); P4Refresh(3);
    CRFExposure exposure;
    if(!g_p4Ready || !CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),exposure) ||
@@ -336,6 +356,19 @@ void CRFRefreshBroker()
    }
 }
 
+// A forecast may be confirmed and displayed but still fail the historical
+// quality filters. Make this explicit instead of reporting that CRF is idle.
+string CRFQualityBlockedStatus(const CRFForecastState &f)
+{
+   int reason=CRFAutoFilterReason(f);
+   if(reason==2)
+      return "Blocked: low sample count ("+IntegerToString(f.last_estimate.samples)+" / min "+IntegerToString(InpCrfMinimumAnalogs)+")";
+   if(reason==3)
+      return "Blocked: below follow-through filter (min "+IntegerToString(InpCrfAutoFollowthroughPct)+"%)";
+   if(reason==4) return "Blocked: below forecast reward/risk filter";
+   return "Blocked: forecast filters unavailable";
+}
+
 void CRFProcessExecution(bool allowEntry)
 {
    if(!g_p4Ready) return;
@@ -399,13 +432,22 @@ void CRFProcessExecution(bool allowEntry)
    }
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return;
    CRFForecastState f=g_crfObserver.forecast;
-   bool fresh=f.active_direction!=0 && f.last_estimate.ready && f.signal_bar!=g_crfAttemptedSignalBar;
+   bool fresh=f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar;
    if(!fresh && g_crfTakeover!=0 && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY)
    {
       g_crfTakeover=0; g_crfReleaseBar=iTime(_Symbol,PERIOD_M15,1);
       if(g_crfReleaseBar<=0 || !P4Persist()) { g_p4Ready=false; g_crfStatus="M15 release: REVIEW"; return; }
    }
-   if(!fresh) { g_crfStatus=f.pending.direction!=0?"Candidate waiting confirmation":"Watching M15 closed candles"; return; }
+   if(!fresh)
+   {
+      if(f.active_direction!=0 && !CRFAutoFilterReady(f))
+      {
+         g_crfStatus=CRFQualityBlockedStatus(f);
+         if(f.pending.direction!=0) g_crfStatus+="; candidate waiting confirmation";
+      }
+      else g_crfStatus=f.pending.direction!=0?"Candidate waiting confirmation":"Watching M15 closed candles";
+      return;
+   }
    if(v.kind==CRF_EXPOSURE_MT_PENDING) { g_crfStatus="Waiting for M15 pending cancellation"; return; }
    if(v.kind==CRF_EXPOSURE_MT_OPEN)
    {

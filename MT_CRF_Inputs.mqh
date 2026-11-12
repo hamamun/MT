@@ -1,8 +1,7 @@
 #ifndef MT_CRF_INPUTS_MQH
 #define MT_CRF_INPUTS_MQH
 
-// Mode and the takeover option are the only CRF-specific user controls.
-// Forecast calibration uses the reference defaults as internal constants.
+// CRF controls; forecast calibration otherwise uses the reference defaults.
 enum ENUM_MT_CRF_MODE
 {
    MT_CRF_MODE_BOTH = 0, // MT + CRF
@@ -17,9 +16,15 @@ const int InpCrfTrendLength = 12;                  // Prior trend length
 const int InpCrfVolumeLength = 20;                 // Volume baseline length
 const int InpCrfSwingLength = 20;                   // Swing context length
 const int InpCrfMinimumAnalogs = 6;                // Minimum similar historical setups
-const int InpCrfMinFollowthroughPct = 55;          // Minimum follow-through percent
+const int InpCrfMinFollowthroughPct = 55;          // Reference indicator follow-through percent
 const double InpCrfMinRewardRisk = 1.2;            // Minimum forecast reward/risk
+input int InpCrfAutoFollowthroughPct = 15;           // CRF auto minimum follow-through % (1-100)
+input bool InpCrfRiskBypass = false;                 // CRF risk bypass
 input bool InpCrfCloseProfitableM15 = true;        // Allow CRF to close profitable M15 MT position
 
-bool CRFBuildReady() { return InpMode==MT_CRF_MODE_BOTH || InpMode==MT_CRF_MODE_MT || InpMode==MT_CRF_MODE_CRF; }
+bool CRFBuildReady()
+{
+   return (InpMode==MT_CRF_MODE_BOTH || InpMode==MT_CRF_MODE_MT || InpMode==MT_CRF_MODE_CRF) &&
+          InpCrfAutoFollowthroughPct>=1 && InpCrfAutoFollowthroughPct<=100;
+}
 #endif

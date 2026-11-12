@@ -87,6 +87,8 @@ struct P2Lane
 P2Lane g_p2[3];
 
 #include "MT_PlanRuntime.mqh"
+// Keep this last in the MT5 Inputs tab, after the shared diary-details input.
+input bool InpCrfDetails = false;                       // CRF Details
 #include "MT_DiaryRuntime.mqh"
 #include "MT_CRF_AutoRuntime.mqh"
 #include "MT_CRF_Execution.mqh"
@@ -102,7 +104,7 @@ int OnInit()
    // An unrecognized mode must never fall through to the trading engine.
    if(!CRFBuildReady())
    {
-      Print("MT_CRF: invalid mode.");
+      Print("MT_CRF: invalid mode or CRF auto follow-through threshold (must be 1-100%).");
       return(INIT_FAILED);
    }
    Rebuild();

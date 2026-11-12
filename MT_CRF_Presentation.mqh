@@ -90,24 +90,28 @@ string CRFPlanLine()
    MqlTick q; P3Plan plan; string lot="--";
    if(SymbolInfoTick(_Symbol,q) && CRFMakeRequestPlan(f,q,plan)) lot=P3LotText(plan.lot);
    s+=" | Lot: "+lot+" | SL: "+CRFPriceText(f.active_stop)+" | TP: "+CRFPriceText(f.active_target);
-   s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+" | "+CRFQualityText(f.last_estimate.reason)+
+   s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+" | Reference quality (55%): "+CRFQualityText(f.last_estimate.reason)+
       " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars | Auto "+(InpAutoTrading && P4LaneEnabled(1)?"ON":"OFF");
+   s+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED")+
+      " | CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
+   if(!CRFAutoFilterReady(f)) s+=" | Lot unavailable: auto filters not met";
    if(!P3HasBidBars()) s+=" | Bars: Last/unknown proxy";
    return s;
 }
 string CRFHeaderStatus()
 {
-   if(!g_crfObserverAvailable || !g_crfForecastCurrent) return g_crfStatus;
+   string threshold=" / CRF auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"% / CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
+   if(!g_crfObserverAvailable || !g_crfForecastCurrent) return g_crfStatus+threshold;
    CRFForecastState f=g_crfObserver.forecast;
    if(f.active_direction!=0)
    {
       string text=CRFSide(f.active_direction)+" confirmed / expires in "+IntegerToString(f.remaining)+" bars / Auto "+(InpAutoTrading && P4LaneEnabled(1)?"ON":"OFF");
       if(g_p4[3].order>0) text+=" / order #"+StringFormat("%I64u",g_p4[3].order);
-      return text+" / "+g_crfStatus;
+      return text+" / "+g_crfStatus+threshold;
    }
    if(f.pending.direction!=0)
-      return CRFSide(f.pending.direction)+" candidate / waiting confirmation ("+IntegerToString(2-f.pending_elapsed)+" bars left)";
-   return g_crfStatus;
+      return CRFSide(f.pending.direction)+" candidate / waiting confirmation ("+IntegerToString(2-f.pending_elapsed)+" bars left)"+threshold;
+   return g_crfStatus+threshold;
 }
 string CRFAutoLine()
 {
@@ -150,7 +154,8 @@ void CRFDashboardRows(string &rows[])
    rows[7]=(active?"TP estimate | ":"Last TP | ")+(f.last_estimate.available?CRFPriceText(f.last_estimate.target):"--");
    rows[8]=(active?"Expected move | ":"Last expected move | ")+(f.last_estimate.available?"+"+DoubleToString(f.last_estimate.move_atr,2)+" ATR":"--");
    rows[9]=(active?"Expected duration | ":"Last duration | ")+(f.last_estimate.available?DoubleToString(f.last_estimate.duration,1)+" bars ("+IntegerToString(f.last_estimate.duration_low)+"-"+IntegerToString(f.last_estimate.duration_high)+")":"--");
-   rows[10]=(active?"Estimate quality | ":"Last estimate quality | ")+CRFQualityText(f.last_estimate.reason);
+   rows[10]=(active?"Estimate quality (reference 55%) | ":"Last estimate quality (reference 55%) | ")+CRFQualityText(f.last_estimate.reason);
+   if(active) rows[10]+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED");
    rows[11]="Historical follow-through / samples | "+(hasLast?DoubleToString(f.last_estimate.confidence,0)+"% | "+IntegerToString(f.last_estimate.samples)+" samples":"--");
    rows[12]="Forecast expires in | "+(active?IntegerToString(f.remaining)+" bars":"--");
    rows[13]=(string)"No-signal reason | "+(!g_crfForecastCurrent?"M15 history unavailable":(pending?"Candidate awaiting confirmation":(active?"--":"Waiting for new confirmed reversal")));
