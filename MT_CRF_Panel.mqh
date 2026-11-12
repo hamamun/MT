@@ -557,10 +557,15 @@ void DetailsRemove()
    g_uiDetailsShown=false; g_uiDetailsW=0; g_uiDetailsPage=0; g_uiDetailsPages=1; g_uiDetailsLines=0;
 }
 
-// Chart buttons only change the diary viewport; they do not affect trading.
+// Details switches control the shared viewport independently; MT-only mode
+// never shows CRF rows. Neither switch affects execution or diary recording.
+bool UICrfDetailsEnabled() { return InpCrfDetails && InpMode!=MT_CRF_MODE_MT; }
+bool UIDetailsEnabled() { return InpShowDetails || UICrfDetailsEnabled(); }
+
+// Chart buttons only change the details viewport; they do not affect trading.
 bool UIHandleDetailsClick(const string name)
 {
-   if(!g_uiDetailsShown || !(InpShowDetails || InpMode==MT_CRF_MODE_CRF)) return(false);
+   if(!g_uiDetailsShown || !UIDetailsEnabled()) return(false);
    if(name==(string)UI_DETAILS_PREFIX+"prev") g_uiDetailsPage=(int)MathMax(0,g_uiDetailsPage-1);
    else if(name==(string)UI_DETAILS_PREFIX+"next") g_uiDetailsPage=(int)MathMin(g_uiDetailsPages-1,g_uiDetailsPage+1);
    else return(false);
@@ -572,15 +577,13 @@ bool UIHandleDetailsClick(const string name)
 int UIDetailsNaturalWidth()
 {
    int natural=DETAILS_MIN_W;
-   // CRF-only can open the forecast dashboard independently of the diary.
-   // Do not size that window from hidden or stale diary details.
-   if(!InpShowDetails)
+   if(UICrfDetailsEnabled())
    {
       string crf[]; CRFDashboardRows(crf);
       for(int i=0;i<ArraySize(crf);i++)
          natural=(int)MathMax(natural,2*DETAILS_PAD+UIWidth(crf[i])+2);
-      return(natural);
    }
+   if(!InpShowDetails) return(natural);
    for(int i=0;i<3;i++)
    {
       UIDetail d;
@@ -613,8 +616,7 @@ int UIDetailCompose(UIDetail &d[], int inner, int rowH, int x, int y, int first,
 {
    int row=0; visible=0;
    string tip="Broker diary: only fully reconciled trades are results. Win rate includes break-even in the denominator; costs are linked deal commission, swap and fee. Final exits use the last deal reason.";
-   // The automatically opened CRF-only dashboard must not override the
-   // user's Show diary details input. The broker diary keeps recording.
+   // The broker diary keeps recording even when its display is hidden.
    if(InpShowDetails) for(int i=0;i<3;i++)
    {
       string title=d[i].tf;
@@ -627,7 +629,7 @@ int UIDetailCompose(UIDetail &d[], int inner, int rowH, int x, int y, int first,
          if(g_uiDetailExtra[i][j]!="") UIDetailEmit(d[i].tf+"  "+g_uiDetailExtra[i][j],j==0 && !g_uiDetailOK[i]?clrOrange:clrSilver,
                                                        tip,inner,rowH,x,y,first,capacity,draw,row,visible);
    }
-   if(InpMode!=MT_CRF_MODE_MT)
+   if(UICrfDetailsEnabled())
    {
       string crf[]; CRFDashboardRows(crf);
       for(int i=0;i<ArraySize(crf);i++)
@@ -649,7 +651,7 @@ void UIDetailsButton(const string name, int x, int y, int w, int h, const string
 }
 void UpdateDetailsWindow(int panelX, int panelW, int gap, int step, int top)
 {
-   if(!(InpShowDetails || InpMode==MT_CRF_MODE_CRF) || !g_uiSupported)
+   if(!UIDetailsEnabled() || !g_uiSupported)
    {
       if(g_uiDetailsShown) DetailsRemove();
       return;
@@ -688,7 +690,7 @@ void UpdateDetailsWindow(int panelX, int panelW, int gap, int step, int top)
    UIBox("bg",x,top,width,height,UI_BG,UI_BORDER,UI_DETAILS_PREFIX);
    UIBox("title",x+1,top+1,width-2,rowH+4,UI_SURFACE,UI_BORDER,UI_DETAILS_PREFIX);
    UIText("titleText",x+DETAILS_PAD,top+4,InpShowDetails?DETAILS_TITLE:"CRF DETAILS",UI_TITLE,UI_SIZE,
-          InpShowDetails?(InpMode==MT_CRF_MODE_MT?"Broker diary details.":"Broker diary and forecast details."):"Confirmed reversal forecast details.",UI_DETAILS_PREFIX);
+          InpShowDetails?(UICrfDetailsEnabled()?"Broker diary and forecast details.":"Broker diary details."):"Confirmed reversal forecast details.",UI_DETAILS_PREFIX);
    UIText("symbol",x+width-DETAILS_PAD-UIWidth(g_symbol),top+4,g_symbol,clrSilver,UI_SIZE,"",UI_DETAILS_PREFIX);
    int contentY=top+headerH+DETAILS_PAD;
    if(paged)
@@ -806,7 +808,7 @@ void UpdatePanel()
       // content while the main panel is collapsed. The collapsed header keeps
       // its full-width notice, so the window moves under it instead of
       // overlapping it - and returns to the panel's right side on reopening.
-      if((InpShowDetails || InpMode==MT_CRF_MODE_CRF))
+      if(UIDetailsEnabled())
       {
          if(InpShowDetails) UIRefreshDetails(now);
          int requested=g_uiDetailsShown?g_uiDetailsW:UIDetailsNaturalWidth();
@@ -836,7 +838,7 @@ void UpdatePanel()
    // The window's own width is known before the panel is sized, so the panel
    // yields only the room the window actually needs.
    int detailsW=0;
-   if((InpShowDetails || InpMode==MT_CRF_MODE_CRF))
+   if(UIDetailsEnabled())
    {
       if(InpShowDetails) UIRefreshDetails(now);
       detailsW=UIDetailsNaturalWidth();
@@ -893,7 +895,7 @@ void UpdatePanel()
    // With the diary window open it gets its own column on the right, so the
    // panel packs its own content into the rest of the chart instead of over it.
    int panelMax=chartW;
-   if((InpShowDetails || InpMode==MT_CRF_MODE_CRF) && chartW>0)
+   if(UIDetailsEnabled() && chartW>0)
       panelMax=(int)MathMax(DETAILS_PANEL_FLOOR+2*pad,chartW-gap-detailsW-UI_X);
    int settingSize=11,groupW[8],badgeW[14],settingsRow[8],rowOf[8],rowGroups[8],settingRows=2;
    int settingGap=18,settingLabelPad=8,settingBadgePad=12,settingChipGap=4;
@@ -999,7 +1001,7 @@ void UpdatePanel()
    // With the diary window open the two must fit side by side: the panel gives
    // up width for it rather than growing, down to a readable floor. Its height
    // and its trade-statistics footprint are unaffected either way.
-   if((InpShowDetails || InpMode==MT_CRF_MODE_CRF) && chartW>0 && panelMax<chartW)
+   if(UIDetailsEnabled() && chartW>0 && panelMax<chartW)
    {
       int budget=(int)MathMax(DETAILS_PANEL_FLOOR,panelMax-2*pad);
       if(inner>budget)

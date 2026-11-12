@@ -8,6 +8,7 @@ stubs=base['stubs'].replace('string P5Detail(int i){return details[i];}', 'int d
 #include <vector>
 enum CRFMode {MT_CRF_MODE_BOTH,MT_CRF_MODE_MT,MT_CRF_MODE_CRF};
 CRFMode InpMode=MT_CRF_MODE_BOTH;
+bool InpCrfDetails=false;
 string g_crfStatus="Waiting for M15 slot";
 bool displayCRF=true;
 string CRFHeaderStatus(){return g_crfStatus;}
@@ -26,40 +27,46 @@ s=s.replace('UIDetail &d[]','UIDetail *d').replace('string crf[];','vector<strin
 main=r'''
 int main(){int fails=0;auto check=[&](bool v,const char*m){if(!v){cerr<<"FAIL "<<m<<"\n";fails++;}};
  auto allDetails=[&](){string result;int pages=g_uiDetailsPages;for(int i=0;i<pages;i++){g_uiDetailsPage=i;UpdatePanel();result+=DetailText();}return result;};
- InpMode=MT_CRF_MODE_BOTH;InpShowDetails=false;BuildPanel();
- check(!objects.count("MTD_bg"),"combined mode hides details when diary is off");
+ auto hasForecast=[](const string &s){return s.find("CONFIRMED REVERSAL FORECAST")!=string::npos;};
+ InpMode=MT_CRF_MODE_BOTH;InpShowDetails=false;InpCrfDetails=false;BuildPanel();
+ check(!objects.count("MTD_bg"),"combined mode defaults to no details");
  check(Label("settingKey4")=="Input mode" && Label("settingValue13")=="MT + CRF","mode input shown");
- check(Label("reading1_1")=="--" && Label("reading1_7")=="BUY (CRF)" && Label("planSignalText1")=="BUY (CRF)","CRF readings and plan agree");
- check(Wrapped("crfStatus").find("Waiting for M15 slot")!=string::npos && AutoText(1).find("30007")!=string::npos,"status and CRF broker row visible");
- InpShowDetails=true;UpdatePanel();check(objects.count("MTD_bg") && g_uiDetailsPages>=1,"details viewport available");
- string combined=allDetails();check(combined.find("CONFIRMED REVERSAL FORECAST")!=string::npos && combined.find("Pending 1")!=string::npos,"combined mode shows diary and forecast when enabled");
- PanelRemove();chartHeight=240;InpMode=MT_CRF_MODE_CRF;InpShowDetails=false;diaryDetailCalls=0;diaryInsightCalls=0;BuildPanel();
+ check(Label("reading1_1")=="--" && Label("reading1_7")=="BUY (CRF)" && Label("planSignalText1")=="BUY (CRF)","CRF main readings and plan remain visible");
+ check(Wrapped("crfStatus").find("Waiting for M15 slot")!=string::npos && AutoText(1).find("30007")!=string::npos,"status and CRF broker row remain visible");
+ InpShowDetails=true;UpdatePanel();string text=allDetails();
+ check(objects.count("MTD_bg") && text.find("Pending 1")!=string::npos && !hasForecast(text),"diary alone displays without CRF details");
+ InpCrfDetails=true;UpdatePanel();text=allDetails();
+ check(hasForecast(text) && text.find("Pending 1")!=string::npos,"both details enabled show both in combined mode");
+ InpShowDetails=false;UpdatePanel();text=allDetails();
+ check(hasForecast(text) && text.find("Pending 1")==string::npos && objects["MTD_titleText_0"].text=="CRF DETAILS","CRF details work independently in combined mode");
+ InpCrfDetails=false;UpdatePanel();check(!objects.count("MTD_bg") && !g_uiDetailsShown && !UIHandleDetailsClick("MTD_next"),"turning both off removes viewport and disables buttons");
+ PanelRemove();chartHeight=240;InpMode=MT_CRF_MODE_CRF;InpShowDetails=false;InpCrfDetails=false;diaryDetailCalls=0;diaryInsightCalls=0;BuildPanel();
  check(!objects.count("MT_plan0") && !objects.count("MT_plan2") && objects.count("MT_plan1"),"CRF-only hides other plan lanes");
  check(!objects.count("MT_autoRow0") && !objects.count("MT_autoRow2") && objects.count("MT_autoRow1"),"CRF-only hides other execution lanes");
- check(objects.count("MTD_bg") && objects["MTD_titleText_0"].text=="CRF DETAILS","CRF-only opens forecast details");
+ check(!objects.count("MTD_bg") && diaryDetailCalls==0 && diaryInsightCalls==0,"CRF-only defaults to no separate details");
+ InpCrfDetails=true;UpdatePanel();check(objects.count("MTD_bg") && objects["MTD_titleText_0"].text=="CRF DETAILS","CRF-only forecast details can be enabled");
  check(g_uiDetailsPages>1,"forecast-only pagination is exercised");
  string crfOnly=allDetails();
- check(crfOnly.find("CONFIRMED REVERSAL FORECAST")!=string::npos && crfOnly.find("CRF dashboard row 14")!=string::npos,"all forecast details reachable with diary off");
- check(crfOnly.find("Pending 1")==string::npos && crfOnly.find("All closed")==string::npos && crfOnly.find("CSV unavailable")==string::npos,"no diary rows or warnings on any CRF-only page when off");
+ check(hasForecast(crfOnly) && crfOnly.find("CRF dashboard row 14")!=string::npos,"all forecast details reachable with diary off");
+ check(crfOnly.find("Pending 1")==string::npos && crfOnly.find("All closed")==string::npos && crfOnly.find("CSV unavailable")==string::npos,"no diary rows or warnings with diary off");
  check(diaryDetailCalls==0 && diaryInsightCalls==0,"hidden diary details not refreshed");
  g_uiDetailExtra[0][0]=string(1000,'x');check(UIDetailsNaturalWidth()<1000,"hidden diary cannot expand forecast-only window");
  InpShowDetails=true;UpdatePanel();string both=allDetails();
- check(objects["MTD_titleText_0"].text=="DIARY DETAILS" && both.find("Pending 1")!=string::npos && both.find("All closed")!=string::npos && both.find("CONFIRMED REVERSAL FORECAST")!=string::npos,"enabling diary restores diary and forecast");
+ check(objects["MTD_titleText_0"].text=="DIARY DETAILS" && both.find("Pending 1")!=string::npos && hasForecast(both),"enabling both restores diary and forecast");
  check(diaryDetailCalls>0 && diaryInsightCalls>0,"enabled diary details refreshed");
- g_uiDetailsPage=0;UpdatePanel();check(DetailText().find("Pending 1")!=string::npos,"diary is visible before switching off");
- InpShowDetails=false;diaryDetailCalls=0;diaryInsightCalls=0;UpdatePanel();crfOnly=allDetails();
- bool stale=false;for(const auto &entry:objects)if(entry.first.find("MTD_line")==0 && (entry.second.text.find("Pending 1")!=string::npos || entry.second.text.find("All closed")!=string::npos))stale=true;
- check(!stale,"switching off removes stale chart text objects");
- check(objects["MTD_titleText_0"].text=="CRF DETAILS" && crfOnly.find("Pending 1")==string::npos && crfOnly.find("All closed")==string::npos && crfOnly.find("CONFIRMED REVERSAL FORECAST")!=string::npos,"disabling diary clears old visible rows");
- check(diaryDetailCalls==0 && diaryInsightCalls==0,"off input stops detail refresh");
- g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED";UpdatePanel();crfOnly=allDetails();
- check(objects.count("MTD_bg") && crfOnly.find("CONFIRMED REVERSAL FORECAST")!=string::npos && crfOnly.find("Pending 1")==string::npos && diaryDetailCalls==0 && diaryInsightCalls==0,"closed market keeps forecast only when diary off");
- InpShowDetails=true;UpdatePanel();both=allDetails();check(both.find("Pending 1")!=string::npos && both.find("CONFIRMED REVERSAL FORECAST")!=string::npos,"closed market shows diary when enabled");
- g_marketState=MARKET_OPEN;g_marketDetail="";InpShowDetails=false;chartHeight=200;UpdatePanel();
+ InpCrfDetails=false;UpdatePanel();text=allDetails();
+ bool stale=false;for(const auto &entry:objects)if(entry.first.find("MTD_line")==0 && entry.second.text.find("CONFIRMED REVERSAL FORECAST")!=string::npos)stale=true;
+ check(!stale && text.find("Pending 1")!=string::npos && !hasForecast(text),"turning CRF off removes stale CRF rows while retaining diary");
+ InpShowDetails=false;UpdatePanel();check(!objects.count("MTD_bg"),"turning diary off removes remaining viewport");
+ InpCrfDetails=true;g_marketState=MARKET_CLOSED;g_marketDetail="MARKET CLOSED";UpdatePanel();crfOnly=allDetails();
+ check(objects.count("MTD_bg") && hasForecast(crfOnly) && crfOnly.find("Pending 1")==string::npos,"closed market respects CRF details setting");
+ InpCrfDetails=false;UpdatePanel();check(!objects.count("MTD_bg"),"closed market removes disabled forecast details");
+ InpShowDetails=true;UpdatePanel();text=allDetails();check(text.find("Pending 1")!=string::npos && !hasForecast(text),"closed market retains independent diary");
+ g_marketState=MARKET_OPEN;g_marketDetail="";InpShowDetails=false;InpCrfDetails=true;chartHeight=200;UpdatePanel();
  if(g_uiDetailsPages>1){g_uiDetailsPage=0;check(UIHandleDetailsClick("MTD_next") && g_uiDetailsPage==1,"forecast-only details can still be paged");}
- chartHeight=725;PanelRemove();InpMode=MT_CRF_MODE_MT;InpShowDetails=false;BuildPanel();
- check(Label("settingValue13")=="MT only" && Wrapped("crfStatus").empty() && Label("reading1_1")=="DOWN" && !objects.count("MTD_bg"),"MT-only native readings and no details when off");
- InpShowDetails=true;UpdatePanel();string mtOnly=allDetails();check(mtOnly.find("Pending 1")!=string::npos && mtOnly.find("CONFIRMED REVERSAL FORECAST")==string::npos,"MT-only enabled details contain diary but no CRF");
+ chartHeight=725;PanelRemove();InpMode=MT_CRF_MODE_MT;InpShowDetails=false;InpCrfDetails=true;BuildPanel();
+ check(Label("settingValue13")=="MT only" && Wrapped("crfStatus").empty() && Label("reading1_1")=="DOWN" && !objects.count("MTD_bg"),"MT-only ignores CRF details switch");
+ InpShowDetails=true;UpdatePanel();string mtOnly=allDetails();check(mtOnly.find("Pending 1")!=string::npos && !hasForecast(mtOnly),"MT-only details contain diary but no CRF");
  if(fails)return 1;cout<<"CRF panel layout stub checks passed\n";
 }
 

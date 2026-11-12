@@ -26,12 +26,12 @@ bool P5Export()
    int h=FileOpen(tmp,FILE_WRITE|FILE_CSV|FILE_ANSI|g_p5Flags,',');
    if(h==INVALID_HANDLE) return(false);
    ResetLastError();
-   FileWrite(h,"server","account","symbol","currency","lane","direction","score","gt","ct","st","regime","volume","market","trend_choice","allow_against","bypass","minimum","strategy","bar_proxy","state","accepted","retcode","exit_reason","order","position","plan_bar","request_ms","entry_ms","exit_ms","plan_entry","plan_sl","plan_tp","lot","bid","ask","equity","balance","entry_volume","exit_volume","entry_price","exit_price","profit","commission","swap","fee","net","broker_entry","broker_sl","broker_tp","stop_placement_input","tp_percent_input","request_spread_price","plan_risk_price","plan_reward_price","plan_reward_risk","entry_slippage_vs_original_plan_price","holding_seconds","review_reason");
+   FileWrite(h,"server","account","symbol","currency","lane","direction","score","gt","ct","st","regime","volume","market","trend_choice","allow_against","bypass","minimum","strategy","bar_proxy","state","accepted","retcode","exit_reason","order","position","plan_bar","request_ms","entry_ms","exit_ms","plan_entry","plan_sl","plan_tp","lot","bid","ask","equity","balance","entry_volume","exit_volume","entry_price","exit_price","profit","commission","swap","fee","net","broker_entry","broker_sl","broker_tp","stop_placement_input","tp_percent_input","request_spread_price","plan_risk_price","plan_reward_price","plan_reward_risk","entry_slippage_vs_original_plan_price","holding_seconds","crf_risk_bypass","review_reason");
    for(int i=0;i<ArraySize(g_p5);i++)
    {
       P5Row r=g_p5[i];
       FileWrite(h,AccountInfoString(ACCOUNT_SERVER),AccountInfoInteger(ACCOUNT_LOGIN),_Symbol,AccountInfoString(ACCOUNT_CURRENCY),
-         r.lane,r.direction,r.strategy==30007?"":IntegerToString(r.score),r.strategy==30007?"":IntegerToString(r.gt),r.strategy==30007?"":IntegerToString(r.ct),r.strategy==30007?"":IntegerToString(r.st),r.strategy==30007?"":IntegerToString(r.regime),r.strategy==30007?"":IntegerToString(r.volumeState),r.market,r.strategy==30007?"":IntegerToString(r.choice),r.against,r.bypass,r.minimum,r.strategy,r.barProxy,
+         r.lane,r.direction,r.strategy==30007?"":IntegerToString(r.score),r.strategy==30007?"":IntegerToString(r.gt),r.strategy==30007?"":IntegerToString(r.ct),r.strategy==30007?"":IntegerToString(r.st),r.strategy==30007?"":IntegerToString(r.regime),r.strategy==30007?"":IntegerToString(r.volumeState),r.market,r.strategy==30007?"":IntegerToString(r.choice),r.against,(r.bypass&1),r.minimum,r.strategy,r.barProxy,
          r.state,r.accepted,r.retcode,r.exitReason,r.order,r.position,r.bar,r.requestMs,r.entryMs,r.exitMs,
          r.planEntry,r.planStop,r.planTarget,r.lot,r.bid,r.ask,r.equity,r.balance,r.entryVolume,r.exitVolume,
          r.entryPrice,r.exitPrice,r.profit,r.commission,r.swap,r.fee,r.net,r.brokerEntry,r.brokerStop,r.brokerTarget,
@@ -42,6 +42,7 @@ bool P5Export()
          MathAbs(r.planEntry-r.planStop)>0?DoubleToString(MathAbs(r.planTarget-r.planEntry)/MathAbs(r.planEntry-r.planStop),4):"",
          r.state==3?DoubleToString(r.direction*(r.entryPrice-r.planEntry),(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS)):"",
          r.state==3 && r.exitMs>=r.entryMs?DoubleToString((double)(r.exitMs-r.entryMs)/1000.0,3):"",
+         r.strategy==30007?IntegerToString((r.bypass&2)!=0?1:0):"",
          (r.state==0 || r.state==6)?(i<ArraySize(g_p5Reason) && g_p5Reason[i]!=""?g_p5Reason[i]:"Awaiting broker reconciliation"):"");
    }
    FileFlush(h); bool ok=(GetLastError()==0); FileClose(h);
@@ -265,7 +266,9 @@ int P5BeginCrf(const P3Plan &plan, const MqlTick &quote)
    P5Row r={};
    r.lane=1; r.direction=plan.signal; r.score=0; r.gt=99; r.ct=99; r.st=99;
    r.regime=99; r.volumeState=-1; r.market=1; r.choice=-1; r.against=0;
-   r.bypass=InpBypassRisk?1:0; r.minimum=InpMinimumLot?1:0;
+   // Bit 0 retains the shared bypass input; bit 1 records the CRF-only
+   // bypass. Existing v1/v2 rows used only bit 0, so no migration is needed.
+   r.bypass=(InpBypassRisk?1:0)+(InpCrfRiskBypass?2:0); r.minimum=InpMinimumLot?1:0;
    r.strategy=30007; r.barProxy=plan.barProxy?1:0; r.stopInput=1; r.tpPercentInput=0;
    r.state=0; r.accepted=0; r.exitReason=-1; r.bar=(long)plan.bar; r.requestMs=quote.time_msc;
    r.planEntry=plan.entry; r.planStop=plan.stop; r.planTarget=plan.target; r.lot=plan.lot;

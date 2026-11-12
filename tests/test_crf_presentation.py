@@ -4,7 +4,7 @@ from pathlib import Path
 import os, runpy, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
 b=runpy.run_path(str(root/'tests/test_crf_execution.py'))
-extra=b['extra'].replace('struct CRFCandidate{int direction=0;};','struct CRFCandidate{int direction=0,variant=0;double marker=0,stop=0;};').replace('struct CRFEstimate{bool ready=false;int duration_high=0;};','struct CRFEstimate{bool ready=false,available=false;int duration_high=0,duration_low=0,reason=1,samples=0;double target=0,confidence=0,move_atr=0,duration=0;};').replace('int active_direction=0;long signal_bar=0,last_bar=0;','int active_direction=0,remaining=0,pending_elapsed=0,last_result=0,last_event=0;long signal_bar=0,last_bar=0,last_event_bar=0;').replace('CRFEstimate last_estimate;CRFCandidate pending;','CRFEstimate last_estimate;CRFCandidate pending,last_signal;')
+extra=b['extra'].replace('struct CRFCandidate{int direction=0;double stop=99,atr=1;};','struct CRFCandidate{int direction=0,variant=0;double marker=0,stop=99,atr=1;};').replace('struct CRFEstimate{bool ready=false,available=true;int duration_high=0,reason=1,samples=6;double confidence=60,move_atr=2;};','struct CRFEstimate{bool ready=false,available=true;int duration_high=0,duration_low=0,reason=1,samples=6;double target=0,confidence=60,move_atr=2,duration=0;};').replace('int active_direction=0;long signal_bar=0,last_bar=0;','int active_direction=0,remaining=0,pending_elapsed=0,last_result=0,last_event=0;long signal_bar=0,last_bar=0,last_event_bar=0;')
 chart=r'''
 using color=int;
 bool CRFValidPrice(double x){return isfinite(x) && x!=EMPTY_VALUE;}
@@ -51,6 +51,19 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  InpAllowAutoM15=true;check(CRFAutoLine().find("Auto: ON")!=string::npos,"CRF auto reports enabled");
  check(CRFPlanLine().find("BUY (CRF)")!=string::npos && CRFPlanLine().find("Hammer")!=string::npos && CRFPlanLine().find("Meets selected filters")!=string::npos,"CRF plan details");
  vector<string> rows;CRFDashboardRows(rows);check(rows.size()==15 && rows[0].find("BUY")!=string::npos && rows[12].find("4 bars")!=string::npos,"active dashboard 15 rows");
+ InpMode=MT_CRF_MODE_CRF;InpCrfAutoFollowthroughPct=55;f.last_estimate.ready=false;f.last_estimate.reason=3;f.last_estimate.confidence=19;
+ CRFProcessExecution(true);
+ check(CRFAutoLine().find("Blocked: below follow-through filter (min 55%)")!=string::npos && CRFHeaderStatus().find("Blocked: below follow-through filter")!=string::npos,"weak forecast reason displayed in auto and header");
+ check(CRFPlanLine().find("Lot: --")!=string::npos && CRFPlanLine().find("Lot unavailable: auto filters not met")!=string::npos,"blocked lot is explained, not presented as an executable lot");
+ check(sends==0,"weak forecast does not send an order");
+ InpCrfAutoFollowthroughPct=15;check(CRFAutoFilterReady(f) && CRFPlanLine().find("Auto filter 15%: PASS")!=string::npos,"reference 55 percent status does not block 15 percent auto filter");
+ check(CRFHeaderStatus().find("CRF auto filter 15%")!=string::npos,"selected auto filter is visible in header");
+ check(CRFHeaderStatus().find("CRF risk bypass OFF")!=string::npos && CRFPlanLine().find("CRF risk bypass OFF")!=string::npos,"CRF bypass default OFF visible");
+ f.last_estimate.move_atr=1;check(!CRFAutoFilterReady(f),"reference forecast R/R blocked when bypass off");
+ InpCrfRiskBypass=true;check(CRFAutoFilterReady(f) && CRFHeaderStatus().find("CRF risk bypass ON")!=string::npos && CRFPlanLine().find("CRF risk bypass ON")!=string::npos,"CRF bypass ON and auto status visible");
+ InpCrfRiskBypass=false;f.last_estimate.move_atr=1.5;
+ CRFDashboardRows(rows);check(rows[10].find("reference 55%")!=string::npos && rows[10].find("Auto filter 15%: PASS")!=string::npos,"dashboard distinguishes reference and auto filters");
+ f.last_estimate.ready=true;f.last_estimate.reason=5;InpMode=MT_CRF_MODE_BOTH;
  check(CRFSetLevel("entry",1000,1001,100,clrAqua) && CRFSetMarker(1000,false,1,98),"finite line and marker objects created");
  check(CRFSetLevel("negative",1000,1001,-1,clrRed) && CRFSetMarker(1001,true,-1,0),"finite zero or negative historical prices are not discarded");
  f.active_direction=0;f.remaining=0;
