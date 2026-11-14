@@ -27,11 +27,12 @@ int InpCrfHistoryBars=600,InpCrfMaxHorizon=24,InpCrfAtrLength=14,InpCrfTrendLeng
 struct CRFParameters{int history,horizon,atr,trend,volume,swing,minimum_analogs,followthrough;double reward_risk;};
 struct CRFCandidate{int direction=0;double stop=99,atr=1;};struct CRFEstimate{bool ready=false,available=true;int duration_high=0,reason=1,samples=6;double confidence=60,move_atr=2;};
 struct CRFForecastState{int active_direction=0;long signal_bar=0,last_bar=0;double last_entry=0,active_stop=0,active_target=0;CRFEstimate last_estimate;CRFCandidate pending,last_signal;};
-struct CRFObserver{bool ready=false;CRFForecastState forecast;};
+struct CRFObserver{bool ready=false;string history_detail;CRFForecastState forecast;};
 struct CRFFeedUpdate{bool bootstrap=false;};
-enum CRF_OBSERVER_RESULT{CRF_OBSERVER_OK,CRF_OBSERVER_INVALID,CRF_OBSERVER_JOURNAL_ERROR,CRF_OBSERVER_HISTORY_UNAVAILABLE};
+enum CRF_OBSERVER_RESULT{CRF_OBSERVER_OK,CRF_OBSERVER_INVALID,CRF_OBSERVER_JOURNAL_ERROR,CRF_OBSERVER_HISTORY_UNAVAILABLE,CRF_OBSERVER_CALCULATION_ERROR,CRF_OBSERVER_BOOTSTRAPPING};
 CRF_OBSERVER_RESULT CRFObserverInit(CRFObserver &o,string,string,int,const CRFParameters&,bool locked){o.ready=locked;return locked?CRF_OBSERVER_OK:CRF_OBSERVER_INVALID;}
-CRF_OBSERVER_RESULT CRFObserverPoll(CRFObserver&,vector<CRFFeedUpdate>&){return CRF_OBSERVER_OK;}
+CRF_OBSERVER_RESULT pollResult=CRF_OBSERVER_OK;
+CRF_OBSERVER_RESULT CRFObserverPoll(CRFObserver &o,vector<CRFFeedUpdate>&){if(pollResult==CRF_OBSERVER_HISTORY_UNAVAILABLE)o.history_detail="M15 copy requires 100001 closed bars; limit is 100000";return pollResult;}
 '''
 kernel=base['kernel']
 runtime=(root/'MT_CRF_TradeDiaryRuntime.mqh').read_text().replace('#include "MT_TradeDiary.mqh"','')
@@ -47,6 +48,9 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  InpUseAutoSchedule=false;InpPlaceStopLoss=false;P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);
  g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;g_crfTakeover=1;
  auto &forecast=g_crfObserver.forecast;forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_entry=100;
+ pollResult=CRF_OBSERVER_HISTORY_UNAVAILABLE;g_crfForecastCurrent=false;CRFUpdateForecast();
+ check(!g_crfForecastCurrent && g_crfStatus.find("100001 closed bars; limit is 100000")!=string::npos,"live forecast reports exact history failure and stays unavailable");
+ pollResult=CRF_OBSERVER_OK;g_crfForecastCurrent=true;
  forecast.active_stop=99;forecast.active_target=102;forecast.last_estimate.ready=true;forecast.last_estimate.duration_high=4;
  MqlTick q=current;
  // A confirmed but low-quality forecast is visible, never tradeable, and

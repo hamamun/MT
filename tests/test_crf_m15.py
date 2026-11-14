@@ -12,11 +12,17 @@ program=r'''
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <cstdarg>
+#include <cstdio>
 #define EMPTY_VALUE std::numeric_limits<double>::max()
 #define PERIOD_M15 15
+#define TERMINAL_MAXBARS 3
+long terminalMaxBars=200000; long TerminalInfoInteger(int){return terminalMaxBars;}
 #define SERIES_SYNCHRONIZED 1
 #define SERIES_FIRSTDATE 2
 using string=std::string;using datetime=long;
+void ResetLastError(){} int GetLastError(){return 0;}
+string StringFormat(const char *fmt,...){char b[512];va_list a;va_start(a,fmt);vsnprintf(b,sizeof(b),fmt,a);va_end(a);return b;}
 bool MathIsValidNumber(double x){return std::isfinite(x);}
 double MathAbs(double x){return std::abs(x);}
 double MathSqrt(double x){return std::sqrt(x);}
@@ -54,9 +60,14 @@ int main(){
  check(CRFReadClosedM15("EURUSD",p,anchor,out,first,latest)==CRF_M15_HISTORY_CHANGED && out.empty(),"history change rejected");changed=false;
  bars_calls=0;check(CRFReadClosedM15("EURUSD",p,123,out,first,latest)==CRF_M15_ANCHOR_MISSING,"missing anchor rejected");
  bars_calls=0;check(CRFReadClosedM15("EURUSD",p,source.back().time,out,first,latest)==CRF_M15_ANCHOR_MISSING,"forming bar cannot be anchor");
+ string why;partial=true;bars_calls=0;
+ check(CRFReadClosedM15Detailed("EURUSD",p,anchor,out,first,latest,why)==CRF_M15_WAIT_HISTORY && why.find("CopyRates returned")!=string::npos && why.find("error 0")!=string::npos,"partial history reports actual copied/requested counts");partial=false;
+ terminalMaxBars=200;bars_calls=0;
+ check(CRFReadClosedM15Detailed("EURUSD",p,0,out,first,latest,why)==CRF_M15_OK && first && out.size()==199 && out.front().time==source[source.size()-200].time,"terminal max bars bounds a full usable history request");
+ terminalMaxBars=200000;
  source.resize(100002);bars_calls=0;
  for(size_t i=0;i<source.size();i++)source[i].time=long(1000+i*900);
- check(CRFReadClosedM15("EURUSD",p,0,out,first,latest)==CRF_M15_TOO_MUCH_HISTORY && out.empty(),"bootstrap cap never truncates silently");
+ check(CRFReadClosedM15Detailed("EURUSD",p,0,out,first,latest,why)==CRF_M15_TOO_MUCH_HISTORY && out.empty() && why.find("100001 closed bars; limit is 100000")!=string::npos,"bootstrap cap reports exact count and never truncates silently");
  if(!fails)std::cout<<"CRF M15 loader checks passed\n";
  return fails?1:0;
 }
@@ -64,7 +75,7 @@ int main(){
 with tempfile.TemporaryDirectory() as tmp:
  p=Path(tmp)
  for name in ('MT_CRF_Kernels.mqh','MT_CRF_Analogs.mqh','MT_CRF_Forecast.mqh','MT_CRF_Feed.mqh','MT_CRF_M15.mqh'):
-  text=(root/name).read_text().replace('const MqlRates &bars[]','const std::vector<MqlRates> &bars').replace('const MqlRates &rates[]','const std::vector<MqlRates> &rates').replace('MqlRates &out[]','std::vector<MqlRates> &out').replace('CRFFeedUpdate &updates[]','std::vector<CRFFeedUpdate> &updates').replace('MqlRates prefix[];','std::vector<MqlRates> prefix;').replace('CRFFeedUpdate staged[];','std::vector<CRFFeedUpdate> staged;')
+  text=(root/name).read_text().replace('const MqlRates &previous[]','const std::vector<MqlRates> &previous').replace('const MqlRates &current[]','const std::vector<MqlRates> &current').replace('const MqlRates &bars[]','const std::vector<MqlRates> &bars').replace('const MqlRates &rates[]','const std::vector<MqlRates> &rates').replace('MqlRates &out[]','std::vector<MqlRates> &out').replace('CRFFeedUpdate &updates[]','std::vector<CRFFeedUpdate> &updates').replace('MqlRates prefix[];','std::vector<MqlRates> prefix;').replace('MqlRates probe[];','std::vector<MqlRates> probe;').replace('CRFFeedUpdate staged[];','std::vector<CRFFeedUpdate> staged;')
   (p/name).write_text(text)
  (p/'test.cpp').write_text(program)
  subprocess.run(['g++','-std=c++17','-O2','-Wall','-Wextra','-Werror','-I',tmp,str(p/'test.cpp'),'-o',str(p/'test')],check=True)

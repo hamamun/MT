@@ -92,9 +92,13 @@ void CRFUpdateForecast()
    if(g_crfForecastCurrent && closed>0 && (long)closed==g_crfObserver.forecast.last_bar) return;
    CRFFeedUpdate updates[];
    CRF_OBSERVER_RESULT r=CRFObserverPoll(g_crfObserver,updates);
+   if(r==CRF_OBSERVER_BOOTSTRAPPING)
+   { g_crfForecastCurrent=false; g_crfStatus="Preparing M15 forecast history"; return; }
    if(r!=CRF_OBSERVER_OK)
    {
-      g_crfStatus=r==CRF_OBSERVER_HISTORY_UNAVAILABLE?"M15 history unavailable: REVIEW":"Forecast state unavailable: REVIEW";
+      g_crfStatus=r==CRF_OBSERVER_HISTORY_UNAVAILABLE?
+                  (g_crfObserver.history_detail!=""?"M15 history: "+g_crfObserver.history_detail+" : REVIEW":"M15 history unavailable: REVIEW"):
+                  "Forecast state unavailable: REVIEW";
       g_crfForecastCurrent=false;
       if(r==CRF_OBSERVER_JOURNAL_ERROR || r==CRF_OBSERVER_INVALID) g_crfObserverAvailable=false;
       return;
