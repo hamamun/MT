@@ -104,7 +104,7 @@ int OnInit()
    // An unrecognized mode must never fall through to the trading engine.
    if(!CRFBuildReady())
    {
-      Print("MT_CRF: invalid mode or CRF auto follow-through threshold (must be 1-100%).");
+      Print("MT_CRF: invalid mode or CRF auto inputs (samples 2-50, follow-through 1-100%).");
       return(INIT_FAILED);
    }
    Rebuild();
