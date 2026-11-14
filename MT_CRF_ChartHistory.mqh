@@ -11,16 +11,17 @@
 MqlRates g_crfChartRates[], g_crfChartPrefix[];
 CRFForecastState g_crfChartState;
 int g_crfChartIndex=0;
-long g_crfChartFirstBar=0;
+long g_crfChartFirstBar=0, g_crfChartUsableFirst=0;
 bool g_crfChartStarted=false, g_crfChartReady=false, g_crfChartError=false;
 ulong g_crfChartRetry=0;
+string g_crfChartLoadDetail="", g_crfChartReportedReason="";
 
 void CRFChartHistoryReset()
 {
    ArrayFree(g_crfChartRates); ArrayFree(g_crfChartPrefix);
    CRFResetForecast(g_crfChartState);
-   g_crfChartIndex=0; g_crfChartFirstBar=0; g_crfChartStarted=false; g_crfChartReady=false;
-   g_crfChartError=false; g_crfChartRetry=0;
+   g_crfChartIndex=0; g_crfChartFirstBar=0; g_crfChartUsableFirst=0; g_crfChartStarted=false; g_crfChartReady=false;
+   g_crfChartError=false; g_crfChartRetry=0; g_crfChartLoadDetail=""; g_crfChartReportedReason="";
 }
 string CRFChartHistoryStatus()
 {
@@ -30,12 +31,14 @@ string CRFChartHistoryStatus()
 }
 void CRFChartHistoryFail(const string reason)
 {
-   Print("MT CRF chart history: ",reason);
+   // Retry normally but do not flood Experts with the same error every 5s.
+   if(reason!=g_crfChartReportedReason)
+   { Print("MT CRF chart history: ",reason); g_crfChartReportedReason=reason; }
    // A partial reconstruction must not be mistaken for a complete one.
    CRFRemoveObjects();
    ArrayFree(g_crfChartRates); ArrayFree(g_crfChartPrefix);
    CRFResetForecast(g_crfChartState);
-   g_crfChartIndex=0; g_crfChartFirstBar=0; g_crfChartStarted=false; g_crfChartReady=false;
+   g_crfChartIndex=0; g_crfChartFirstBar=0; g_crfChartUsableFirst=0; g_crfChartStarted=false; g_crfChartReady=false;
    g_crfChartError=true; g_crfChartRetry=GetTickCount64();
 }
 
@@ -88,37 +91,75 @@ bool CRFChartApplyBar(const CRFForecastState &before, const CRFForecastState &af
    return true;
 }
 
+// Fetch bounded slabs from oldest to newest. Keep enough preceding context
+// in each slab for the exact same forecast/analog calculation, without
+// silently truncating old chart drawings or imposing the full-copy cap.
 bool CRFChartLoadBatch()
 {
    CRFParameters p=CRFInputParameters();
-   bool first=false; long latest=0;
-   long anchor=g_crfChartStarted?g_crfChartState.last_bar:0;
-   CRF_M15_RESULT read=CRFReadClosedM15(_Symbol,p,anchor,g_crfChartRates,first,latest);
-   if(read!=CRF_M15_OK) return false;
-   int n=ArraySize(g_crfChartRates);
+   long synchronized=0, first=0;
+   // A CopyRates request can initiate terminal synchronization; simply
+   // checking SERIES_SYNCHRONIZED repeatedly need not start a download.
+   MqlRates probe[];
+   if(!SeriesInfoInteger(_Symbol,PERIOD_M15,SERIES_SYNCHRONIZED,synchronized) || synchronized==0)
+   {
+      CopyRates(_Symbol,PERIOD_M15,1,1,probe);
+      g_crfChartLoadDetail="M15 series synchronizing; history requested"; return false;
+   }
+   if(!SeriesInfoInteger(_Symbol,PERIOD_M15,SERIES_FIRSTDATE,first) || first<=0)
+   { g_crfChartLoadDetail="M15 first available bar unavailable"; return false; }
+   if(g_crfChartStarted && first!=g_crfChartFirstBar)
+   { g_crfChartLoadDetail="M15 first available bar changed during replay"; return false; }
+   int firstShift=CRFFirstUsableM15Shift(_Symbol,first);
+   if(g_crfChartStarted && (long)iTime(_Symbol,PERIOD_M15,firstShift)!=g_crfChartUsableFirst)
+   { g_crfChartLoadDetail="M15 usable history boundary changed during replay"; return false; }
    int context=(int)MathMax(MathMax(p.atr,p.trend),MathMax(p.volume,p.swing))+3;
-   if(n<context+2 || latest!=(long)g_crfChartRates[n-1].time) return false;
-   for(int i=0;i<n;i++)
-      if(g_crfChartRates[i].time<=0 || (i>0 && g_crfChartRates[i].time<=g_crfChartRates[i-1].time)) return false;
-   int start=context+1;
-   if(anchor==0)
+   int targetShift=iBarShift(_Symbol,PERIOD_M15,(datetime)g_crfObserver.forecast.last_bar,true);
+   if(firstShift<context+2 || targetShift<1)
+   { g_crfChartLoadDetail="M15 replay boundaries unavailable or insufficient"; return false; }
+   int nextShift=firstShift-context-1;
+   if(g_crfChartStarted)
    {
-      if(!first) return false;
-      g_crfChartFirstBar=(long)g_crfChartRates[0].time;
-      CRFResetForecast(g_crfChartState);
+      int anchorShift=iBarShift(_Symbol,PERIOD_M15,(datetime)g_crfChartState.last_bar,true);
+      if(anchorShift<1 || anchorShift>firstShift)
+      { g_crfChartLoadDetail="M15 replay anchor missing"; return false; }
+      nextShift=anchorShift-1;
    }
-   else
+   if(nextShift<targetShift)
+   { g_crfChartLoadDetail="M15 replay target moved behind its anchor"; return false; }
+   int batch=(int)MathMin(CRF_CHART_BATCH_BARS,nextShift-targetShift+1);
+   int overlap=(int)MathMin(p.history+context+2,firstShift-nextShift);
+   int newest=nextShift-batch+1, count=batch+overlap;
+   ArrayResize(g_crfChartRates,0);
+   if(!ArraySetAsSeries(g_crfChartRates,false))
+   { g_crfChartLoadDetail="M15 slab array setup failed"; return false; }
+   ResetLastError();
+   int copied=CopyRates(_Symbol,PERIOD_M15,newest,count,g_crfChartRates), err=GetLastError();
+   if(copied!=count || ArraySize(g_crfChartRates)!=count)
+   { g_crfChartLoadDetail=StringFormat("M15 slab CopyRates returned %d of %d bars (error %d)",copied,count,err); return false; }
+   long firstAfter=0,syncAfter=0;
+   if(!SeriesInfoInteger(_Symbol,PERIOD_M15,SERIES_SYNCHRONIZED,syncAfter) || syncAfter==0 ||
+      !SeriesInfoInteger(_Symbol,PERIOD_M15,SERIES_FIRSTDATE,firstAfter) || firstAfter!=first ||
+      iTime(_Symbol,PERIOD_M15,newest)!=(datetime)g_crfChartRates[count-1].time ||
+      iTime(_Symbol,PERIOD_M15,nextShift)!=(datetime)g_crfChartRates[overlap].time ||
+      (g_crfChartStarted && g_crfChartRates[overlap-1].time!=g_crfChartState.last_bar))
+   { g_crfChartLoadDetail="M15 history changed during slab copy"; return false; }
+   for(int i=0;i<count;i++)
+      if(g_crfChartRates[i].time<=0 || (i>0 && g_crfChartRates[i].time<=g_crfChartRates[i-1].time))
+      { g_crfChartLoadDetail="M15 slab is not in chronological order"; return false; }
+   if(!g_crfChartStarted)
    {
-      int found=-1;
-      for(int i=n-1;i>=0;i--) if((long)g_crfChartRates[i].time==anchor) { found=i; break; }
-      if(found<context+1 || (!first && found+2<p.history+context)) return false;
-      start=found+1;
+      if(overlap!=context+1 || g_crfChartRates[0].time!=iTime(_Symbol,PERIOD_M15,firstShift))
+      { g_crfChartLoadDetail="M15 first replay bar could not be verified"; return false; }
+      g_crfChartFirstBar=first; g_crfChartUsableFirst=(long)g_crfChartRates[0].time; CRFResetForecast(g_crfChartState);
    }
+   if(g_crfChartStarted && ArraySize(g_crfChartPrefix)>0 && !CRFM15SameOverlap(g_crfChartPrefix,g_crfChartRates,overlap))
+   { g_crfChartLoadDetail="M15 history revised during chart replay"; return false; }
    ArrayFree(g_crfChartPrefix);
-   if(ArrayResize(g_crfChartPrefix,start,n)!=start ||
-      ArrayCopy(g_crfChartPrefix,g_crfChartRates,0,0,start)!=start) return false;
-   g_crfChartIndex=start; g_crfChartStarted=true; g_crfChartReady=false;
-   g_crfChartError=false;
+   if(ArrayResize(g_crfChartPrefix,overlap,count)!=overlap ||
+      ArrayCopy(g_crfChartPrefix,g_crfChartRates,0,0,overlap)!=overlap)
+   { g_crfChartLoadDetail="M15 replay allocation or copy failed"; return false; }
+   g_crfChartIndex=overlap; g_crfChartStarted=true; g_crfChartReady=false; g_crfChartError=false;
    return true;
 }
 
@@ -138,8 +179,12 @@ void CRFChartHistoryStep()
    if(ArraySize(g_crfChartRates)==0)
    {
       if(g_crfChartStarted && g_crfChartState.last_bar==g_crfObserver.forecast.last_bar)
-      { g_crfChartReady=true; return; }
-      if(!CRFChartLoadBatch()) { CRFChartHistoryFail("M15 history unavailable or incomplete"); return; }
+      {
+         if(!CRFChartForecastMatches(g_crfChartState,g_crfObserver.forecast))
+         { CRFChartHistoryFail("replay differs from saved forecast; check M15 history"); return; }
+         g_crfChartReady=true; return;
+      }
+      if(!CRFChartLoadBatch()) { CRFChartHistoryFail(g_crfChartLoadDetail!=""?g_crfChartLoadDetail:"M15 replay data unavailable"); return; }
    }
    CRFParameters p=CRFInputParameters();
    int n=ArraySize(g_crfChartRates), processed=0; ulong started=GetTickCount64();
@@ -157,7 +202,8 @@ void CRFChartHistoryStep()
       if(GetTickCount64()-started>=CRF_CHART_BATCH_MS) break;
    }
    if(g_crfChartIndex<n) return;
-   ArrayFree(g_crfChartRates); ArrayFree(g_crfChartPrefix);
+   ArrayFree(g_crfChartRates);
+   // Keep the bounded prefix until the next slab to detect revised overlap.
    // The live observer may have advanced during replay. Catch up using its
    // newly available history before drawing the final active segment.
    if(g_crfChartState.last_bar!=g_crfObserver.forecast.last_bar) return;
@@ -168,5 +214,7 @@ void CRFChartHistoryStep()
    if(g_crfChartState.active_direction!=0 && (through<=0 || !CRFChartLevels(g_crfChartState,through)))
    { CRFChartHistoryFail("active forecast chart object failed"); return; }
    g_crfChartReady=true;
+   if(g_crfChartReportedReason!="")
+   { Print("MT CRF chart history: ","historical CRF drawings rebuilt"); g_crfChartReportedReason=""; }
 }
 #endif

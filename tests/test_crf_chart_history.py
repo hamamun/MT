@@ -23,10 +23,13 @@ program=r'''
 #include <string>
 #include <map>
 #include <cstdarg>
+#include <cstdio>
 using namespace std;
 using datetime=long;using ulong=unsigned long;using color=int;
 #define EMPTY_VALUE std::numeric_limits<double>::max()
 #define PERIOD_M15 15
+#define TERMINAL_MAXBARS 3
+long terminalMaxBars=200000; long TerminalInfoInteger(int){return terminalMaxBars;}
 #define SERIES_SYNCHRONIZED 1
 #define SERIES_FIRSTDATE 2
 #define OBJ_TREND 1
@@ -58,9 +61,10 @@ bool SeriesInfoInteger(const string&,int period,int property,long &v){if(period!
 int Bars(const string&,int period){return period==PERIOD_M15?int(source.size()):0;}
 datetime iTime(const string&,int period,int shift){if(period!=PERIOD_M15||shift<0||shift>=int(source.size()))return 0;return source[source.size()-1-shift].time;}
 int iBarShift(const string&,int period,datetime when,bool exact){if(period!=PERIOD_M15||!exact)return -1;for(size_t i=0;i<source.size();i++)if(source[i].time==when)return int(source.size()-1-i);return -1;}
-int CopyRates(const string&,int period,int start,int count,vector<MqlRates>&out){if(period!=PERIOD_M15||start!=1||count<0||count>int(source.size())-1)return -1;if(partial)count--;out.assign(source.end()-1-count,source.end()-1);return count;}
+int CopyRates(const string&,int period,int start,int count,vector<MqlRates>&out){if(period!=PERIOD_M15||start<1||count<0||start+count>int(source.size()))return -1;if(partial)count--;out.assign(source.end()-start-count,source.end()-start);return count;}
 ulong GetTickCount64(){return uptime;}
-string StringFormat(const char*,long n){return std::to_string(n);}
+void ResetLastError(){} int GetLastError(){return 0;}
+string StringFormat(const char *fmt,...){char b[512];va_list a;va_start(a,fmt);if(string(fmt)=="%I64d"){long n=va_arg(a,long);va_end(a);return std::to_string(n);}vsnprintf(b,sizeof(b),fmt,a);va_end(a);return b;}
 bool P3Positive(double v){return std::isfinite(v)&&v!=EMPTY_VALUE&&v>0;}
 struct Obj{int type=0,ink=0;long start=0,end=0;double price=0;};map<string,Obj> objects;bool objectFailure=false;
 int ObjectFind(int,string n){return objects.count(n)?0:-1;}
@@ -68,7 +72,8 @@ bool ObjectCreate(int,string n,int type,int,datetime t,double price,datetime end
 bool ObjectMove(int,string n,int point,datetime t,double price){if(!objects.count(n))return false;auto &o=objects[n];if(point==0)o.start=t;else o.end=t;o.price=price;return true;}
 bool ObjectSetInteger(int,string n,int prop,long v){if(!objects.count(n))return false;if(prop==OBJPROP_COLOR)objects[n].ink=int(v);return true;}
 void ObjectsDeleteAll(int,string prefix){for(auto i=objects.begin();i!=objects.end();)if(i->first.find(prefix)==0)i=objects.erase(i);else ++i;}
-void Print(const char*,string){}
+vector<string> logLines;
+void Print(const char *prefix,string text){logLines.push_back(string(prefix)+text);}
 #include "MT_CRF_M15.mqh"
 struct CRFObserver{bool ready=true;CRFForecastState forecast;};
 CRFObserver g_crfObserver;bool g_crfObserverAvailable=true,g_crfForecastCurrent=true;
@@ -121,10 +126,15 @@ int main(){int failures=0;auto check=[&](bool ok,const char*m){if(!ok){cerr<<"FA
  // Broken data and chart-object failures clear partial drawings and retry.
  CRFRemoveObjects();CRFChartHistoryReset();sync_ok=false;CRFChartHistoryStep();check(g_crfChartError && objects.empty(),"unsynchronized history reported and no partial chart");
  check(CRFChartHistoryStatus().find("historical CRF drawings unavailable")!=string::npos && CRFChartHistoryStatus().find("chart history unavailable")==string::npos,"label describes historical CRF drawings rather than MT5 history");
+ check(!logLines.empty() && logLines.back().find("synchronizing")!=string::npos,"actual synchronization failure logged");
+ size_t logCount=logLines.size();uptime+=5001;CRFChartHistoryStep();
+ check(g_crfChartError && logLines.size()==logCount,"identical retry does not flood Experts log");
  sync_ok=true;partial=true;uptime+=5001;CRFChartHistoryStep();
  check(g_crfChartError && objects.empty(),"partial history copy is not presented as complete");
+ check(logLines.size()==logCount+1 && logLines.back().find("CopyRates returned")!=string::npos,"changed cause is reported once with copied counts");
  partial=false;uptime+=5001;for(int i=0;i<50 && !g_crfChartReady;i++){uptime+=100;CRFChartHistoryStep();}
  check(g_crfChartReady && equalChart(objects,expectedChart()),"history automatically retries after synchronization");
+ check(logLines.back().find("drawings rebuilt")!=string::npos,"successful recovery logged");
  CRFRemoveObjects();CRFChartHistoryReset();objectFailure=true;CRFChartHistoryStep();check(g_crfChartError && objects.empty(),"object failure clears incomplete chart");
  uptime+=5001;for(int i=0;i<50 && !g_crfChartReady;i++){uptime+=100;CRFChartHistoryStep();}
  check(g_crfChartReady && equalChart(objects,expectedChart()),"object failure retries reconstruction");
@@ -133,12 +143,36 @@ int main(){int failures=0;auto check=[&](bool ok,const char*m){if(!ok){cerr<<"FA
  check(g_crfChartError && objects.empty(),"reconstruction inconsistent with saved observer fails visibly");
  g_crfObserver.forecast=observerAtEnd();uptime+=5001;for(int i=0;i<50 && !g_crfChartReady;i++){uptime+=100;CRFChartHistoryStep();}
  check(g_crfChartReady && equalChart(objects,expectedChart()),"matched observer state recovers");
+ // A correction in a completed slab's overlap must not silently mix two histories.
+ CRFRemoveObjects();CRFChartHistoryReset();CRFChartHistoryStep();
+ {int anchor=iBarShift(_Symbol,PERIOD_M15,g_crfChartState.last_bar,true);int index=int(source.size())-1-anchor;source[index].close+=.01;}
+ uptime+=100;CRFChartHistoryStep();
+ check(g_crfChartError && objects.empty() && logLines.back().find("revised")!=string::npos,"revised overlap rejects incomplete chart replay");
+ source.assign(fixture.begin(),fixture.end());g_crfObserver.forecast=observerAtEnd();
  // Detect a change in the earliest history while replaying; rebuild from the
  // new complete series, rather than silently omitting newly changed history.
  CRFRemoveObjects();CRFChartHistoryReset();CRFChartHistoryStep();source.erase(source.begin());g_crfObserver.forecast=observerAtEnd();uptime+=100;CRFChartHistoryStep();
  check(g_crfChartError && objects.empty(),"changed earliest history discards partial reconstruction");
  uptime+=5001;for(int i=0;i<50 && !g_crfChartReady;i++){uptime+=100;CRFChartHistoryStep();}
  check(g_crfChartReady && equalChart(objects,expectedChart()),"changed earliest history replays completely");
+ // MT5 may report more historical bars than its chart-copy limit permits.
+ // Replay starts at the first retrievable bar, not an out-of-range shift.
+ CRFRemoveObjects();CRFChartHistoryReset();source.assign(fixture.begin(),fixture.begin()+501);terminalMaxBars=300;
+ {CRFForecastState limited{};CRFResetForecast(limited);vector<MqlRates> prefix;
+  int oldest=int(source.size())-int(terminalMaxBars);int start=max(max(params.atr,params.trend),max(params.volume,params.swing))+4;
+  for(int i=oldest;i<int(source.size())-1;i++){prefix.push_back(source[i]);if(int(prefix.size())>start)CRFForecastOnBar(prefix,source[i].time,params,limited);}
+  g_crfObserver.forecast=limited;}
+ for(int i=0;i<20 && !g_crfChartReady && !g_crfChartError;i++){uptime+=100;CRFChartHistoryStep();}
+ check(g_crfChartReady && g_crfChartState.last_bar==g_crfObserver.forecast.last_bar,"replay respects MT5 max-bars boundary");
+ terminalMaxBars=200000;
+ // More than 100,000 closed bars can be reconstructed without a full copy.
+ CRFRemoveObjects();CRFChartHistoryReset();source.resize(100002);
+ for(size_t i=0;i<source.size();i++)source[i]={long(1000+i*900),100,101,99,100,100};
+ CRFResetForecast(g_crfObserver.forecast);g_crfObserver.forecast.last_bar=source[source.size()-2].time;
+ CRFChartHistoryStep();
+ check(!g_crfChartError && g_crfChartStarted && g_crfChartState.last_bar>0 && int(g_crfChartRates.size())<=256+params.history+30,"more than 100000 bars starts reconstruction using bounded slabs");
+ for(int i=0;i<500 && !g_crfChartReady && !g_crfChartError;i++){uptime+=100;CRFChartHistoryStep();}
+ check(g_crfChartReady && g_crfChartState.last_bar==g_crfObserver.forecast.last_bar && objects.empty(),"over 100000 flat bars fully reconstructed without truncation");
  CRFRemoveObjects();CRFChartHistoryReset();InpMode=MT_CRF_MODE_MT;CRFChartHistoryStep();check(objects.empty(),"MT-only mode draws no CRF objects");
  if(!failures)cout<<"CRF chart history reconstruction checks passed\n";return failures?1:0;
 }
@@ -146,7 +180,7 @@ int main(){int failures=0;auto check=[&](bool ok,const char*m){if(!ok){cerr<<"FA
 with tempfile.TemporaryDirectory() as tmp:
  p=Path(tmp)
  for name in ('MT_CRF_Kernels.mqh','MT_CRF_Analogs.mqh','MT_CRF_Forecast.mqh','MT_CRF_Feed.mqh','MT_CRF_M15.mqh','MT_CRF_ChartHistory.mqh'):
-  text=(root/name).read_text().replace('const MqlRates &bars[]','const std::vector<MqlRates> &bars').replace('const MqlRates &rates[]','const std::vector<MqlRates> &rates').replace('MqlRates &out[]','std::vector<MqlRates> &out').replace('CRFFeedUpdate &updates[]','std::vector<CRFFeedUpdate> &updates').replace('MqlRates prefix[];','std::vector<MqlRates> prefix;').replace('CRFFeedUpdate staged[];','std::vector<CRFFeedUpdate> staged;').replace('MqlRates g_crfChartRates[], g_crfChartPrefix[];','std::vector<MqlRates> g_crfChartRates, g_crfChartPrefix;')
+  text=(root/name).read_text().replace('const MqlRates &previous[]','const std::vector<MqlRates> &previous').replace('const MqlRates &current[]','const std::vector<MqlRates> &current').replace('const MqlRates &bars[]','const std::vector<MqlRates> &bars').replace('const MqlRates &rates[]','const std::vector<MqlRates> &rates').replace('MqlRates &out[]','std::vector<MqlRates> &out').replace('CRFFeedUpdate &updates[]','std::vector<CRFFeedUpdate> &updates').replace('MqlRates prefix[];','std::vector<MqlRates> prefix;').replace('MqlRates probe[];','std::vector<MqlRates> probe;').replace('CRFFeedUpdate staged[];','std::vector<CRFFeedUpdate> staged;').replace('MqlRates g_crfChartRates[], g_crfChartPrefix[];','std::vector<MqlRates> g_crfChartRates, g_crfChartPrefix;')
   (p/name).write_text(text)
  (p/'test.cpp').write_text(program)
  flags=['-fsanitize=undefined','-fno-omit-frame-pointer'] if os.getenv('MT_TEST_SANITIZERS') else []
