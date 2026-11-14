@@ -59,7 +59,16 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  check(CRFPlanLine().find("Lot: --")!=string::npos && CRFPlanLine().find("Lot unavailable: auto filters not met")!=string::npos,"blocked lot is explained, not presented as an executable lot");
  check(sends==0,"weak forecast does not send an order");
  InpCrfAutoFollowthroughPct=15;check(CRFAutoFilterReady(f) && CRFPlanLine().find("Auto filter 15%: PASS")!=string::npos,"reference 55 percent status does not block 15 percent auto filter");
- check(CRFHeaderStatus().find("CRF auto filter 15%")!=string::npos,"selected auto filter is visible in header");
+ check(CRFHeaderStatus().find("CRF auto filter 15%")!=string::npos && CRFHeaderStatus().find("min 4 samples")!=string::npos && CRFPlanLine().find("Auto min samples 4")!=string::npos,"selected auto filters visible in header and plan");
+ f.last_estimate.samples=4;f.last_estimate.reason=2;
+ check(CRFAutoFilterReady(f) && CRFPlanLine().find("Low sample count")!=string::npos && CRFPlanLine().find("Auto filter 15%: PASS")!=string::npos,"reference six-sample quality remains distinct from auto minimum");
+ InpCrfAutoMinimumSamples=5;check(CRFPlanLine().find("Lot unavailable: auto filters not met")!=string::npos,"below selected auto samples explains unavailable lot");
+ InpCrfAutoMinimumSamples=4;f.last_estimate.samples=6;f.last_estimate.reason=3;
+ InpAutoTrading=false;
+ check(CRFPlanLine().find("Lot: --")==string::npos && CRFPlanLine().find("Lot unavailable:")==string::npos && sends==0,"lot preview appears for eligible confirmed signal even with master auto off");
+ MqlTick savedQuote=current;current.bid=100.59;current.ask=100.60;
+ check(CRFPlanLine().find("Lot unavailable: Below live R/R filter")!=string::npos,"live entry gate explains why lot preview is unavailable");current=savedQuote;
+ calcOk=false;check(CRFPlanLine().find("Lot unavailable: broker volume or sizing unavailable")!=string::npos,"unavailable sizing explains missing lot");calcOk=true;
  check(CRFHeaderStatus().find("CRF risk bypass OFF")!=string::npos && CRFPlanLine().find("CRF risk bypass OFF")!=string::npos,"CRF bypass default OFF visible");
  f.last_estimate.move_atr=1;check(!CRFAutoFilterReady(f),"reference forecast R/R blocked when bypass off");
  InpCrfRiskBypass=true;check(CRFAutoFilterReady(f) && CRFHeaderStatus().find("CRF risk bypass ON")!=string::npos && CRFPlanLine().find("CRF risk bypass ON")!=string::npos,"CRF bypass ON and auto status visible");

@@ -87,20 +87,28 @@ string CRFPlanLine()
       return "M15 | Signal: NONE | CRF watching M15";
    }
    string s="M15 | Signal: "+CRFSide(f.active_direction)+" (CRF) | MARKET Entry: "+CRFPriceText(f.last_entry);
-   MqlTick q; P3Plan plan; string lot="--";
-   if(SymbolInfoTick(_Symbol,q) && CRFMakeRequestPlan(f,q,plan)) lot=P3LotText(plan.lot);
+   MqlTick q; P3Plan plan; string lot="--", lotReason="";
+   if(!CRFAutoFilterReady(f)) lotReason="auto filters not met";
+   else if(!SymbolInfoTick(_Symbol,q)) lotReason="live quote unavailable";
+   else if(CRFMakeRequestPlan(f,q,plan)) lot=P3LotText(plan.lot);
+   else
+   {
+      lotReason=CRFLiveEntryReason(f,q,plan);
+      if(lotReason=="") lotReason="broker volume or sizing unavailable";
+   }
    s+=" | Lot: "+lot+" | SL: "+CRFPriceText(f.active_stop)+" | TP: "+CRFPriceText(f.active_target);
    s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+" | Reference quality (55%): "+CRFQualityText(f.last_estimate.reason)+
       " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars | Auto "+(InpAutoTrading && P4LaneEnabled(1)?"ON":"OFF");
    s+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED")+
+      " | Auto min samples "+IntegerToString(InpCrfAutoMinimumSamples)+
       " | CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
-   if(!CRFAutoFilterReady(f)) s+=" | Lot unavailable: auto filters not met";
+   if(lotReason!="") s+=" | Lot unavailable: "+lotReason;
    if(!P3HasBidBars()) s+=" | Bars: Last/unknown proxy";
    return s;
 }
 string CRFHeaderStatus()
 {
-   string threshold=" / CRF auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"% / CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
+   string threshold=" / CRF auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"% / min "+IntegerToString(InpCrfAutoMinimumSamples)+" samples / CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return g_crfStatus+threshold;
    CRFForecastState f=g_crfObserver.forecast;
    if(f.active_direction!=0)

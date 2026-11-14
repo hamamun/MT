@@ -35,13 +35,14 @@ bool CRFLaterM15Bar()
 // 0=eligible, 1=unavailable/invalid, 2=samples, 3=follow-through, 4=R/R.
 int CRFAutoFilterReason(const CRFForecastState &f)
 {
-   if(InpCrfAutoFollowthroughPct<1 || InpCrfAutoFollowthroughPct>100 ||
+   if(InpCrfAutoMinimumSamples<2 || InpCrfAutoMinimumSamples>50 ||
+      InpCrfAutoFollowthroughPct<1 || InpCrfAutoFollowthroughPct>100 ||
       (f.active_direction!=1 && f.active_direction!=-1) || f.signal_bar<=0 ||
       !f.last_estimate.available || !P3Positive(f.last_entry) ||
       !P3Positive(f.last_signal.stop) || !P3Positive(f.last_signal.atr) ||
       !P3Positive(f.last_estimate.move_atr) || !MathIsValidNumber(f.last_estimate.confidence) ||
       f.last_estimate.confidence<0 || f.last_estimate.confidence>100.0000001) return 1;
-   if(f.last_estimate.samples<InpCrfMinimumAnalogs) return 2;
+   if(f.last_estimate.samples<InpCrfAutoMinimumSamples) return 2;
    if(f.last_estimate.confidence<InpCrfAutoFollowthroughPct) return 3;
    double riskATR=MathAbs(f.last_entry-f.last_signal.stop)/f.last_signal.atr;
    if(!P3Positive(riskATR) || !MathIsValidNumber(riskATR*InpCrfMinRewardRisk)) return 1;
@@ -427,7 +428,7 @@ string CRFQualityBlockedStatus(const CRFForecastState &f)
 {
    int reason=CRFAutoFilterReason(f);
    if(reason==2)
-      return "Blocked: low sample count ("+IntegerToString(f.last_estimate.samples)+" / min "+IntegerToString(InpCrfMinimumAnalogs)+")";
+      return "Blocked: low sample count ("+IntegerToString(f.last_estimate.samples)+" / min "+IntegerToString(InpCrfAutoMinimumSamples)+")";
    if(reason==3)
       return "Blocked: below follow-through filter (min "+IntegerToString(InpCrfAutoFollowthroughPct)+"%)";
    if(reason==4) return "Blocked: below forecast reward/risk filter";

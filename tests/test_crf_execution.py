@@ -23,7 +23,7 @@ double P3Down(double v,double t){return floor(v/t+1e-9)*t;}
 double P3Up(double v,double t){return ceil(v/t-1e-9)*t;}
 enum ENUM_MT_CRF_MODE{MT_CRF_MODE_BOTH=0,MT_CRF_MODE_MT=1,MT_CRF_MODE_CRF=2};
 ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseProfitableM15=true,InpCrfRiskBypass=false;
-int InpCrfHistoryBars=600,InpCrfMaxHorizon=24,InpCrfAtrLength=14,InpCrfTrendLength=12,InpCrfVolumeLength=20,InpCrfSwingLength=20,InpCrfMinimumAnalogs=6,InpCrfMinFollowthroughPct=55,InpCrfAutoFollowthroughPct=15;double InpCrfMinRewardRisk=1.2;
+int InpCrfHistoryBars=600,InpCrfMaxHorizon=24,InpCrfAtrLength=14,InpCrfTrendLength=12,InpCrfVolumeLength=20,InpCrfSwingLength=20,InpCrfMinimumAnalogs=6,InpCrfMinFollowthroughPct=55,InpCrfAutoMinimumSamples=4,InpCrfAutoFollowthroughPct=15;double InpCrfMinRewardRisk=1.2;
 struct CRFParameters{int history,horizon,atr,trend,volume,swing,minimum_analogs,followthrough;double reward_risk;};
 struct CRFCandidate{int direction=0;double stop=99,atr=1;};struct CRFEstimate{bool ready=false,available=true;int duration_high=0,reason=1,samples=6;double confidence=60,move_atr=2;};
 struct CRFForecastState{int active_direction=0;long signal_bar=0,last_bar=0;double last_entry=0,active_stop=0,active_target=0;CRFEstimate last_estimate;CRFCandidate pending,last_signal;};
@@ -60,7 +60,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  CRFProcessExecution(true);
  check(sends==0 && !CRFPlaceMarket(q) && g_crfStatus=="Blocked: below follow-through filter (min 55%)","confirmed weak follow-through is explicitly blocked, never sent");
  forecast.last_estimate.reason=2;forecast.last_estimate.samples=3;CRFProcessExecution(true);
- check(sends==0 && g_crfStatus=="Blocked: low sample count (3 / min 6)","low-sample reason visible");
+ check(sends==0 && g_crfStatus=="Blocked: low sample count (3 / min 4)","low-sample reason visible");
  forecast.last_estimate.samples=6;forecast.last_estimate.confidence=60;forecast.last_estimate.reason=4;forecast.last_estimate.move_atr=1;CRFProcessExecution(true);
  check(sends==0 && g_crfStatus=="Blocked: below forecast reward/risk filter","forecast reward/risk reason visible");
  forecast.pending.direction=1;CRFProcessExecution(true);check(g_crfStatus.find("candidate waiting confirmation")!=string::npos,"new candidate remains visible alongside blocked forecast");
@@ -82,17 +82,28 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  filtered.last_estimate.confidence=100;check(CRFAutoFilterReady(filtered),"100 percent endpoint accepted");
  InpCrfAutoFollowthroughPct=0;check(!CRFAutoFilterReady(filtered),"invalid below-range threshold fails closed");
  InpCrfAutoFollowthroughPct=101;check(!CRFAutoFilterReady(filtered),"invalid above-range threshold fails closed");
- InpCrfAutoFollowthroughPct=15;filtered.last_estimate.confidence=19;filtered.last_estimate.samples=5;
- check(CRFAutoFilterReason(filtered)==2,"threshold cannot bypass minimum samples");
- filtered.last_estimate.samples=6;filtered.last_estimate.move_atr=1.1;
+ InpCrfAutoFollowthroughPct=15;filtered.last_estimate.confidence=19;filtered.last_estimate.samples=3;
+ check(CRFAutoFilterReason(filtered)==2,"below selected default minimum blocks");
+ filtered.last_estimate.samples=4;filtered.last_estimate.reason=2;
+ check(CRFAutoFilterReady(filtered) && !filtered.last_estimate.ready,"four samples pass auto filter without changing six-sample reference quality");
+ InpCrfAutoMinimumSamples=2;filtered.last_estimate.samples=2;check(CRFAutoFilterReady(filtered),"two samples are supported when selected");
+ filtered.last_estimate.samples=1;check(CRFAutoFilterReason(filtered)==2,"below selected minimum blocks");
+ InpCrfAutoMinimumSamples=50;filtered.last_estimate.samples=49;check(CRFAutoFilterReason(filtered)==2,"upper minimum rejects one short");
+ filtered.last_estimate.samples=50;check(CRFAutoFilterReady(filtered),"upper minimum endpoint passes");
+ InpCrfAutoMinimumSamples=1;check(!CRFAutoFilterReady(filtered),"minimum below range fails closed");
+ InpCrfAutoMinimumSamples=51;check(!CRFAutoFilterReady(filtered),"minimum above range fails closed");
+ InpCrfAutoMinimumSamples=4;filtered.last_estimate.samples=4;filtered.last_estimate.move_atr=1.1;
  check(CRFAutoFilterReason(filtered)==4,"threshold cannot bypass original forecast reward/risk");
  filtered.last_estimate.move_atr=2;filtered.last_estimate.available=false;
  check(!CRFAutoFilterReady(filtered),"threshold cannot bypass missing forecast estimate");
  // The actual request path must use the auto input, not reference quality.
- forecast.last_estimate.ready=false;forecast.last_estimate.reason=3;forecast.last_estimate.confidence=19;
+ forecast.last_estimate.ready=false;forecast.last_estimate.reason=2;forecast.last_estimate.confidence=19;
+ forecast.last_estimate.samples=3;
+ check(!CRFPlaceMarket(q) && sends==0,"three samples cannot send with default minimum four");
+ forecast.last_estimate.samples=4;
  InpCrfAutoFollowthroughPct=20;check(!CRFPlaceMarket(q) && sends==0,"19 percent confirmation blocked by 20 percent auto threshold");
  InpCrfAutoFollowthroughPct=15;check(CRFAutoFilterReady(forecast),"19 percent confirmation admitted by 15 percent auto threshold");
- check(CRFInputParameters().followthrough==55,"auto input does not change reference forecast or journal parameters");
+ check(CRFInputParameters().followthrough==55 && CRFInputParameters().minimum_analogs==6,"auto inputs do not change reference forecast or journal parameters");
  g_crfTakeover=0;InpCrfAutoFollowthroughPct=20;check(!CRFNativeLaneBlocked(1),"below-threshold CRF signal does not block native M15");
  InpCrfAutoFollowthroughPct=15;check(CRFNativeLaneBlocked(1),"newly eligible CRF signal blocks native M15 for takeover");g_crfTakeover=1;
  // A late market price must still satisfy the original 1.2 R/R filter.
@@ -135,7 +146,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  checkOk=false;check(!CRFPlaceMarket(q) && sends==0,"bypass does not bypass OrderCheck");checkOk=true;uptime+=6000;
  moveOnCheck=true;check(!CRFPlaceMarket(q) && sends==0,"price change between OrderCheck and final scan blocks entry");
  moveOnCheck=false;current=q;uptime+=6000;
- check(CRFPlaceMarket(q) && sends==1 && lastRequest.magic==(ulong)P4Magic(3) && lastRequest.sl>0 && lastRequest.tp>0 && lastRequest.comment=="MT4-CRF","19 percent reference-blocked forecast can send under 15 percent auto filter with mandatory protection");
+ check(CRFPlaceMarket(q) && sends==1 && lastRequest.magic==(ulong)P4Magic(3) && lastRequest.sl>0 && lastRequest.tp>0 && lastRequest.comment=="MT4-CRF","four-sample reference-blocked forecast can send under default auto minimum with mandatory protection");
  check(CRFNativeReserved(),"shared native M15 journal reserved while CRF is open");
  P4Refresh(1);check(g_p4View[1].state==P4_UNCERTAIN && g_p4View[1].note.find("no order ticket")!=string::npos,"original-compatible reservation is REVIEW, never free");
  check(g_p5.size()==1 && g_p5[0].strategy==30007 && g_p5[0].score==0 && g_p5[0].stopInput==1 && g_p5[0].bypass==1 && MathAbs(lastRequest.volume-0.10)<1e-8,"CRF bypass request and diary identity");
@@ -276,7 +287,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(CRFAutoFilterReady(forecast),"CRF bypass skips forecast R/R");
  P3Plan relaxed{};check(CRFMakeRequestPlan(forecast,current,relaxed) && MathAbs(relaxed.lot-0.10)<1e-8,"CRF bypass skips live R/R and uses balance sizing even with shared bypass off");
  InpMinimumLot=true;check(CRFMakeRequestPlan(forecast,current,relaxed) && MathAbs(relaxed.lot-volMin)<1e-8,"minimum lot takes precedence over CRF bypass");InpMinimumLot=false;
- forecast.last_estimate.samples=5;check(!CRFAutoFilterReady(forecast),"CRF bypass retains minimum analog filter");forecast.last_estimate.samples=6;
+ forecast.last_estimate.samples=3;check(!CRFAutoFilterReady(forecast),"CRF bypass retains selected minimum analog filter");forecast.last_estimate.samples=6;
  forecast.last_estimate.confidence=14;check(!CRFAutoFilterReady(forecast),"CRF bypass retains follow-through filter");forecast.last_estimate.confidence=19;
  CRFForecastState sell=forecast;sell.active_direction=-1;sell.last_signal.stop=101;sell.active_stop=101;sell.active_target=98.9;
  MqlTick sellQuote=current;sellQuote.bid=99.20;sellQuote.ask=99.22;
