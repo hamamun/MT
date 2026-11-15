@@ -17,7 +17,11 @@ input bool InpAgainstM5 = false;                      // Allow against trend M5
 input bool InpAgainstM15 = false;                     // Allow against trend M15
 input bool InpAgainstM30 = false;                     // Allow against trend M30
 input bool InpAllowAutoM5 = true;                     // Allow autotrading M5
+#ifdef MT_CRF_INPUT_LABELS
+input(name="Allow autotrading M15 (CRF Excluded)") bool InpAllowAutoM15 = true;
+#else
 input bool InpAllowAutoM15 = true;                    // Allow autotrading M15
+#endif
 input bool InpAllowAutoM30 = true;                    // Allow autotrading M30
 input bool InpUseAutoSchedule = true;                 // Use Daily trading timer (PC/VPS local time)
 input string InpAutoStartTime = "09:15";               // Timer Start (Local HH:MM)

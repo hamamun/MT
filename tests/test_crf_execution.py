@@ -68,8 +68,9 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(CRFNativeLaneBlocked(1) && !CRFNativeLaneBlocked(0) && !CRFNativeLaneBlocked(2),"combined mode blocks only M15");
  check(!CRFPlaceMarket(q) && sends==0,"master off blocks CRF entry");InpAutoTrading=true;
  InpAllowAutoM15=false;
- check(!CRFPlaceMarket(q) && sends==0,"M15 switch off blocks CRF entry in combined mode");
- InpMode=MT_CRF_MODE_CRF;check(!CRFPlaceMarket(q) && sends==0,"M15 switch off blocks CRF entry in CRF-only mode");
+ check(CRFNativeLaneBlocked(1),"MT M15 disabled does not suppress CRF takeover");
+ InpMode=MT_CRF_MODE_CRF;check(CRFAutoFilterReady(forecast),"MT M15 switch does not alter CRF-only filters");
+ InpMode=MT_CRF_MODE_MT;check(!CRFPlaceMarket(q) && g_crfEntryReason=="CRF disabled in MT-only mode" && sends==0,"MT-only mode still blocks CRF");
  InpMode=MT_CRF_MODE_BOTH;InpAllowAutoM15=true;
  // Auto threshold is independent of the reference indicator's 55% quality.
  CRFForecastState filtered=forecast;filtered.last_estimate.ready=false;filtered.last_estimate.reason=3;
@@ -176,13 +177,17 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  InpMode=MT_CRF_MODE_BOTH;InpAutoTrading=true;g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;
  forecast=CRFForecastState{};P5Init();P4Init();CRFRefreshBroker();
  plans[1]={1,true,false,99.9,99,101,0.05,1000};g_p3[1].score=2;
- P4Process(true);P4Process(false);check(orders.size()==1 && g_p4View[1].state==P4_PENDING,"native M15 pending established");
+ InpAllowAutoM15=false;P4Process(true);P4Process(false);
+ check(orders.empty() && sends==0,"MT M15 switch off prevents native entry even without CRF takeover");
+ InpAllowAutoM15=true;P4Process(true);P4Process(false);check(orders.size()==1 && g_p4View[1].state==P4_PENDING,"native M15 pending established");
  forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_entry=100;forecast.active_stop=99;forecast.active_target=102;
  forecast.last_estimate.ready=true;forecast.last_estimate.duration_high=4;g_crfTakeover=1;
- uptime+=6000;P4Process(false);check(orders.empty() && cancels==1,"CRF takeover cancels native pending only");
+ InpAllowAutoM15=false;
+ uptime+=6000;P4Process(false);check(orders.empty() && cancels==1,"disabled MT M15 cancels existing native pending");
  P4Process(false);check(!g_p4[1].active && g_p4[1].cooldown==2,"cancellation confirmed and cooldown recorded");
  int oldSends=sends;uptime+=6000;check(!CRFPlaceMarket(q) && sends==oldSends,"no immediate CRF replacement");
- laneBars[1].push_back(1002);uptime+=6000;check(CRFPlaceMarket(q) && sends==oldSends+1,"CRF entry after later M15 close");
+ laneBars[1].push_back(1002);uptime+=6000;check(CRFPlaceMarket(q) && sends==oldSends+1,"CRF enters with MT M15 disabled after pending cancellation and later close");
+ InpAllowAutoM15=true;
 
  // Native M15 market position takeover requires reliable net and a cost reserve.
  P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
@@ -201,13 +206,9 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  deals[0].commission=-0.2;positions[0].profit=0.1;
  check(CRFNetAndCloseBuffer(ex,q,net,buffer) && net<=buffer,"below-cost position remains open");
  uptime+=6000;CRFProcessExecution(false);check(closeSends==0,"below-cost position not closed");
- positions[0].profit=20;InpAllowAutoM15=false;
- check(!CRFRequestPositionClose(1,ex,q) && closeSends==0,"disabled M15 blocks direct takeover close");
- CRFProcessExecution(true);check(closeSends==0 && g_crfTakeover==0 && g_crfAttemptedSignalBar==1000 && g_crfStatus=="M15 autotrading OFF","disabled M15 releases takeover, consumes signal and leaves native position");
- InpAllowAutoM15=true;CRFProcessExecution(true);check(closeSends==0,"re-enabling cannot replay disabled confirmation");
- // Simulate a new confirmation, distinct from the consumed one.
- forecast.signal_bar=1001;g_crfTakeover=1;
- positions[0].profit=20;InpCrfCloseProfitableM15=false;uptime+=6000;CRFProcessExecution(false);
+ // A disabled MT lane does not prevent CRF takeover, but all safeguards
+ // (including the separate permission to close an existing MT trade) remain.
+ positions[0].profit=20;InpAllowAutoM15=false;InpCrfCloseProfitableM15=false;uptime+=6000;CRFProcessExecution(false);
  check(closeSends==0,"takeover close input off prevents close");
  InpCrfCloseProfitableM15=true;InpAutoTrading=false;CRFProcessExecution(false);check(closeSends==0,"master off prevents native close");
  InpAutoTrading=true;uptime+=6000;
@@ -221,7 +222,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  InpCrfRiskBypass=false;checkOk=true;current=q;uptime+=6000;moveOnCheck=true;
  check(!CRFRequestPositionClose(1,ex,q) && closeSends==0,"price change between close check and final scan blocks takeover close");
  moveOnCheck=false;current=q;uptime+=6000;CRFProcessExecution(false);
- check(closeSends==1 && g_crfCloseKind==1 && positions.size()==1,"profitable native close is requested, not assumed");
+ check(closeSends==1 && g_crfCloseKind==1 && positions.size()==1,"CRF requests profitable native close with MT M15 off; close is not assumed");
  CRFProcessExecution(false);check(closeSends==1 && sends==1,"unconfirmed native close neither repeated nor replaced");
  P4Close();P4Init();P4Process(false);CRFRefreshBroker();CRFProcessExecution(false);
  check(closeSends==1 && g_crfCloseKind==1,"native close intent survives restart");
@@ -257,22 +258,18 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(P4Persist(),"orphan reservation persisted");P4Close();P4Init();CRFRefreshBroker();P4Refresh(1);
  CRFProcessExecution(false);check(!CRFNativeReserved() && g_p4[1].cooldown==2 && g_crfReleaseBar==1000,"orphan reservation recovers only after empty broker scan");
 
- // Polling still updates the forecast with M15 disabled but must not create
- // a takeover. Re-enabling can create one for a genuinely fresh event.
+ // CRF forecasting and takeover remain active when only MT M15 is off.
  P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
  P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);g_crfObserverAvailable=true;g_crfObserver.ready=true;g_crfForecastCurrent=false;
  forecast=CRFForecastState{};forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_bar=1000;forecast.last_entry=100;forecast.last_estimate.ready=true;
  g_crfTakeover=0;g_crfAttemptedSignalBar=0;InpMode=MT_CRF_MODE_BOTH;InpAllowAutoM15=false;
- CRFUpdateForecast();check(g_crfForecastCurrent && g_crfTakeover==0,"disabled M15 still forecasts but cannot claim takeover");
- CRFProcessExecution(true);check(g_crfAttemptedSignalBar==1000 && g_crfStatus=="M15 autotrading OFF","disabled confirmation consumed");
- InpAllowAutoM15=true;forecast.signal_bar=1001;forecast.last_bar=1001;forecast.last_estimate.ready=false;forecast.last_estimate.reason=3;forecast.last_estimate.confidence=19;g_crfForecastCurrent=false;CRFUpdateForecast();
- check(g_crfTakeover==1,"fresh 19 percent confirmation can claim takeover at 15 percent after M15 enabled");
- InpAllowAutoM15=false;g_crfObserverAvailable=false;g_crfForecastCurrent=false;CRFProcessExecution(false);
- check(g_crfTakeover==0 && g_crfStatus=="M15 autotrading OFF","disabled M15 releases unfilled takeover even if forecast is unavailable");
+ CRFUpdateForecast();check(g_crfForecastCurrent && g_crfTakeover==1 && g_crfAttemptedSignalBar==0,"fresh CRF forecast claims takeover while MT M15 is off");
+ g_crfObserverAvailable=false;g_crfForecastCurrent=false;CRFProcessExecution(false);
+ check(g_crfTakeover==1 && !CRFPlaceMarket(q),"missing forecast remains fail-closed with MT M15 off");
  // CRF-only risk bypass is independent of the shared lot-sizing switch.
  P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
  laneBars[1]={700,800,900,1000,1001};sends=0;closeSends=0;uptime=200000;sendMode=0;equity=10000;
- InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpAllowAutoM15=true;InpUseAutoSchedule=false;
+ InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpAllowAutoM15=false;InpUseAutoSchedule=false;
  InpBypassRisk=false;InpMinimumLot=false;InpCrfRiskBypass=false;InpCrfAutoFollowthroughPct=15;calcOk=false;
  P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;
  forecast=CRFForecastState{};forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_bar=1000;forecast.last_entry=100;
@@ -297,9 +294,8 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  long savedOrderMode=orderMode;orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;
  check(!CRFPlaceMarket(current) && sends==0,"CRF bypass cannot omit broker SL");orderMode=savedOrderMode;
  InpAutoTrading=false;check(!CRFPlaceMarket(current),"CRF bypass cannot override master off");InpAutoTrading=true;
- InpAllowAutoM15=false;check(!CRFPlaceMarket(current),"CRF bypass cannot override M15 switch");InpAllowAutoM15=true;
  checkOk=false;check(!CRFPlaceMarket(current) && sends==0,"CRF bypass cannot override OrderCheck");checkOk=true;
- uptime+=6000;check(CRFPlaceMarket(current) && sends==1 && MathAbs(lastRequest.volume-0.10)<1e-8 && lastRequest.sl>0 && lastRequest.tp>0,"CRF bypass can send once all retained safety checks pass");
+ uptime+=6000;check(CRFPlaceMarket(current) && sends==1 && MathAbs(lastRequest.volume-0.10)<1e-8 && lastRequest.sl>0 && lastRequest.tp>0,"CRF-only can send with MT M15 off once retained safety checks pass");
  check(g_p5.size()==1 && g_p5[0].bypass==2,"CRF bypass recorded separately from shared bypass");
  P5Close();P5Init();check(g_p5Ready && g_p5.size()==1 && g_p5[0].bypass==2,"CRF bypass diary flag survives restart");
  P5Export();bool exported=false;for(auto &line:csvLines)if(line.size()>18 && line[17]=="30007" && line[15]=="0" && line[line.size()-2]=="1")exported=true;
@@ -315,7 +311,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  // cannot replace an order-check failure with a fictional occupied slot.
  P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
  laneBars[1]={700,800,900,1000,1001};sends=0;uptime=400000;sendMode=0;checkOk=true;permission=true;hedging=true;
- InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpAllowAutoM15=true;InpUseAutoSchedule=false;
+ InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpAllowAutoM15=false;InpUseAutoSchedule=false;
  InpMinimumLot=false;InpBypassRisk=false;InpCrfRiskBypass=false;orderMode=51;g_marketState=MARKET_OPEN;current=q;
  P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;
  forecast=CRFForecastState{};forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_bar=1000;forecast.last_entry=100;

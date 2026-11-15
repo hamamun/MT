@@ -47,8 +47,12 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  f.last_estimate.available=true;f.last_estimate.ready=true;f.last_estimate.reason=5;f.last_estimate.samples=6;f.last_estimate.duration=3;f.last_estimate.duration_low=2;f.last_estimate.duration_high=4;f.last_estimate.target=102;f.last_estimate.move_atr=1.5;
  check(CRFDisplayM15() && CRFReadingLine().find("~4b")!=string::npos,"CRF M15 state");
  InpAutoTrading=true;InpAllowAutoM15=false;
- check(CRFAutoLine().find("Auto: OFF")!=string::npos && CRFPlanLine().find("Auto OFF")!=string::npos && CRFHeaderStatus().find("Auto OFF")!=string::npos,"CRF presentation reports M15 switch off");
- InpAllowAutoM15=true;check(CRFAutoLine().find("Auto: ON")!=string::npos,"CRF auto reports enabled");
+ check(CRFAutoLine().find("Auto: ON")!=string::npos && CRFPlanLine().find("Auto ON")!=string::npos && CRFHeaderStatus().find("Auto ON")!=string::npos && CRFHeaderStatus().find("MT M15 switch OFF")!=string::npos,"CRF auto remains on and MT M15 off is explicitly labeled");
+ g_p4View[3].state=P4_OPEN;g_p4View[3].direction=1;g_p4View[3].entry=100;g_p4View[3].sl=99;g_p4View[3].tp=102;g_p4View[3].lot=.1;
+ check(CRFAutoLine().find("Auto: ON")!=string::npos && CRFAutoLine().find("BUY OPEN")!=string::npos && CRFAutoLine().find("CRF strategy 30007")!=string::npos,"open CRF row remains ON with MT M15 off");
+ g_p4View[3].state=P4_EMPTY;
+ InpAutoTrading=false;check(CRFAutoLine().find("Auto: OFF")!=string::npos && CRFPlanLine().find("Auto OFF")!=string::npos,"master off is shown for CRF");
+ InpAutoTrading=true;InpAllowAutoM15=true;check(CRFAutoLine().find("Auto: ON")!=string::npos && CRFHeaderStatus().find("MT M15 switch ON")!=string::npos,"CRF and MT M15 enabled shown separately");
  g_crfStatus="CRF entry: Daily timer paused";
  check(CRFAutoLine().find("CRF | CRF")==string::npos && CRFAutoLine().find("Daily timer paused")!=string::npos,"auto row avoids duplicate CRF label and shows specific reason");
  check(CRFPlanLine().find("BUY (CRF)")!=string::npos && CRFPlanLine().find("Hammer")!=string::npos && CRFPlanLine().find("Meets selected filters")!=string::npos,"CRF plan details");
