@@ -20,6 +20,7 @@ const int InpCrfMinFollowthroughPct = 55;          // Reference indicator follow
 const double InpCrfMinRewardRisk = 1.2;            // Minimum forecast reward/risk
 input int InpCrfAutoMinimumSamples = 4;              // CRF auto minimum samples (2-50)
 input int InpCrfAutoFollowthroughPct = 15;           // CRF auto minimum follow-through % (1-100)
+input bool InpCrfTrailStop = true;                  // CRF trailstop
 input bool InpCrfRiskBypass = false;                 // CRF risk bypass
 input bool InpCrfCloseProfitableM15 = true;        // Allow CRF to close profitable M15 MT position
 

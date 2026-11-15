@@ -73,6 +73,8 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  MqlTick savedQuote=current;current.bid=100.59;current.ask=100.60;
  check(CRFPlanLine().find("Lot unavailable: Below live R/R filter")!=string::npos,"live entry gate explains why lot preview is unavailable");current=savedQuote;
  calcOk=false;check(CRFPlanLine().find("Lot unavailable: broker volume or sizing unavailable")!=string::npos,"unavailable sizing explains missing lot");calcOk=true;
+ check(CRFHeaderStatus().find("CRF trailstop ON")!=string::npos,"default trail input visible");
+ InpCrfTrailStop=false;check(CRFHeaderStatus().find("CRF trailstop OFF")!=string::npos,"disabled trail input visible");InpCrfTrailStop=true;
  check(CRFHeaderStatus().find("CRF risk bypass OFF")!=string::npos && CRFPlanLine().find("CRF risk bypass OFF")!=string::npos,"CRF bypass default OFF visible");
  f.last_estimate.move_atr=1;check(!CRFAutoFilterReady(f),"reference forecast R/R blocked when bypass off");
  InpCrfRiskBypass=true;check(CRFAutoFilterReady(f) && CRFHeaderStatus().find("CRF risk bypass ON")!=string::npos && CRFPlanLine().find("CRF risk bypass ON")!=string::npos,"CRF bypass ON and auto status visible");

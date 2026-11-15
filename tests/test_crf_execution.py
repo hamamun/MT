@@ -5,24 +5,31 @@ import os, re, runpy, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
 base=runpy.run_path(str(root/'tests/test_trade_diary_runtime.py'))
 stubs=base['stubs']
-stubs=stubs.replace('#define POSITION_PROFIT 48','#define POSITION_PROFIT 48\n#define POSITION_SWAP 80')
+stubs=stubs.replace('#define POSITION_PROFIT 48','#define POSITION_PROFIT 48\n#define POSITION_SWAP 80\n#define POSITION_TIME 81')
 stubs=stubs.replace('double entry=0,sl=0,tp=0,lot=0,profit=0;string symbol,comment;', 'double entry=0,sl=0,tp=0,lot=0,profit=0,swap=0;string symbol,comment;')
+stubs=stubs.replace('double entry=0,sl=0,tp=0,lot=0,profit=0,swap=0;string symbol,comment;', 'double entry=0,sl=0,tp=0,lot=0,profit=0,swap=0;long opened=1000;string symbol,comment;')
+stubs=stubs.replace('p==POSITION_IDENTIFIER?o.id:o.type;', 'p==POSITION_IDENTIFIER?o.id:p==POSITION_TIME?o.opened:o.type;')
+stubs=stubs.replace('int iBarShift(string,int tf,datetime t,bool){auto &b=laneBars[tf];for(int i=0;i<(int)b.size();i++)if(b[i]==t)return (int)b.size()-1-i;return -1;}', 'int iBarShift(string,int tf,datetime t,bool exact){auto &b=laneBars[tf];for(int i=(int)b.size()-1;i>=0;i--)if(b[i]==t || (!exact && b[i]<t))return (int)b.size()-1-i;return -1;}')
 stubs=stubs.replace('p==POSITION_PROFIT?o.profit:o.lot;', 'p==POSITION_PROFIT?o.profit:p==POSITION_SWAP?o.swap:o.lot;')
 stubs=stubs.replace('unsigned long magic=0,order=0;double volume', 'unsigned long magic=0,order=0,position=0;double volume')
 stubs=stubs.replace('datetime bar=1000; bool barProxy=false;', 'datetime bar=1000; bool barProxy=false,priced=false;')
 stubs=stubs.replace(' sends++; if(sendMode==1)', ' if(r.position!=0){closeSends++;if(closeMode==1){out.order=777;out.retcode=TRADE_RETCODE_REJECT;return false;}out.retcode=10009;return true;}\n sends++; if(sendMode==1)')
 stubs=stubs.replace('int sendMode=0,sends=0,cancels=0,modifies=0;', 'int sendMode=0,sends=0,cancels=0,modifies=0,closeSends=0,closeMode=0;')
-stubs=stubs.replace('bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){', 'bool moveOnCheck=false; bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){if(moveOnCheck){current.bid=101.10;current.ask=101.12;}')
+stubs=stubs.replace('bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){', 'bool moveOnCheck=false, loseOnCheck=false; bool OrderCheck(MqlTradeRequest &,MqlTradeCheckResult &out){if(loseOnCheck && !positions.empty())positions[0].profit=-1;if(moveOnCheck){current.bid=101.10;current.ask=101.12;}')
 extra=base['extra']+r'''
 bool FileCopy(string a,int,string b,int){if(diskFail||!files.count(a)||files.count(b))return false;files[b]=files[a];return true;}
 using ENUM_TIMEFRAMES=int;const int PERIOD_M15=1;
+struct MqlRates{long time=0;double open=0,high=0,low=0,close=0;};
+map<long,MqlRates> trailRates;bool trailPartial=false;
+template<class T> bool ArraySetAsSeries(vector<T>&,bool flag){return !flag;}
+int CopyRates(string,int tf,int start,int count,vector<MqlRates>&out){out.clear();for(int i=start+count-1;i>=start;i--){auto t=iTime(_Symbol,tf,i);if(!trailRates.count(t))return -1;out.push_back(trailRates[t]);}if(trailPartial){out.pop_back();return count-1;}return count;}
 bool PositionSelectByTicket(ulong tk){for(size_t i=0;i<positions.size();i++)if(positions[i].ticket==tk){selectedPosition=int(i);return true;}return false;}
 template<class T> void ZeroMemory(T &x){x=T{};}
 bool P3HasBidBars(){return true;}
 double P3Down(double v,double t){return floor(v/t+1e-9)*t;}
 double P3Up(double v,double t){return ceil(v/t-1e-9)*t;}
 enum ENUM_MT_CRF_MODE{MT_CRF_MODE_BOTH=0,MT_CRF_MODE_MT=1,MT_CRF_MODE_CRF=2};
-ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseProfitableM15=true,InpCrfRiskBypass=false;
+ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseProfitableM15=true,InpCrfRiskBypass=false,InpCrfTrailStop=true;
 int InpCrfHistoryBars=600,InpCrfMaxHorizon=24,InpCrfAtrLength=14,InpCrfTrendLength=12,InpCrfVolumeLength=20,InpCrfSwingLength=20,InpCrfMinimumAnalogs=6,InpCrfMinFollowthroughPct=55,InpCrfAutoMinimumSamples=4,InpCrfAutoFollowthroughPct=15;double InpCrfMinRewardRisk=1.2;
 struct CRFParameters{int history,horizon,atr,trend,volume,swing,minimum_analogs,followthrough;double reward_risk;};
 struct CRFCandidate{int direction=0;double stop=99,atr=1;};struct CRFEstimate{bool ready=false,available=true;int duration_high=0,reason=1,samples=6;double confidence=60,move_atr=2;};
@@ -41,7 +48,7 @@ auto=(root/'MT_CRF_AutoRuntime.mqh').read_text().replace('#include "MT_AutoPolic
 inputs='\n'.join(line for line in (root/'MT_PlanRuntime.mqh').read_text().splitlines() if line.startswith('input ') and any(re.search(r'\b'+n+r'\b',line) for n in ('InpAutoTrading','InpPlaceStopLoss','InpAllowAutoM5','InpAllowAutoM15','InpAllowAutoM30','InpUseAutoSchedule','InpAutoStartTime','InpAutoEndTime')))
 auto=re.sub(r'^input ','',inputs,flags=re.M)+'\n'+auto
 execution=(root/'MT_CRF_Execution.mqh').read_text().replace('#include "MT_CRF_Observer.mqh"','').replace('#include "MT_CRF_Exposure.mqh"','')
-execution=execution.replace('CRFFeedUpdate updates[];','vector<CRFFeedUpdate> updates;')
+execution=execution.replace('CRFFeedUpdate updates[];','vector<CRFFeedUpdate> updates;').replace('MqlRates bars[];','vector<MqlRates> bars;')
 exposure=(root/'MT_CRF_Exposure.mqh').read_text()
 main=r'''
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
@@ -202,6 +209,8 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  CRFExposure ex;double net=0,buffer=0;
  check(CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),true,ex) && ex.kind==CRF_EXPOSURE_MT_OPEN,"native exposure observed");
  positions[0].profit=20;deals[0].commission=0;deals[0].fee=0;
+ CRFTrailStep(ex);check(closeSends==0 && g_crfTrailActivationBar==0,"trail ignores native MT M15 position");
+ check(!CRFRequestPositionClose(1,ex,q,true) && !CRFRequestPositionClose(2,ex,q,true) && closeSends==0,"trail close cannot target native MT magic");
  check(!CRFNetAndCloseBuffer(ex,q,net,buffer),"unknown future commission fails safe");
  deals[0].commission=-0.2;positions[0].profit=0.1;
  check(CRFNetAndCloseBuffer(ex,q,net,buffer) && net<=buffer,"below-cost position remains open");
@@ -345,6 +354,82 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  moveOnCheck=false;current=q;uptime+=6000;sendMode=2;CRFProcessExecution(true);
  check(g_crfStatus.find("Order rejected:")==0 && sends==1,"definite broker rejection is not reported as placed");
  CRFRefreshBroker();CRFProcessExecution(false);check(g_crfStatus.find("Order rejected:")!=string::npos,"rejection survives timer reconciliation");
+ // Exercise the real trail step with broker-like positions and M15 candles.
+ auto trailSetup=[&](int dir){
+   P4Close();files.clear();positions.clear();orders.clear();deals.clear();history.clear();
+   P4Init();InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpCrfTrailStop=true;
+   connected=true;permission=true;hedging=true;diskFail=false;checkOk=true;moveOnCheck=false;loseOnCheck=false;
+   closeSends=0;closeMode=0;uptime+=10000;trailPartial=false;trailRates.clear();
+   laneBars[1]={700,800,900,1000};current={100,100.02,terminalTime,terminalTime*1000};
+   Position p;p.ticket=2000;p.id=3000;p.magic=P4Magic(3);p.type=dir>0?POSITION_TYPE_BUY:POSITION_TYPE_SELL;
+   p.entry=100;p.sl=dir>0?90:110;p.tp=dir>0?110:90;p.lot=.07;p.profit=2;p.symbol=_Symbol;p.comment="MT4-CRF";p.opened=1000;positions.push_back(p);
+ };
+ auto exposureNow=[&](){CRFExposure v;check(CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),true,v) && v.kind==CRF_EXPOSURE_CRF_OPEN,"test exposure found");return v;};
+ auto bar=[&](long t,double op,double cl){trailRates[t]={t,op, max(op,cl),min(op,cl),cl};};
+ // The fill bar is the first completion. Two completed bars activate at 1001.
+ trailSetup(1);auto tv=exposureNow();CRFTrailStep(tv);laneBars[1].push_back(1001);CRFTrailStep(tv);
+ check(g_crfTrailActivationBar==0,"one completed candle does not activate by time");
+ laneBars[1].push_back(1002);CRFTrailStep(tv);check(g_crfTrailActivationBar==1001 && closeSends==0,"two completed candles activate with second as reference");
+ bar(1001,101,100);bar(1002,99,98);bar(1003,97,96);
+ laneBars[1].push_back(1003);CRFTrailStep(tv);check(closeSends==0,"one subsequent candle is insufficient");
+ laneBars[1].push_back(1004);CRFTrailStep(tv);check(closeSends==1 && lastRequest.position==2000 && lastRequest.volume==.07 && lastRequest.type==ORDER_TYPE_SELL && g_crfCloseKind==2,"profitable BUY pattern requests full position close");
+ CRFTrailStep(tv);check(closeSends==1,"durable close intent prevents duplicate trail close");
+ // Halfway is based on the executable exit side and inclusive of equality.
+ trailSetup(1);tv=exposureNow();current={104.99,105.01,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ check(g_crfTrailActivationBar==0,"BUY ask alone reaching halfway does not activate");current.bid=105;CRFTrailStep(tv);
+ check(g_crfTrailActivationBar==1000,"BUY bid equal halfway activates in fill candle");
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);check(closeSends==0,"halfway activation waits for two later closed candles");laneBars[1].push_back(1003);CRFTrailStep(tv);check(closeSends==1,"halfway BUY pattern closes");
+ trailSetup(-1);tv=exposureNow();current={94.99,95.01,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ check(g_crfTrailActivationBar==0,"SELL bid alone reaching halfway does not activate");current.ask=95;CRFTrailStep(tv);
+ check(g_crfTrailActivationBar==1000,"SELL ask equal halfway activates");
+ bar(1000,99,100);bar(1001,101,102);bar(1002,103,104);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);CRFTrailStep(tv);
+ check(closeSends==1 && lastRequest.type==ORDER_TYPE_BUY && lastRequest.volume==.07,"profitable SELL inverse pattern requests full close");
+ // Equality in any required comparison is not a pattern, in both directions.
+ for(int dir: {1,-1}) for(int field=0;field<4;field++){
+   trailSetup(dir);tv=exposureNow();current=dir>0?MqlTick{105,105.02,terminalTime,terminalTime*1000}:MqlTick{94.98,95,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+   double a=100,b=100-dir,c=100-2*dir,d=100-3*dir,e=100-4*dir;
+   if(field==0)b=a;if(field==1)c=b;if(field==2)d=c;if(field==3)e=d;
+   bar(1000,a,a);bar(1001,b,c);bar(1002,d,e);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);CRFTrailStep(tv);
+   check(closeSends==0,"equal gap or equal candle body is rejected");
+ }
+ // Loss skips the pattern even if it becomes profitable later on that bar.
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);bar(1003,95,94);
+ laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);positions[0].profit=0;
+ laneBars[1].push_back(1003);CRFTrailStep(tv);positions[0].profit=2;CRFTrailStep(tv);check(closeSends==0,"zero profit skips pattern permanently for that candle");
+ laneBars[1].push_back(1004);CRFTrailStep(tv);check(closeSends==1,"later new profitable pattern can close");
+ // Missing/partial data must not be consumed; it can be retried on same bar.
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);
+ trailPartial=true;CRFTrailStep(tv);check(closeSends==0 && g_crfStatus.find("history unavailable")!=string::npos,"partial candles block close");trailPartial=false;CRFTrailStep(tv);check(closeSends==1,"complete history can be retried");
+ // Disabled, master off, journal failure and restart all fail safely.
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};InpCrfTrailStop=false;CRFTrailStep(tv);check(g_crfTrailActivationBar==0,"disabled trail does not activate");
+ InpCrfTrailStop=true;diskFail=true;CRFTrailStep(tv);check(!g_p4Ready && closeSends==0,"activation journal failure suspends actions");diskFail=false;
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);
+ P4Close();P4Init();tv=exposureNow();CRFTrailStep(tv);check(g_crfTrailActivationBar==1000 && closeSends==0,"restart keeps activation but does not replay old pattern");
+ bar(1003,95,94);laneBars[1].push_back(1004);InpAutoTrading=false;CRFTrailStep(tv);check(closeSends==0,"master off prevents trail close");InpAutoTrading=true;CRFTrailStep(tv);check(closeSends==1,"master on permits a current profitable pattern");
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ positions[0].id=3001;tv=exposureNow();CRFTrailStep(tv);check(closeSends==0 && g_crfStatus.find("identity mismatch")!=string::npos,"different position cannot inherit activation");
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);InpCrfTrailStop=false;CRFTrailStep(tv);
+ check(closeSends==0,"disabled trail input blocks a valid profitable pattern");
+ InpCrfTrailStop=true;positions[0].profit=-5;CRFTrailStep(tv);check(closeSends==0 && g_crfStatus.find("not in profit")!=string::npos,"negative floating profit skips pattern");
+
+ // Recheck the selected broker position's floating profit immediately before send.
+ trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);
+ loseOnCheck=true;CRFTrailStep(tv);check(closeSends==0,"profit falling during order check blocks trail send");loseOnCheck=false;positions[0].profit=2;uptime+=6000;CRFTrailStep(tv);check(closeSends==0,"failed final profit check consumes old pattern");
+ // End-to-end position management invokes trail; expiry and replacement still
+ // close at a loss regardless of this separate input.
+ auto tracked=[&](){g_p4[3].active=1;g_p4[3].direction=1;g_p4[3].position=3000;g_p4[3].planBar=900;g_p4View[3].state=P4_OPEN;g_crfOrderSignalBar=900;g_crfAttemptedSignalBar=900;g_crfOrderDuration=50;g_crfObserverAvailable=true;g_crfForecastCurrent=true;forecast.signal_bar=900;};
+ trailSetup(1);tracked();current={105,105.02,terminalTime,terminalTime*1000};CRFProcessExecution(false);
+ bar(1000,101,100);bar(1001,99,98);bar(1002,97,96);laneBars[1].push_back(1001);CRFProcessExecution(false);laneBars[1].push_back(1002);CRFProcessExecution(false);laneBars[1].push_back(1003);CRFProcessExecution(false);
+ check(closeSends==1 && g_crfCloseKind==2,"normal CRF processing invokes profitable candle exit");
+ trailSetup(1);tracked();InpCrfTrailStop=false;positions[0].profit=-5;g_crfOrderDuration=1;laneBars[1].push_back(1001);CRFProcessExecution(false);
+ check(closeSends==1,"expiry remains independent of trail input and profit");
+ trailSetup(1);tracked();InpCrfTrailStop=false;positions[0].profit=-5;forecast.signal_bar=1000;laneBars[1].push_back(1001);CRFProcessExecution(false);
+ check(closeSends==1,"replacement remains independent of trail input and profit");
  if(!f)cout<<"CRF execution integration stub checks passed\n";
  return f?1:0;}
 '''

@@ -8,7 +8,7 @@ source=r'''
 #define input
 #include "MT_CRF_Inputs.mqh"
 int main(){
- if(InpCrfAutoMinimumSamples!=4 || InpCrfMinimumAnalogs!=6 || InpCrfAutoFollowthroughPct!=15 || InpCrfRiskBypass || !CRFBuildReady()) return 1;
+ if(!InpCrfTrailStop || InpCrfAutoMinimumSamples!=4 || InpCrfMinimumAnalogs!=6 || InpCrfAutoFollowthroughPct!=15 || InpCrfRiskBypass || !CRFBuildReady()) return 1;
  for(int m=0;m<3;m++){
    InpMode=(ENUM_MT_CRF_MODE)m;
    for(int i=1;i<=100;i++){InpCrfAutoFollowthroughPct=i;if(!CRFBuildReady())return 2;}

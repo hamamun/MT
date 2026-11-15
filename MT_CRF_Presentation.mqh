@@ -109,6 +109,7 @@ string CRFPlanLine()
 string CRFHeaderStatus()
 {
    string threshold=" / CRF auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"% / min "+IntegerToString(InpCrfAutoMinimumSamples)+" samples / CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
+   threshold+=(string)" / CRF trailstop "+(InpCrfTrailStop?"ON":"OFF");
    if(InpMode==MT_CRF_MODE_BOTH) threshold+=(string)" / MT M15 switch "+(P4LaneEnabled(1)?"ON":"OFF");
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return g_crfStatus+threshold;
    CRFForecastState f=g_crfObserver.forecast;

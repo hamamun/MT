@@ -239,11 +239,16 @@ bool CRFNetAndCloseBuffer(const CRFExposure &v, const MqlTick &q, double &net, d
    return MathIsValidNumber(net) && MathIsValidNumber(buffer) && buffer>=0;
 }
 
-bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick &q)
+bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick &q,
+                             const bool trailProfitOnly=false)
 {
    if((kind!=1 && kind!=2) || !InpAutoTrading || g_crfCloseKind!=0 || !g_p4Ready || !P4CanTrade() ||
       g_marketState!=MARKET_OPEN || !P4FreshQuote(q) || v.position_ticket==0 || v.position_id==0 ||
       !PositionSelectByTicket(v.position_ticket)) return false;
+   if(trailProfitOnly && (kind!=2 || !InpCrfTrailStop)) return false;
+   double trailProfit=0;
+   if(trailProfitOnly && (!PositionGetDouble(POSITION_PROFIT,trailProfit) ||
+      !MathIsValidNumber(trailProfit) || trailProfit<=0)) return false;
    if(kind==1 && (!InpCrfCloseProfitableM15 || InpMode!=MT_CRF_MODE_BOTH ||
       AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)) return false;
    P3Plan crfPlan;
@@ -274,6 +279,12 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
       again.position_id!=v.position_id || again.position_ticket!=v.position_ticket || again.volume!=volume ||
       !SymbolInfoTick(_Symbol,latest) || !P4FreshQuote(latest) || latest.bid!=q.bid || latest.ask!=q.ask ||
       !P4CanTrade() || !InpAutoTrading) return false;
+   if(trailProfitOnly && (!PositionSelectByTicket(v.position_ticket) ||
+      !PositionGetInteger(POSITION_IDENTIFIER,id) || (ulong)id!=v.position_id ||
+      !PositionGetInteger(POSITION_MAGIC,magic) || magic!=expected ||
+      !PositionGetString(POSITION_SYMBOL,symbol) || symbol!=_Symbol ||
+      !PositionGetDouble(POSITION_VOLUME,volume) || volume!=v.volume ||
+      !PositionGetDouble(POSITION_PROFIT,trailProfit) || !MathIsValidNumber(trailProfit) || trailProfit<=0)) return false;
    if(kind==1)
    {
       double net=0, buffer=0;
@@ -378,6 +389,7 @@ bool CRFPlaceMarket(const MqlTick &q)
    g_p4[3].active=1; g_p4[3].direction=plan.signal; g_p4[3].cancel=0;
    g_p4[3].order=0; g_p4[3].position=0; g_p4[3].birthBar=0; g_p4[3].planBar=plan.bar;
    g_crfOrderSignalBar=plan.bar; g_crfAttemptedSignalBar=plan.bar; g_crfOrderDuration=f.last_estimate.duration_high;
+   g_crfTrailPosition=0; g_crfTrailActivationBar=0; CRFTrailResetSession();
    if(!P4Persist()) return CRFEntryBlocked("Execution journal unavailable: REVIEW");
    int row=P5BeginCrf(plan,q);
    if(row<0)
@@ -415,10 +427,91 @@ void CRFRefreshBroker()
    if(active && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY)
    {
       g_crfReleaseBar=iTime(_Symbol,PERIOD_M15,1); g_crfTakeover=0;
+      g_crfTrailPosition=0; g_crfTrailActivationBar=0; CRFTrailResetSession();
       if(CRFNativeReserved()) P4Clear(1,true);
       if(g_crfCloseKind==2) { g_crfCloseKind=0; g_crfClosePosition=0; g_crfCloseTicket=0; g_crfCloseVolume=0; }
       if(g_crfReleaseBar<=0 || !P4Persist()) { g_p4Ready=false; g_crfStatus="CRF close reconciliation: REVIEW"; }
    }
+}
+
+// CRF candle exit: activation is the earlier of two completed M15 bars
+// including the fill bar, or a live move halfway from broker entry to TP.
+// The activation candle is the reference. Only the next two closed candles
+// can form the first exit pattern; later checks always use the newest pair.
+// The broker SL/TP and the descriptive forecast are never modified here.
+void CRFTrailStep(const CRFExposure &v)
+{
+   if(!InpCrfTrailStop) { g_crfStatus="CRF position open | trailstop OFF"; return; }
+   if(v.kind!=CRF_EXPOSURE_CRF_OPEN || v.position_id==0 || v.position_ticket==0 ||
+      !v.protective_levels_present || (v.direction!=1 && v.direction!=-1))
+   { g_crfStatus="CRF trailstop: position or SL/TP unavailable: REVIEW"; return; }
+   if(g_crfTrailPosition!=0 && g_crfTrailPosition!=v.position_id)
+   { g_crfStatus="CRF trailstop: position identity mismatch: REVIEW"; return; }
+   if(!PositionSelectByTicket(v.position_ticket))
+   { g_crfStatus="CRF trailstop: position unavailable: REVIEW"; return; }
+   long opened=0;
+   if(!PositionGetInteger(POSITION_TIME,opened) || opened<=0)
+   { g_crfStatus="CRF trailstop: opening time unavailable"; return; }
+   int openShift=iBarShift(_Symbol,PERIOD_M15,(datetime)opened,false);
+   datetime fillBar=openShift>=0?iTime(_Symbol,PERIOD_M15,openShift):0;
+   datetime currentBar=iTime(_Symbol,PERIOD_M15,0), latestClosed=iTime(_Symbol,PERIOD_M15,1);
+   if(openShift<0 || fillBar<=0 || fillBar>(datetime)opened || currentBar<=0 || latestClosed<=0 ||
+      (openShift>0 && iTime(_Symbol,PERIOD_M15,openShift-1)<=(datetime)opened))
+   { g_crfStatus="CRF trailstop: opening candle history unavailable"; return; }
+   // Do not trade a pattern already in the past at attach/restart.
+   if(g_crfTrailSessionPosition!=v.position_id)
+   { g_crfTrailSessionPosition=v.position_id; g_crfTrailSessionBar=latestClosed; }
+   if(g_crfTrailActivationBar==0)
+   {
+      datetime activated=0;
+      if(openShift>=2) activated=iTime(_Symbol,PERIOD_M15,openShift-1);
+      else
+      {
+         MqlTick q;
+         if(v.direction*(v.target-v.entry)>0 && SymbolInfoTick(_Symbol,q) && P4FreshQuote(q) && q.time>=opened)
+         {
+            double price=v.direction>0?q.bid:q.ask;
+            if(v.direction*(price-v.entry)>=0.5*v.direction*(v.target-v.entry)) activated=currentBar;
+         }
+      }
+      if(activated>0)
+      {
+         g_crfTrailPosition=v.position_id; g_crfTrailActivationBar=activated;
+         if(!P4Persist()) { g_crfStatus="CRF trailstop: execution journal unavailable: REVIEW"; return; }
+      }
+   }
+   if(g_crfTrailActivationBar==0) { g_crfStatus="CRF position open | trailstop waiting activation"; return; }
+   if(g_crfTrailActivationBar<fillBar || iBarShift(_Symbol,PERIOD_M15,g_crfTrailActivationBar,true)<0)
+   { g_crfStatus="CRF trailstop: activation candle unavailable: REVIEW"; return; }
+   if(latestClosed<=g_crfTrailSessionBar) { g_crfStatus="CRF position open | trailstop active"; return; }
+   MqlRates bars[];
+   if(!ArraySetAsSeries(bars,false) || CopyRates(_Symbol,PERIOD_M15,1,3,bars)!=3 || ArraySize(bars)!=3 ||
+      bars[0].time!=iTime(_Symbol,PERIOD_M15,3) || bars[1].time!=iTime(_Symbol,PERIOD_M15,2) ||
+      bars[2].time!=latestClosed || iTime(_Symbol,PERIOD_M15,1)!=latestClosed ||
+      bars[0].time<=0 || bars[1].time<=bars[0].time || bars[2].time<=bars[1].time ||
+      !P3Positive(bars[0].close) || !P3Positive(bars[1].open) || !P3Positive(bars[1].close) ||
+      !P3Positive(bars[2].open) || !P3Positive(bars[2].close))
+   { g_crfStatus="CRF trailstop: candle history unavailable"; return; }
+   if(bars[0].time<g_crfTrailActivationBar)
+   { g_crfTrailSessionBar=latestClosed; g_crfStatus="CRF position open | trailstop waiting two candles"; return; }
+   bool pattern=v.direction>0?
+      (bars[1].open<bars[0].close && bars[1].close<bars[1].open &&
+       bars[2].open<bars[1].close && bars[2].close<bars[2].open):
+      (bars[1].open>bars[0].close && bars[1].close>bars[1].open &&
+       bars[2].open>bars[1].close && bars[2].close>bars[2].open);
+   if(!pattern) { g_crfTrailSessionBar=latestClosed; g_crfStatus="CRF position open | trailstop active"; return; }
+   MqlTick q; double profit=0;
+   if(!SymbolInfoTick(_Symbol,q) || !P4FreshQuote(q) || !PositionSelectByTicket(v.position_ticket) ||
+      !PositionGetDouble(POSITION_PROFIT,profit) || !MathIsValidNumber(profit))
+   { g_crfStatus="CRF trailstop: current quote or profit unavailable"; return; }
+   if(profit<=0)
+   { g_crfTrailSessionBar=latestClosed; g_crfStatus="CRF trailstop: candle exit skipped; not in profit"; return; }
+   if(!InpAutoTrading) { g_crfStatus="CRF trailstop: auto trading OFF"; return; }
+   // A pattern is evaluated once. If the final broker/profit recheck fails,
+   // do not turn a later tick into an exit on an already-consumed candle.
+   g_crfTrailSessionBar=latestClosed;
+   if(CRFRequestPositionClose(2,v,q,true)) g_crfStatus="CRF trailstop: close requested";
+   else g_crfStatus="CRF trailstop: close not requested; awaiting next pattern";
 }
 
 // A forecast may be confirmed and displayed but still fail the historical
@@ -475,8 +568,12 @@ void CRFProcessExecution(bool allowEntry)
          if(SymbolInfoTick(_Symbol,q) && CRFRequestPositionClose(2,v,q)) g_crfStatus="CRF close requested";
          else g_crfStatus="CRF close waiting for broker";
       }
-      else if(!g_crfObserverAvailable || !g_crfForecastCurrent) g_crfStatus="CRF position: forecast unavailable";
-      else g_crfStatus=v.protective_levels_present?"CRF position open":"CRF position SL/TP missing: REVIEW";
+      else if(!v.protective_levels_present) g_crfStatus="CRF position SL/TP missing: REVIEW";
+      else
+      {
+         CRFTrailStep(v);
+         if(!g_crfObserverAvailable || !g_crfForecastCurrent) g_crfStatus+=" | forecast unavailable";
+      }
       return;
    }
    if(InpMode==MT_CRF_MODE_MT) { g_crfStatus="MT only"; return; }

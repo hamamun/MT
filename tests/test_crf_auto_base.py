@@ -19,16 +19,20 @@ s=re.sub(r'^input ','',inputs,flags=re.M)+'\n'+s
 s='using ENUM_TIMEFRAMES=int; const int PERIOD_M15=1; bool CRFNativeLaneBlocked(int){return false;}\n'+s
 extra=r'''
  resetWorld();
- check(g_p4Ready && files[g_p4File].size()==272 && files[g_p4File+".crf"].size()==156,"separate legacy and CRF execution journals");
+ check(g_p4Ready && files[g_p4File].size()==272 && files[g_p4File+".crf"].size()==172,"separate legacy and CRF execution journals");
  check(P4Magic(3)!=P4Magic(0) && P4Magic(3)!=P4Magic(1) && P4Magic(3)!=P4Magic(2) && P4Timeframe(3)==PERIOD_M15,"CRF identity and M15 mapping");
  g_p4[3].active=1;g_p4[3].direction=-1;g_p4[3].planBar=1000;g_p4[3].order=551;
  g_crfOrderSignalBar=1000;g_crfOrderDuration=8;g_crfAttemptedSignalBar=1000;
  g_crfCloseKind=2;g_crfClosePosition=1551;g_crfCloseTicket=1551;g_crfCloseVolume=0.03;
+ g_crfTrailPosition=1551;g_crfTrailActivationBar=1001;g_crfTrailSessionPosition=1551;g_crfTrailSessionBar=1002;
  check(P4Persist(),"execution intent persists before broker request");
  auto crfLegacyBytes=files[g_p4File];P4Close();P4Init();
- check(g_p4Ready && g_p4[3].active==1 && g_p4[3].order==551 && g_crfOrderDuration==8 && g_crfCloseKind==2 && g_crfClosePosition==1551 && g_crfAttemptedSignalBar==1000,"CRF execution state restored on restart");
+ check(g_p4Ready && g_p4[3].active==1 && g_p4[3].order==551 && g_crfOrderDuration==8 && g_crfCloseKind==2 && g_crfClosePosition==1551 && g_crfAttemptedSignalBar==1000 && g_crfTrailPosition==1551 && g_crfTrailActivationBar==1001 && g_crfTrailSessionBar==0,"CRF execution state restored on restart without replaying session");
  check(files[g_p4File]==crfLegacyBytes,"MT journal format stays compatible");
- P4Close();string crfName=g_p4File+".crf";files[crfName][0]^=1;auto crfCorrupt=files[crfName];P4Init();
+ P4Close();string crfName=g_p4File+".crf";
+ auto v2=files[crfName];files[crfName].resize(156);files[crfName][4]=1;files[crfName][5]=files[crfName][6]=files[crfName][7]=0;
+ P4Init();check(g_p4Ready && g_crfCloseKind==2 && g_crfTrailPosition==0 && g_crfTrailActivationBar==0,"version one journal migrates without a trail activation");
+ P4Close();files[crfName]=v2;files[crfName][0]^=1;auto crfCorrupt=files[crfName];P4Init();
  check(!g_p4Ready && files[crfName]==crfCorrupt,"corrupt CRF intent stops coordinator and preserves file");
  P4Close();resetWorld();Position foreign;foreign.ticket=900;foreign.id=900;foreign.magic=P4Magic(3);foreign.symbol=_Symbol;foreign.type=POSITION_TYPE_BUY;foreign.entry=100;foreign.sl=99;foreign.tp=101;foreign.lot=.01;foreign.comment="MT4-CRF";positions.push_back(foreign);
  P4Refresh(3);check(g_p4View[3].state==P4_UNTRACKED,"untracked CRF position not adopted without intent");
