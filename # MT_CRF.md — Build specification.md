@@ -81,6 +81,7 @@ Internal CRF calibration defaults (the same reference defaults and validation ra
 ```mql5
 input int InpCrfAutoMinimumSamples = 4; // CRF auto minimum samples (2-50)
 input int InpCrfAutoFollowthroughPct = 15; // CRF auto minimum follow-through % (1-100)
+input bool InpCrfTrailStop = true; // CRF trailstop
 input bool InpCrfRiskBypass = false; // CRF reward/risk and sizing bypass
 input bool InpCrfCloseProfitableM15 = true; // Allow CRF to close profitable M15 MT position
 ```
@@ -252,7 +253,7 @@ enum ENUM_MT_CRF_MODE
 input ENUM_MT_CRF_MODE InpMode = MT_CRF_MODE_BOTH; // Mode
 ```
 
-Put it in `MT_CRF_Inputs.mqh`, together with the auto sample minimum, auto follow-through threshold, CRF risk bypass, and `InpCrfCloseProfitableM15` (Section 2.4, default `true`). Declare the display-only `InpCrfDetails` input after the shared MT inputs in `MT_CRF.mq5`, so `CRF Details` is last in the Inputs tab. Do **not** rename or reorder existing MT inputs.
+Put it in `MT_CRF_Inputs.mqh`, together with the auto sample minimum, auto follow-through threshold, CRF trailstop, CRF risk bypass, and `InpCrfCloseProfitableM15` (Section 2.4, default `true`). Declare the display-only `InpCrfDetails` input after the shared MT inputs in `MT_CRF.mq5`, so `CRF Details` is last in the Inputs tab. Do **not** rename or reorder existing MT inputs.
 
 MT's existing `InpAutoTrading` (default `false`) remains the **real-money master switch**. CRF never sends an order when it is `false`, in any Mode. CRF can still scan and display.
 
@@ -264,7 +265,7 @@ MT's existing `InpAutoTrading` (default `false`) remains the **real-money master
 | `MT + CRF` **(default)** | Always, on **M15** closed bars | M5/M30 normal; M15 switches to CRF during takeover | **Only M15 MT entries paused** during CRF takeover; M5/M30 continue; M15 resumes after CRF end + next M15 bar + reconciliation | Yes, in the **existing M15 auto row**, when `InpAutoTrading=true` and the selected auto-trading filters and other execution checks pass, regardless of `InpAllowAutoM15` | Current MT panel + **2 small header lines**; M15 readings/plan/auto rows show CRF while active |
 | `CRF only` | Always, on **M15** closed bars | M5/M30 hidden; M15 row is CRF only | **No MT orders at all** | Yes, in the **existing M15 auto row**, when `InpAutoTrading=true` and the selected auto-trading filters and other execution checks pass, regardless of `InpAllowAutoM15` | MT header/settings kept; only the M15-shaped readings/plan/auto rows remain, all CRF; optional 15-row dashboard in the separate details window |
 
-**CRF inputs:** `InpCrfAutoMinimumSamples` (default 4, range 2–50), `InpCrfAutoFollowthroughPct` (default 15, range 1–100), `InpCrfRiskBypass` (default `false`), `InpCrfCloseProfitableM15` (default `true`), and `InpCrfDetails` / `CRF Details` (default `false`) — see Sections 1.4, 2.4 and 5.3.
+**CRF inputs:** `InpCrfAutoMinimumSamples` (default 4, range 2–50), `InpCrfAutoFollowthroughPct` (default 15, range 1–100), `InpCrfRiskBypass` (default `false`), `InpCrfTrailStop` / `CRF trailstop` (default `true`), `InpCrfCloseProfitableM15` (default `true`), and `InpCrfDetails` / `CRF Details` (default `false`) — see Sections 1.4, 2.4 and 5.3.
 
 ### 2.2 Meaning of "MT + CRF"
 
@@ -400,11 +401,16 @@ The Indie dashboard uses closed-bar high/low for `TP estimate reached` / `Stop l
 |---|---|
 | Broker TP fills | CRF ends, record `30007` result, M15 row returns to normal MT |
 | Broker SL fills | CRF ends, record `30007` result, M15 row returns to normal MT |
+| Profitable CRF trailstop candle pattern | Request full market close when enabled, with a positive broker floating `POSITION_PROFIT` at final check; reconcile broker result |
 | Hard expiry (`Forecast expires in` reaches 0) and position still open | **Request market close**, wait for broker confirmation, then end. No extension. |
 | Opposite confirmed reversal | Close old CRF position, cancel any CRF pending, start **fresh CRF forecast** (do not return to MT) |
 | Newer same-direction confirmed reversal | Close old CRF position, start **fresh CRF forecast** (do not return to MT) |
 | `No historical estimate` / weak quality | No order; CRF keeps watching |
 | MT M15 slot not freed before CRF hard expiry | Forecast expires with `Duration limit reached; no extension`; no CRF order, no forced close, M15 row returns to normal MT |
+
+**CRF trailstop:** When enabled, activate at the earlier of (a) two completed M15 candles starting with the candle containing the broker position opening, or (b) the executable exit quote reaching at least 50% of the distance from actual broker entry to the position TP (BUY Bid, SELL Ask). At (a), the second completed candle is the reference; at (b), the candle containing the threshold crossing is the reference. Beginning with that reference, the next two closed candles must each satisfy a strict comparison: BUY opens below the preceding candle's close and closes below its own open; SELL opens above the preceding close and closes above its own open. A later pair may also qualify. Equality does not qualify.
+
+At a qualifying close, the current broker floating `POSITION_PROFIT` must be strictly positive; zero or loss skips that pattern and a later new pattern is needed. This is the position profit property, not a net-after-commission calculation. An eligible pattern is checked once; if the final safety, broker-check or profit recheck fails, that pattern is consumed. The master Auto Trading switch, fresh quotes, broker permissions, order checks, durable close intent and reconciliation still apply. Broker SL/TP are not changed. Actual fill and net result can differ from the floating profit checked. The activation bar is persisted with the position identity; after restart historical exit patterns are not replayed. If activation occurred while the EA was offline, the exact intrabar 50% crossing cannot be reconstructed; the EA uses observable current data and/or the two-candle activation. Missing candle or opening history blocks this trail rule rather than guessing. The independent forecast observer and expiry/replacement exits remain unchanged, including their behavior when trailstop is off or the position is losing.
 
 A dashboard price-touch **alone** never ends takeover while a broker position is still open. After any CRF end, wait for broker reconciliation + next **M15** closed bar before the M15 lane resumes normal MT entries; M5/M30 were never paused.
 

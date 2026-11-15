@@ -197,11 +197,17 @@ datetime g_crfOrderSignalBar=0, g_crfAttemptedSignalBar=0, g_crfReleaseBar=0;
 int g_crfOrderDuration=0, g_crfCloseKind=0, g_crfTakeover=0; // 1=MT position, 2=CRF position
 ulong g_crfClosePosition=0, g_crfCloseTicket=0;
 double g_crfCloseVolume=0;
+// The activation bar is durable; session bar bookkeeping is deliberately not
+// durable so a restart never replays an old candle exit as a new close request.
+ulong g_crfTrailPosition=0, g_crfTrailSessionPosition=0;
+datetime g_crfTrailActivationBar=0, g_crfTrailSessionBar=0;
+void CRFTrailResetSession() { g_crfTrailSessionPosition=0; g_crfTrailSessionBar=0; }
 
 void CRFResetExecution()
 {
    P4ResetLane(3); g_crfOrderSignalBar=0; g_crfAttemptedSignalBar=0; g_crfReleaseBar=0;
    g_crfOrderDuration=0; g_crfCloseKind=0; g_crfTakeover=0; g_crfClosePosition=0; g_crfCloseTicket=0; g_crfCloseVolume=0;
+   g_crfTrailPosition=0; g_crfTrailActivationBar=0; CRFTrailResetSession();
 }
 bool CRFExecutionValid()
 {
@@ -215,7 +221,8 @@ bool CRFExecutionValid()
       x.modifying!=0 || !MathIsValidNumber(x.modEntry) || !MathIsValidNumber(x.modSL) || !MathIsValidNumber(x.modTP) ||
       g_crfOrderSignalBar<0 || g_crfAttemptedSignalBar<0 || g_crfReleaseBar<0 ||
       (g_crfTakeover!=0 && g_crfTakeover!=1) || g_crfOrderDuration<0 || g_crfOrderDuration>100 || g_crfCloseKind<0 || g_crfCloseKind>2 ||
-      !MathIsValidNumber(g_crfCloseVolume) || g_crfCloseVolume<0) return false;
+      !MathIsValidNumber(g_crfCloseVolume) || g_crfCloseVolume<0 || g_crfTrailActivationBar<0 ||
+      ((g_crfTrailPosition==0)!=(g_crfTrailActivationBar==0))) return false;
    if(x.active!=0 && (g_crfOrderSignalBar<=0 || g_crfOrderDuration<1 || x.planBar!=g_crfOrderSignalBar ||
       g_crfAttemptedSignalBar!=g_crfOrderSignalBar)) return false;
    if(g_crfCloseKind==0)
@@ -229,7 +236,7 @@ bool CRFSaveExecution()
    int h=FileOpen(tmp,FILE_WRITE|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return false;
    ResetLastError(); P4Journal x=g_p4[3];
-   FileWriteInteger(h,1296253765,INT_VALUE); FileWriteInteger(h,1,INT_VALUE);
+   FileWriteInteger(h,1296253765,INT_VALUE); FileWriteInteger(h,2,INT_VALUE);
    FileWriteInteger(h,x.active,INT_VALUE); FileWriteInteger(h,x.direction,INT_VALUE); FileWriteInteger(h,x.cancel,INT_VALUE);
    FileWriteLong(h,(long)x.order); FileWriteLong(h,(long)x.position);
    FileWriteLong(h,(long)x.birthBar); FileWriteLong(h,(long)x.planBar); FileWriteLong(h,(long)x.waitBar);
@@ -240,7 +247,8 @@ bool CRFSaveExecution()
    FileWriteLong(h,(long)g_crfCloseTicket); FileWriteDouble(h,g_crfCloseVolume);
    FileWriteLong(h,(long)g_crfAttemptedSignalBar); FileWriteLong(h,(long)g_crfReleaseBar);
    FileWriteInteger(h,g_crfTakeover,INT_VALUE);
-   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==156); FileClose(h);
+   FileWriteLong(h,(long)g_crfTrailPosition); FileWriteLong(h,(long)g_crfTrailActivationBar);
+   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==172); FileClose(h);
    return ok && FileMove(tmp,g_p4Flags,dest,g_p4Flags|FILE_REWRITE);
 }
 bool CRFLoadExecution()
@@ -249,7 +257,8 @@ bool CRFLoadExecution()
    if(!FileIsExist(dest,g_p4Flags)) return true;
    int h=FileOpen(dest,FILE_READ|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return false;
-   if(FileSize(h)!=156) { FileClose(h); return false; }
+   ulong size=FileSize(h);
+   if(size!=156 && size!=172) { FileClose(h); return false; }
    ResetLastError(); int magic=FileReadInteger(h,INT_VALUE), version=FileReadInteger(h,INT_VALUE);
    P4Journal x;
    x.active=FileReadInteger(h,INT_VALUE); x.direction=FileReadInteger(h,INT_VALUE); x.cancel=FileReadInteger(h,INT_VALUE);
@@ -261,8 +270,12 @@ bool CRFLoadExecution()
    g_crfCloseKind=FileReadInteger(h,INT_VALUE); long closePosition=FileReadLong(h), closeTicket=FileReadLong(h);
    g_crfCloseVolume=FileReadDouble(h); g_crfAttemptedSignalBar=(datetime)FileReadLong(h);
    g_crfReleaseBar=(datetime)FileReadLong(h); g_crfTakeover=FileReadInteger(h,INT_VALUE);
+   long trailPosition=0, trailBar=0;
+   if(version==2 && size==172) { trailPosition=FileReadLong(h); trailBar=FileReadLong(h); }
    bool ok=(GetLastError()==0 && FileTell(h)==FileSize(h)); FileClose(h);
-   if(!ok || magic!=1296253765 || version!=1 || order<0 || position<0 || closePosition<0 || closeTicket<0) return false;
+   if(!ok || magic!=1296253765 || !((version==1 && size==156) || (version==2 && size==172)) ||
+      order<0 || position<0 || closePosition<0 || closeTicket<0 || trailPosition<0 || trailBar<0) return false;
+   g_crfTrailPosition=(ulong)trailPosition; g_crfTrailActivationBar=(datetime)trailBar;
    x.order=(ulong)order; x.position=(ulong)position; g_p4[3]=x;
    g_crfClosePosition=(ulong)closePosition; g_crfCloseTicket=(ulong)closeTicket;
    return CRFExecutionValid();
