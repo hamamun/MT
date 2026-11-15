@@ -86,6 +86,8 @@ struct P2Lane
 };
 P2Lane g_p2[3];
 
+// Select CRF-specific input wording without changing the original MT EA.
+#define MT_CRF_INPUT_LABELS
 #include "MT_PlanRuntime.mqh"
 // Keep this last in the MT5 Inputs tab, after the shared diary-details input.
 input bool InpCrfDetails = false;                       // CRF Details

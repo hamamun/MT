@@ -1190,7 +1190,7 @@ void UpdatePanel()
    UIWrapped("crfStatus",x,crfY,crfLine,inner,step,clrSilver,"CRF uses closed M15 bars and broker-confirmed execution.",g_uiCrfNotes);
    UIWrapped("marketDetail",x,marketY,g_marketDetail,inner,step,clrSilver,"",g_uiMarketNotes);
    UIText("settingsTitle",x+10,settingsY+3,"SETTINGS",UI_MUTED,UI_SIZE);
-   string settingsTip="Input settings only. SL Placement OFF sends new orders without a broker stop loss. Other trading and broker rules still apply.";
+   string settingsTip="Input settings only. The M15 allow-autotrading input controls MT M15, not CRF. SL Placement OFF sends new MT orders without a broker stop loss; CRF still requires SL/TP. Other trading and broker rules still apply.";
    string trendTip="Trend to Follow selects the reference; Allow Against Trend controls alignment, not whether a timeframe is enabled. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane.";
    for(int g=0;g<8;g++)
    {

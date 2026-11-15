@@ -58,7 +58,7 @@ bool CRFNativeLaneBlocked(int lane)
    if(lane!=1) return false;
    if(!g_p4Ready || g_crfCloseKind!=0 || g_p4[3].active!=0 ||
       g_p4View[3].state!=P4_EMPTY || !CRFLaterM15Bar()) return true;
-   if(InpMode==MT_CRF_MODE_MT || !P4LaneEnabled(1)) return false;
+   if(InpMode==MT_CRF_MODE_MT) return false;
    if(!g_crfObserverAvailable || !g_crfForecastCurrent || !g_crfObserver.ready || g_crfTakeover!=0) return true;
    CRFForecastState f=g_crfObserver.forecast;
    return f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar;
@@ -113,7 +113,7 @@ void CRFUpdateForecast()
       if(!P4Persist()) { g_crfObserverAvailable=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
    }
    CRFForecastState f=g_crfObserver.forecast;
-   if(P4LaneEnabled(1) && f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar && g_crfTakeover==0)
+   if(f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar && g_crfTakeover==0)
    {
       g_crfTakeover=1;
       if(!P4Persist()) { g_crfObserverAvailable=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
@@ -244,7 +244,7 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
    if((kind!=1 && kind!=2) || !InpAutoTrading || g_crfCloseKind!=0 || !g_p4Ready || !P4CanTrade() ||
       g_marketState!=MARKET_OPEN || !P4FreshQuote(q) || v.position_ticket==0 || v.position_id==0 ||
       !PositionSelectByTicket(v.position_ticket)) return false;
-   if(kind==1 && (!InpAutoTrading || !P4LaneEnabled(1) || !InpCrfCloseProfitableM15 || InpMode!=MT_CRF_MODE_BOTH ||
+   if(kind==1 && (!InpCrfCloseProfitableM15 || InpMode!=MT_CRF_MODE_BOTH ||
       AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)) return false;
    P3Plan crfPlan;
    if(kind==1 && (!g_crfObserverAvailable || !g_crfForecastCurrent ||
@@ -273,7 +273,7 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
       again.kind!=(kind==1?CRF_EXPOSURE_MT_OPEN:CRF_EXPOSURE_CRF_OPEN) ||
       again.position_id!=v.position_id || again.position_ticket!=v.position_ticket || again.volume!=volume ||
       !SymbolInfoTick(_Symbol,latest) || !P4FreshQuote(latest) || latest.bid!=q.bid || latest.ask!=q.ask ||
-      !P4CanTrade() || !InpAutoTrading || (kind==1 && !P4LaneEnabled(1))) return false;
+      !P4CanTrade() || !InpAutoTrading) return false;
    if(kind==1)
    {
       double net=0, buffer=0;
@@ -304,7 +304,6 @@ bool CRFPlaceMarket(const MqlTick &q)
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return CRFEntryBlocked("Forecast unavailable");
    if(InpMode==MT_CRF_MODE_MT) return CRFEntryBlocked("CRF disabled in MT-only mode");
    if(!InpAutoTrading) return CRFEntryBlocked("Auto trading OFF");
-   if(!P4LaneEnabled(1)) return CRFEntryBlocked("M15 autotrading OFF");
    if(!P4CanTrade()) return CRFEntryBlocked("Trading permission unavailable");
    if(!P4ScheduleOpen())
    {
@@ -367,7 +366,7 @@ bool CRFPlaceMarket(const MqlTick &q)
    if(!SymbolInfoTick(_Symbol,latest) || !P4FreshQuote(latest)) return CRFEntryBlocked("Fresh quote unavailable after order check");
    if(latest.bid!=q.bid || latest.ask!=q.ask) return CRFEntryBlocked("Quote changed during order check; retrying");
    if(!P4CanTrade()) return CRFEntryBlocked("Trading permission unavailable after order check");
-   if(!InpAutoTrading || !P4LaneEnabled(1)) return CRFEntryBlocked("Autotrading switched off during order check");
+   if(!InpAutoTrading) return CRFEntryBlocked("Autotrading switched off during order check");
    P3Plan livePlan;
    reason=CRFLiveEntryReason(f,latest,livePlan);
    if(reason!="") return CRFEntryBlocked(reason);
@@ -481,22 +480,6 @@ void CRFProcessExecution(bool allowEntry)
       return;
    }
    if(InpMode==MT_CRF_MODE_MT) { g_crfStatus="MT only"; return; }
-   if(!P4LaneEnabled(1))
-   {
-      // Input changes reinitialize the EA. Consume a disabled signal and
-      // release any unfilled takeover so it cannot trigger after re-enabling.
-      bool changed=false;
-      if(g_crfObserverAvailable && g_crfObserver.forecast.signal_bar>0 &&
-         g_crfObserver.forecast.signal_bar!=g_crfAttemptedSignalBar)
-      { g_crfAttemptedSignalBar=(datetime)g_crfObserver.forecast.signal_bar; changed=true; }
-      if(g_crfTakeover!=0 && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY)
-      {
-         g_crfTakeover=0; g_crfReleaseBar=iTime(_Symbol,PERIOD_M15,1); changed=true;
-         if(g_crfReleaseBar<=0) { g_p4Ready=false; g_crfStatus="M15 release: REVIEW"; return; }
-      }
-      if(changed && !P4Persist()) { g_p4Ready=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
-      g_crfStatus="M15 autotrading OFF"; return;
-   }
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return;
    CRFForecastState f=g_crfObserver.forecast;
    bool fresh=f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar;

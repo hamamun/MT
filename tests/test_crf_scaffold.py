@@ -12,7 +12,10 @@ assert 'InpCrfAutoMinimumSamples>=2 && InpCrfAutoMinimumSamples<=50' in inputs
 assert 'InpCrfAutoFollowthroughPct = 15' in inputs
 assert 'InpCrfRiskBypass = false' in inputs
 assert re.search(r'input\s+bool\s+InpCrfDetails\s*=\s*false\s*;', ea)
-assert ea.index('#include "MT_PlanRuntime.mqh"') < ea.index('input bool InpCrfDetails')
+assert ea.index('#define MT_CRF_INPUT_LABELS') < ea.index('#include "MT_PlanRuntime.mqh"') < ea.index('input bool InpCrfDetails')
+shared=(root/'MT_PlanRuntime.mqh').read_text()
+assert '#ifdef MT_CRF_INPUT_LABELS\ninput(name="Allow autotrading M15 (CRF Excluded)") bool InpAllowAutoM15 = true;\n#else\ninput bool InpAllowAutoM15 = true;                    // Allow autotrading M15\n#endif' in shared
+assert '#define MT_CRF_INPUT_LABELS' not in (root/'MT.mq5').read_text()
 assert not re.search(r'^input\s', ea[ea.index('input bool InpCrfDetails') + len('input bool InpCrfDetails'):], re.M)
 for f in ('MT_DiaryRuntime.mqh', 'MT_CRF_AutoRuntime.mqh', 'MT_CRF_Execution.mqh', 'MT_CRF_Presentation.mqh', 'MT_CRF_ChartHistory.mqh', 'MT_CRF_Panel.mqh'):
     assert not re.search(r'^input\s', (root / f).read_text(), re.M)
