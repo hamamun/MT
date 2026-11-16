@@ -8,7 +8,7 @@ stubs=base['stubs'].replace('string P5Detail(int i){return details[i];}', 'int d
 #include <vector>
 enum CRFMode {MT_CRF_MODE_BOTH,MT_CRF_MODE_MT,MT_CRF_MODE_CRF};
 CRFMode InpMode=MT_CRF_MODE_BOTH;
-bool InpCrfDetails=false;
+bool InpCrfDetails=false,InpCrfRiskBypass=false;
 string g_crfStatus="Waiting for M15 slot";
 bool displayCRF=true;
 string CRFHeaderStatus(){return g_crfStatus;}
@@ -29,9 +29,23 @@ main=r'''
 int main(){int fails=0;auto check=[&](bool v,const char*m){if(!v){cerr<<"FAIL "<<m<<"\n";fails++;}};
  auto allDetails=[&](){string result;int pages=g_uiDetailsPages;for(int i=0;i<pages;i++){g_uiDetailsPage=i;UpdatePanel();result+=DetailText();}return result;};
  auto hasForecast=[](const string &s){return s.find("CONFIRMED REVERSAL FORECAST")!=string::npos;};
- InpMode=MT_CRF_MODE_BOTH;InpShowDetails=false;InpCrfDetails=false;BuildPanel();
+ InpMode=MT_CRF_MODE_BOTH;InpAutoTrading=false;InpShowDetails=false;InpCrfDetails=false;BuildPanel();
  check(!objects.count("MTD_bg"),"combined mode defaults to no details");
- check(Label("settingKey4")=="Input mode" && Label("settingValue13")=="MT + CRF","mode input shown");
+ check(Label("settingKey5")=="Input mode" && Label("settingValue13")=="MT + CRF","mode input shown");
+ check(Label("settingKey0")=="Auto Trading" && Label("settingValue0")=="OFF" && Label("settingKey1")=="CRF Risk Bypass" && Label("settingValue14")=="OFF","master auto and CRF bypass shown in settings");
+ check(objects["MT_settingKey0_0"].y==objects["MT_settingKey1_0"].y && objects["MT_settingKey1_0"].x>objects["MT_settingBadge0"].x+objects["MT_settingBadge0"].w,"auto and CRF bypass are separated on first row");
+ InpAutoTrading=true;InpCrfRiskBypass=true;UpdatePanel();check(Label("settingValue0")=="ON" && Label("settingValue14")=="ON","settings reflect actual auto and CRF bypass inputs");
+ InpAutoTrading=false;InpCrfRiskBypass=false;UpdatePanel();
+ int widthBeforeSettings=chartWidth;chartWidth=500;UpdatePanel();
+ check(objects["MT_settingKey0_0"].y==objects["MT_settingKey1_0"].y && objects["MT_settingBadge14"].x+objects["MT_settingBadge14"].w<=objects["MT_settings"].x+objects["MT_settings"].w-10,"first-row settings fit on a narrow chart");
+ for(int g=0;g<8;g++){
+    Obj key=objects["MT_settingKey"+to_string(g)+"_0"],next=objects["MT_settingKey"+to_string(g+1)+"_0"];
+    if(key.y==next.y) check(next.x>key.x+UIWidth(key.text,key.size),"same-row settings stay separated");
+    else check(next.y>key.y && next.x==objects["MT_settings"].x+10,"settings wrap by whole groups");
+ }
+ chartWidth=120;UpdatePanel();
+ check(objects["MT_settingKey0_0"].y==objects["MT_settingKey1_0"].y && objects["MT_settingBadge14"].x+objects["MT_settingBadge14"].w<=objects["MT_settings"].x+objects["MT_settings"].w-10,"first row stays intact even when the panel must expand");
+ chartWidth=widthBeforeSettings;UpdatePanel();
  check(Label("reading1_1")=="--" && Label("reading1_7")=="BUY (CRF)" && Label("planSignalText1")=="BUY (CRF)","CRF main readings and plan remain visible");
  check(Wrapped("crfStatus").find("Waiting for M15 slot")!=string::npos && AutoText(1).find("30007")!=string::npos,"status and CRF broker row remain visible");
  InpShowDetails=true;UpdatePanel();string text=allDetails();

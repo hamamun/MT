@@ -94,20 +94,19 @@ string CRFPlanLine()
    if(!planned)
    {
       MqlTick q; P3Plan plan;
-      if(!CRFAutoFilterReady(f)) lotReason="auto filters not met";
-      else if(!SymbolInfoTick(_Symbol,q)) lotReason="live quote unavailable";
+      if(!SymbolInfoTick(_Symbol,q)) lotReason="live quote unavailable";
       else
       {
-         lotReason=CRFLiveEntryReason(f,q,plan);
-         if(lotReason=="") lotReason="broker volume or sizing unavailable";
+         lotReason=CRFManualPlanReason(f,q,plan);
+         if(lotReason=="") lotReason="plan not yet saved";
       }
    }
    s+=" | Lot: "+lot+" | SL: "+CRFPriceText(planned?g_crfPlan.stop:f.active_stop)+" | TP: "+CRFPriceText(planned?g_crfPlan.target:f.active_target);
-   s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+" | Reference quality (55%): "+CRFQualityText(f.last_estimate.reason)+
-      " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars | Auto "+(InpAutoTrading?"ON":"OFF");
+   s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+
+      " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars";
+   s+=" | Forecast / manual preview; auto checks apply";
    s+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED")+
-      " | Auto min samples "+IntegerToString(InpCrfAutoMinimumSamples)+
-      " | CRF risk bypass "+(InpCrfRiskBypass?"ON":"OFF");
+      " | Auto min samples "+IntegerToString(InpCrfAutoMinimumSamples);
    if(lotReason!="") s+=" | Lot unavailable: "+lotReason;
    if(!P3HasBidBars()) s+=" | Bars: Last/unknown proxy";
    return s;
