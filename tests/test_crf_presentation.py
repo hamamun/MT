@@ -20,18 +20,19 @@ string StringSubstr(const string &s,int pos){return s.substr(pos);}
 #define OBJPROP_SELECTABLE 5
 #define OBJPROP_HIDDEN 6
 #define OBJPROP_ARROWCODE 7
+#define OBJPROP_BACK 8
 #define STYLE_SOLID 0
 #define clrAqua 1
 #define clrRed 2
 #define clrYellow 3
 #define clrLimeGreen 4
-struct ChartObject{double price=0;int color=0,type=0;};map<string,ChartObject> chart;
+struct ChartObject{double price=0;int color=0,type=0;bool back=false;};map<string,ChartObject> chart;
 int ObjectFind(int,string n){return chart.count(n)?0:-1;}
 bool ObjectCreate(int,string n,int kind,int,datetime,double price,datetime=0,double=0){chart[n].type=kind;chart[n].price=price;return true;}
 bool ObjectMove(int,string n,int,datetime,double price){chart[n].price=price;return true;}
 bool ObjectDelete(int,string n){chart.erase(n);return true;}
 bool ObjectSetDouble(int,string n,int,double v){chart[n].price=v;return true;}
-bool ObjectSetInteger(int,string n,int prop,long v){if(prop==OBJPROP_COLOR)chart[n].color=int(v);return true;}
+bool ObjectSetInteger(int,string n,int prop,long v){if(prop==OBJPROP_COLOR)chart[n].color=int(v);if(prop==OBJPROP_BACK)chart[n].back=bool(v);return true;}
 void ObjectsDeleteAll(int,string prefix){for(auto i=chart.begin();i!=chart.end();)if(i->first.find(prefix)==0)i=chart.erase(i);else ++i;}
 string TimeToString(datetime,int){return "2026.11.02 10:00";}
 int Bars(string,int){return 1000;}
@@ -68,11 +69,15 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  check(CRFAutoFilterReady(f) && CRFPlanLine().find("Low sample count")!=string::npos && CRFPlanLine().find("Auto filter 15%: PASS")!=string::npos,"reference six-sample quality remains distinct from auto minimum");
  InpCrfAutoMinimumSamples=5;check(CRFPlanLine().find("Lot unavailable: auto filters not met")!=string::npos,"below selected auto samples explains unavailable lot");
  InpCrfAutoMinimumSamples=4;f.last_estimate.samples=6;f.last_estimate.reason=3;
- InpAutoTrading=false;
+ InpAutoTrading=false; CRFUpdatePlan();
  check(CRFPlanLine().find("Lot: --")==string::npos && CRFPlanLine().find("Lot unavailable:")==string::npos && sends==0,"lot preview appears for eligible confirmed signal even with master auto off");
- MqlTick savedQuote=current;current.bid=100.59;current.ask=100.60;
- check(CRFPlanLine().find("Lot unavailable: Below live R/R filter")!=string::npos,"live entry gate explains why lot preview is unavailable");current=savedQuote;
- calcOk=false;check(CRFPlanLine().find("Lot unavailable: broker volume or sizing unavailable")!=string::npos,"unavailable sizing explains missing lot");calcOk=true;
+ P3Plan probeForPresentation; MqlTick savedQuote=current;current.bid=100.59;current.ask=100.60;
+ CRFUpdatePlan();check(CRFPlanLine().find("Lot: --")==string::npos && CRFLiveEntryReason(f,current,probeForPresentation)=="Below live R/R filter","frozen lot stays visible even when live entry is blocked");current=savedQuote;
+ calcOk=false;CRFUpdatePlan();check(CRFPlanLine().find("Lot: --")==string::npos,"temporary sizing failure does not erase frozen lot");calcOk=true;
+ current.bid=102;current.ask=102.02;CRFUpdatePlan();
+ check(CRFPlanLine().find("Signal: NONE")!=string::npos && CRFPlanLine().find("target passed")!=string::npos && CRFHeaderStatus().find("Target passed")!=string::npos,"target-passed plan disappears from plan and header");
+ CRFDashboardRows(rows);check(rows[1].find("Target passed")!=string::npos && rows[5].find("Last entry")!=string::npos,"details distinguish stale forecast from active plan");
+ current=savedQuote;f.active_direction=0;CRFUpdatePlan();f.active_direction=1;CRFUpdatePlan();
  check(CRFHeaderStatus().find("CRF trailstop ON")!=string::npos,"default trail input visible");
  InpCrfTrailStop=false;check(CRFHeaderStatus().find("CRF trailstop OFF")!=string::npos,"disabled trail input visible");InpCrfTrailStop=true;
  check(CRFHeaderStatus().find("CRF risk bypass OFF")!=string::npos && CRFPlanLine().find("CRF risk bypass OFF")!=string::npos,"CRF bypass default OFF visible");
@@ -82,6 +87,9 @@ int main(){int fails=0;auto check=[&](bool b,const char*m){if(!b){cerr<<"FAIL "<
  CRFDashboardRows(rows);check(rows[10].find("reference 55%")!=string::npos && rows[10].find("Auto filter 15%: PASS")!=string::npos,"dashboard distinguishes reference and auto filters");
  f.last_estimate.ready=true;f.last_estimate.reason=5;InpMode=MT_CRF_MODE_BOTH;
  check(CRFSetLevel("entry",1000,1001,100,clrAqua) && CRFSetMarker(1000,false,1,98),"finite line and marker objects created");
+ string stamp=StringFormat("%I64d",(long)1000);string entryKey="MTCRF_entry_"+stamp,markerKey="MTCRF_marker_"+stamp+"_confirmed";
+ check(chart[entryKey].back && chart[markerKey].back,"forecast lines and markers are behind foreground panel");
+ chart[entryKey].back=false;check(CRFSetLevel("entry",1000,1001,100,clrAqua) && chart[entryKey].back,"updates restore background layer on existing objects");
  check(CRFSetLevel("negative",1000,1001,-1,clrRed) && CRFSetMarker(1001,true,-1,0),"finite zero or negative historical prices are not discarded");
  f.active_direction=0;f.remaining=0;
  CRFDashboardRows(rows);check(rows[5].find("Last entry")!=string::npos && rows[7].find("Last TP")!=string::npos,"idle retained values labelled last");

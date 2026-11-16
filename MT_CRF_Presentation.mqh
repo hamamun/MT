@@ -86,17 +86,23 @@ string CRFPlanLine()
                 " | Candidate waiting for confirmation";
       return "M15 | Signal: NONE | CRF watching M15";
    }
-   string s="M15 | Signal: "+CRFSide(f.active_direction)+" (CRF) | MARKET Entry: "+CRFPriceText(f.last_entry);
-   MqlTick q; P3Plan plan; string lot="--", lotReason="";
-   if(!CRFAutoFilterReady(f)) lotReason="auto filters not met";
-   else if(!SymbolInfoTick(_Symbol,q)) lotReason="live quote unavailable";
-   else if(CRFMakeRequestPlan(f,q,plan)) lot=P3LotText(plan.lot);
-   else
+   if(g_crfInvalidPlanSignal==(datetime)f.signal_bar)
+      return "M15 | Signal: NONE | CRF target passed; waiting for new plan";
+   bool planned=g_crfPlan.valid && g_crfPlan.bar==(datetime)f.signal_bar && g_crfPlan.signal==f.active_direction;
+   string s="M15 | Signal: "+CRFSide(f.active_direction)+" (CRF) | MARKET Entry: "+CRFPriceText(planned?g_crfPlan.entry:f.last_entry);
+   string lot=planned?P3LotText(g_crfPlan.lot):"--", lotReason="";
+   if(!planned)
    {
-      lotReason=CRFLiveEntryReason(f,q,plan);
-      if(lotReason=="") lotReason="broker volume or sizing unavailable";
+      MqlTick q; P3Plan plan;
+      if(!CRFAutoFilterReady(f)) lotReason="auto filters not met";
+      else if(!SymbolInfoTick(_Symbol,q)) lotReason="live quote unavailable";
+      else
+      {
+         lotReason=CRFLiveEntryReason(f,q,plan);
+         if(lotReason=="") lotReason="broker volume or sizing unavailable";
+      }
    }
-   s+=" | Lot: "+lot+" | SL: "+CRFPriceText(f.active_stop)+" | TP: "+CRFPriceText(f.active_target);
+   s+=" | Lot: "+lot+" | SL: "+CRFPriceText(planned?g_crfPlan.stop:f.active_stop)+" | TP: "+CRFPriceText(planned?g_crfPlan.target:f.active_target);
    s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+" | Reference quality (55%): "+CRFQualityText(f.last_estimate.reason)+
       " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars | Auto "+(InpAutoTrading?"ON":"OFF");
    s+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED")+
@@ -113,6 +119,8 @@ string CRFHeaderStatus()
    if(InpMode==MT_CRF_MODE_BOTH) threshold+=(string)" / MT M15 switch "+(P4LaneEnabled(1)?"ON":"OFF");
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return g_crfStatus+threshold;
    CRFForecastState f=g_crfObserver.forecast;
+   if(f.active_direction!=0 && g_crfInvalidPlanSignal==(datetime)f.signal_bar)
+      return "Target passed / waiting for new CRF plan / "+g_crfStatus+threshold;
    if(f.active_direction!=0)
    {
       string text=CRFSide(f.active_direction)+" confirmed / expires in "+IntegerToString(f.remaining)+" bars / Auto "+(InpAutoTrading?"ON":"OFF");
@@ -152,10 +160,11 @@ void CRFDashboardRows(string &rows[])
       return;
    }
    CRFForecastState f=g_crfObserver.forecast;
-   bool active=f.active_direction!=0, pending=f.pending.direction!=0, hasLast=f.last_signal.direction!=0;
+   bool targetPassed=f.active_direction!=0 && g_crfInvalidPlanSignal==(datetime)f.signal_bar;
+   bool active=f.active_direction!=0 && !targetPassed, pending=f.pending.direction!=0, hasLast=f.last_signal.direction!=0;
    string side=active?CRFSide(f.active_direction):(pending?CRFSide(f.pending.direction)+"?":(hasLast?CRFSide(f.last_signal.direction)+" (last)":"--"));
    rows[0]="CONFIRMED REVERSAL FORECAST | "+side;
-   rows[1]=(string)"Status | "+(!g_crfForecastCurrent?"M15 history unavailable":(active?"Confirmed reversal active":"Waiting for new confirmed reversal"));
+   rows[1]=(string)"Status | "+(!g_crfForecastCurrent?"M15 history unavailable":(active?"Confirmed reversal active":(targetPassed?"Target passed; waiting for new confirmed reversal":"Waiting for new confirmed reversal")));
    rows[2]=(active?"Pattern | ":"Last pattern | ")+CRFPatternText(f.last_signal.variant);
    rows[3]="Pending candidate | "+(pending?CRFSide(f.pending.direction)+" "+CRFPatternText(f.pending.variant)+" ("+IntegerToString(2-f.pending_elapsed)+" bars left)":"--");
    rows[4]="Data through | "+(f.last_bar>0?TimeToString((datetime)f.last_bar,TIME_DATE|TIME_MINUTES):"--")+" | M15 bar count "+IntegerToString(Bars(_Symbol,PERIOD_M15));
@@ -184,7 +193,8 @@ bool CRFSetLevel(const string name, const long signalBar, const datetime through
    string id="MTCRF_"+name+"_"+StringFormat("%I64d",signalBar);
    if(ObjectFind(0,id)<0 && !ObjectCreate(0,id,OBJ_TREND,0,(datetime)signalBar,price,through,price)) return false;
    return ObjectMove(0,id,0,(datetime)signalBar,price) && ObjectMove(0,id,1,through,price) &&
-          ObjectSetInteger(0,id,OBJPROP_RAY_RIGHT,false) && ObjectSetInteger(0,id,OBJPROP_COLOR,ink) &&
+          ObjectSetInteger(0,id,OBJPROP_RAY_RIGHT,false) && ObjectSetInteger(0,id,OBJPROP_BACK,true) &&
+          ObjectSetInteger(0,id,OBJPROP_COLOR,ink) &&
           ObjectSetInteger(0,id,OBJPROP_STYLE,STYLE_SOLID) && ObjectSetInteger(0,id,OBJPROP_WIDTH,1) &&
           ObjectSetInteger(0,id,OBJPROP_SELECTABLE,false) && ObjectSetInteger(0,id,OBJPROP_HIDDEN,true);
 }
@@ -193,7 +203,8 @@ bool CRFSetMarker(const long bar, const bool candidate, const int direction, con
    if(bar<=0 || (direction!=1 && direction!=-1) || !CRFValidPrice(price)) return false;
    string id="MTCRF_marker_"+StringFormat("%I64d",bar)+(candidate?"_candidate":"_confirmed");
    if(ObjectFind(0,id)<0 && !ObjectCreate(0,id,OBJ_ARROW,0,(datetime)bar,price)) return false;
-   return ObjectMove(0,id,0,(datetime)bar,price) && ObjectSetInteger(0,id,OBJPROP_ARROWCODE,159) &&
+   return ObjectMove(0,id,0,(datetime)bar,price) && ObjectSetInteger(0,id,OBJPROP_BACK,true) &&
+          ObjectSetInteger(0,id,OBJPROP_ARROWCODE,159) &&
           ObjectSetInteger(0,id,OBJPROP_COLOR,candidate?clrYellow:(direction>0?clrLimeGreen:clrRed)) &&
           ObjectSetInteger(0,id,OBJPROP_WIDTH,candidate?1:2) &&
           ObjectSetInteger(0,id,OBJPROP_SELECTABLE,false) && ObjectSetInteger(0,id,OBJPROP_HIDDEN,true);

@@ -16,7 +16,8 @@ string CRFChartHistoryStatus(){return "";}
 bool CRFDisplayM15(){return displayCRF && InpMode!=MT_CRF_MODE_MT;}
 string CRFModeText(){return InpMode==MT_CRF_MODE_MT?"MT only":(InpMode==MT_CRF_MODE_CRF?"CRF only":"MT + CRF");}
 string CRFReadingLine(){return "M15 | GT: -- | CT: -- | ST: -- | RG: -- | PT: ~4b | SC: --";}
-string CRFPlanLine(){return "M15 | Signal: BUY (CRF) | MARKET Entry: 1.12200 | Lot: 0.01 | SL: 1.12000 | TP: 1.12500 | Meets selected filters";}
+string crfPlanText="M15 | Signal: BUY (CRF) | MARKET Entry: 1.12200 | Lot: 0.01 | SL: 1.12000 | TP: 1.12500 | Meets selected filters";
+string CRFPlanLine(){return crfPlanText;}
 string CRFAutoLine(){return "M15 | Auto: ON | BUY OPEN | Entry 1.12200 | Lot 0.01 | SL 1.12000 | TP 1.12500 | CRF strategy 30007";}
 void CRFDashboardRows(vector<string> &rows){rows.resize(15);rows[0]="CONFIRMED REVERSAL FORECAST";for(int i=1;i<15;i++)rows[i]="CRF dashboard row "+to_string(i);}
 template<class T> int ArraySize(const vector<T>&v){return int(v.size());}
@@ -44,6 +45,22 @@ int main(){int fails=0;auto check=[&](bool v,const char*m){if(!v){cerr<<"FAIL "<
  check(!objects.count("MT_plan0") && !objects.count("MT_plan2") && objects.count("MT_plan1"),"CRF-only hides other plan lanes");
  check(!objects.count("MT_autoRow0") && !objects.count("MT_autoRow2") && objects.count("MT_autoRow1"),"CRF-only hides other execution lanes");
  check(!objects.count("MTD_bg") && diaryDetailCalls==0 && diaryInsightCalls==0,"CRF-only defaults to no separate details");
+ // Screenshot-like short values should use the available plan width rather
+ // than crowd Entry/Lot/SL together while leaving a large gap before TP.
+ int savedWidth=chartWidth;string oldCrfPlan=crfPlanText,old0=plans[0],old2=plans[2];chartWidth=1600;
+ crfPlanText="M15 | Signal: SELL (CRF) | MARKET Entry: 87.040 | Lot: 0.01 | SL: 88.020 | TP: 86.210 | Pattern: Bearish engulfing";
+ UpdatePanel();
+ check(PlanValue(1,0)=="87.040" && PlanValue(1,1)=="0.01" && PlanValue(1,2)=="88.020" && PlanValue(1,3)=="86.210","CRF plan retains screenshot-like prices and lot");
+ for(int c=0;c<3;c++){
+   string a="MT_planHeading1_"+to_string(c)+"_0",b="MT_planHeading1_"+to_string(c+1)+"_0";
+   check(objects[b].x-(objects[a].x+UIWidth(objects[a].text,objects[a].size))>=12,"CRF plan headings have breathing room");
+   string va="MT_planValue1_"+to_string(c)+"_0";
+   check(objects[b].x-(objects[va].x+UIWidth(objects[va].text,objects[va].size))>=12,"CRF plan values do not crowd next column");
+ }
+ int headingX=objects["MT_planHeading1_1_0"].x;
+ plans[0]="M5 | Signal: BUY | MARKET Entry: "+string(100,'9')+" | Lot: 0.01 | SL: 1 | TP: 2";
+ plans[2]=plans[0];UpdatePanel();check(objects["MT_planHeading1_1_0"].x==headingX,"hidden native plans do not distort CRF-only column spacing");
+ plans[0]=old0;plans[2]=old2;crfPlanText=oldCrfPlan;chartWidth=savedWidth;UpdatePanel();
  InpCrfDetails=true;UpdatePanel();check(objects.count("MTD_bg") && objects["MTD_titleText_0"].text=="CRF DETAILS","CRF-only forecast details can be enabled");
  check(g_uiDetailsPages>1,"forecast-only pagination is exercised");
  string crfOnly=allDetails();

@@ -942,8 +942,10 @@ void UpdatePanel()
    bool inlineCash=true; int planSize=UI_SIZE,moneySize=UI_SIZE-1;
    string planHead[4]={"Entry","Lot","SL","TP"};
    for(int c=0;c<4;c++) planCol[0][c]=UIWidth(planHead[c],planSize)+8;
+   if(CRFDisplayM15()) planCol[0][0]=(int)MathMax(planCol[0][0],UIWidth("Ref entry",planSize)+8);
    for(int i=0;i<3;i++)
    {
+      if(InpMode==MT_CRF_MODE_CRF && i!=1) continue;
       string data[4];
       data[0]=plan[i].entry; data[1]=plan[i].lot; data[2]=plan[i].sl; data[3]=plan[i].tp;
       for(int c=0;c<4;c++)
@@ -1030,7 +1032,14 @@ void UpdatePanel()
    int leftW=readRowW, autoW=inner-leftW-gap;
    int autoX=x+leftW+gap;
    inlineCash=(planTotal+18<=leftW);
-   if(!inlineCash)
+   if(inlineCash)
+   {
+      // Use the available row width as even gutters rather than leaving
+      // Entry/Lot/SL crowded together with unused space after TP.
+      int spareCols=leftW-18-planTotal;
+      for(int c=0;c<4;c++) planCol[0][c]+=spareCols/4+(c<spareCols%4?1:0);
+   }
+   else
    {
       planSize=UI_SIZE-1; moneySize=UI_SIZE-2;
       int usable=(int)MathMax(4,leftW-18);
@@ -1223,43 +1232,45 @@ void UpdatePanel()
    {
       if(InpMode==MT_CRF_MODE_CRF && i!=1) continue;
       string n=IntegerToString(i);
+      string rowPlanTip=planTip;
+      if(i==1 && CRFDisplayM15()) rowPlanTip="CRF MARKET reference entry is the confirmation candle close, not the request or fill. The market request uses BUY Ask or SELL Bid; Auto Execution shows broker entry. SL and TP are mandatory. The frozen lot can be blocked by current risk or broker checks.";
       UIWrapped("readFallback"+n+"_",x+10,yy,readingOK[i]?"":readings[i],leftW-20,step,clrSilver,"",g_uiReadingNotes[i]); yy+=readRows[i]*step;
       int rowY=cardY[i];
-      UIText("planTFText"+n,cardX[i]+10,rowY+6,plan[i].recognized?tf[i]:"",clrWhite,UI_SIZE,planTip);
+      UIText("planTFText"+n,cardX[i]+10,rowY+6,plan[i].recognized?tf[i]:"",clrWhite,UI_SIZE,rowPlanTip);
       int sigX=cardX[i]+tfW+11;
-      UIText("planSignalText"+n,sigX,rowY+6,plan[i].signal,UIValueColor(plan[i].signal),UI_SIZE,planTip);
+      UIText("planSignalText"+n,sigX,rowY+6,plan[i].signal,UIValueColor(plan[i].signal),UI_SIZE,rowPlanTip);
       int styleX=cardX[i]+tfW+6+UIWidth(plan[i].signal)+12;
-      UIText("planStyleText"+n,styleX+5,rowY+6,plan[i].style,clrWhite,UI_SIZE,planTip);
+      UIText("planStyleText"+n,styleX+5,rowY+6,plan[i].style,clrWhite,UI_SIZE,rowPlanTip);
       UIText("planVolumeText"+n,styleX+UIWidth(plan[i].style)+17,rowY+6,
-             plan[i].volume==""?"":"VOL "+plan[i].volume,clrSilver,UI_SIZE,planTip);
+             plan[i].volume==""?"":"VOL "+plan[i].volume,clrSilver,UI_SIZE,rowPlanTip);
       string data[4];
       data[0]=plan[i].entry; data[1]=plan[i].lot; data[2]=plan[i].sl; data[3]=plan[i].tp;
       int colX=cardX[i]+9;
       for(int c=0;c<4;c++)
       {
          string id=n+"_"+IntegerToString(c);
-         UIText("planHeading"+id,colX,rowY+step+9,plan[i].entry==""?"":planHead[c],UI_MUTED,planSize,planTip);
-         UIText("planValue"+id,colX,rowY+2*step+9,inlineCash?data[c]:"",clrWhite,planSize,planTip);
-         UIWrapped("planValueRows"+id+"_",colX,rowY+2*step+9,inlineCash?"":data[c],planCol[i][c]-8,step,clrWhite,planTip,g_uiPlanValues[i][c],planSize);
+         UIText("planHeading"+id,colX,rowY+step+9,plan[i].entry==""?"":(c==0 && i==1 && CRFDisplayM15()?"Ref entry":planHead[c]),UI_MUTED,planSize,rowPlanTip);
+         UIText("planValue"+id,colX,rowY+2*step+9,inlineCash?data[c]:"",clrWhite,planSize,rowPlanTip);
+         UIWrapped("planValueRows"+id+"_",colX,rowY+2*step+9,inlineCash?"":data[c],planCol[i][c]-8,step,clrWhite,rowPlanTip,g_uiPlanValues[i][c],planSize);
          if(c==2 || c==3)
          {
             string money=c==2?plan[i].slCash:plan[i].tpCash;
-            UIText("planMoney"+id,colX+UIWidth(data[c],planSize)+4,rowY+2*step+9,inlineCash?money:"",c==2?clrTomato:clrLime,moneySize,planTip);
-            UIWrapped("planMoneyRows"+id+"_",colX,rowY+(2+valueRows[i])*step+9,inlineCash?"":money,planCol[i][c]-8,step,c==2?clrTomato:clrLime,planTip,g_uiCashRows[i][c-2],moneySize);
+            UIText("planMoney"+id,colX+UIWidth(data[c],planSize)+4,rowY+2*step+9,inlineCash?money:"",c==2?clrTomato:clrLime,moneySize,rowPlanTip);
+            UIWrapped("planMoneyRows"+id+"_",colX,rowY+(2+valueRows[i])*step+9,inlineCash?"":money,planCol[i][c]-8,step,c==2?clrTomato:clrLime,rowPlanTip,g_uiCashRows[i][c-2],moneySize);
          }
          colX+=planCol[i][c];
       }
       int detailY=rowY+(plan[i].entry==""?1:2+valueRows[i]+cashRows[i])*step+9;
-      UIWrapped("planNote"+n+"_",cardX[i]+10,detailY,plan[i].notes,leftW-20,step,clrOrange,planTip,g_uiPlanNotes[i]);
+      UIWrapped("planNote"+n+"_",cardX[i]+10,detailY,plan[i].notes,leftW-20,step,clrOrange,rowPlanTip,g_uiPlanNotes[i]);
       int distanceY=detailY+planNoteRows[i]*step;
-      UIWrapped("planDistance"+n+"_",cardX[i]+10,distanceY,planDistance[i],leftW-20,step,clrSilver,planTip,g_uiPlanDistances[i]);
+      UIWrapped("planDistance"+n+"_",cardX[i]+10,distanceY,planDistance[i],leftW-20,step,clrSilver,rowPlanTip,g_uiPlanDistances[i]);
       UIText("planQuote"+n,0,0,"",clrWhite,UI_SIZE);
    }
    autoY=readHeaderY;
    for(int i=0;i<3;i++)
    {
       if(InpMode==MT_CRF_MODE_CRF && i!=1) continue;
-      string n=IntegerToString(i),tip=(i==1 && CRFDisplayM15()?"CRF M15: "+g_crfStatus:P4Tooltip(i)),mode=UIPart(autos[i],1);
+      string n=IntegerToString(i),tip=(i==1 && CRFDisplayM15()?"CRF M15: "+g_crfStatus+". "+P4Tooltip(3):P4Tooltip(i)),mode=UIPart(autos[i],1);
       bool normal=(UIPart(autos[i],0)==tf[i] && (mode=="Auto: ON" || mode=="Auto: OFF"));
       if(StringFind(autos[i]," | TP distance (price): ")>=0) tip+=" TP distance is from the current BUY Bid or SELL Ask to the broker TP, in price units; negative means passed. A pending order is not a fill.";
       UIText("autoTFText"+n,autoX+9,autoY,normal?tf[i]:"",clrWhite,UI_SIZE,tip);
