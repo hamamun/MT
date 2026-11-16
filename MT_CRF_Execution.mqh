@@ -61,7 +61,8 @@ bool CRFNativeLaneBlocked(int lane)
    if(InpMode==MT_CRF_MODE_MT) return false;
    if(!g_crfObserverAvailable || !g_crfForecastCurrent || !g_crfObserver.ready || g_crfTakeover!=0) return true;
    CRFForecastState f=g_crfObserver.forecast;
-   return f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar;
+   return f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar &&
+          g_crfInvalidPlanSignal!=(datetime)f.signal_bar;
 }
 
 void CRFInitRuntime()
@@ -113,7 +114,8 @@ void CRFUpdateForecast()
       if(!P4Persist()) { g_crfObserverAvailable=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
    }
    CRFForecastState f=g_crfObserver.forecast;
-   if(f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar && g_crfTakeover==0)
+   if(f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar &&
+      g_crfInvalidPlanSignal!=(datetime)f.signal_bar && g_crfTakeover==0)
    {
       g_crfTakeover=1;
       if(!P4Persist()) { g_crfObserverAvailable=false; g_crfStatus="Execution journal unavailable: REVIEW"; return; }
@@ -186,6 +188,43 @@ bool CRFMakeRequestPlan(const CRFForecastState &f, const MqlTick &q, P3Plan &pla
    if(!P3Positive(plan.lot)) return false;
    plan.priced=true; plan.valid=true;
    return true;
+}
+
+// Freeze a confirmed CRF plan once sizing succeeds. Subsequent quote checks
+// may block execution, but must not erase or silently resize its displayed lot.
+void CRFUpdatePlan()
+{
+   if(!g_p4Ready || !g_crfObserverAvailable || !g_crfForecastCurrent) return;
+   CRFForecastState f=g_crfObserver.forecast;
+   bool changed=false;
+   if(g_crfPlan.valid && (f.active_direction==0 || g_crfPlan.bar!=(datetime)f.signal_bar ||
+                          g_crfPlan.signal!=f.active_direction))
+   { CRFResetPlan(); changed=true; }
+   if(g_crfInvalidPlanSignal!=0 && (f.active_direction==0 || g_crfInvalidPlanSignal!=(datetime)f.signal_bar))
+   { g_crfInvalidPlanSignal=0; changed=true; }
+   MqlTick q;
+   bool haveQuote=SymbolInfoTick(_Symbol,q) && P4FreshQuote(q);
+   double target=g_crfPlan.valid?g_crfPlan.target:f.active_target;
+   if(f.active_direction!=0 && f.signal_bar>0 && haveQuote && P3Positive(target) &&
+      f.active_direction*((f.active_direction>0?q.bid:q.ask)-target)>=0)
+   {
+      if(g_crfPlan.valid) { CRFResetPlan(); changed=true; }
+      if(g_crfInvalidPlanSignal!=(datetime)f.signal_bar)
+      { g_crfInvalidPlanSignal=(datetime)f.signal_bar; changed=true; }
+   }
+   if(f.active_direction!=0 && f.signal_bar>0 && g_crfInvalidPlanSignal!=(datetime)f.signal_bar &&
+      !g_crfPlan.valid && haveQuote)
+   {
+      P3Plan plan;
+      if(CRFMakeRequestPlan(f,q,plan)) { g_crfPlan=plan; changed=true; }
+   }
+   if(g_crfInvalidPlanSignal==(datetime)f.signal_bar && g_crfInvalidPlanSignal!=0 &&
+      g_crfTakeover!=0 && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY && g_crfCloseKind==0)
+   {
+      g_crfTakeover=0; g_crfReleaseBar=iTime(_Symbol,PERIOD_M15,1); changed=true;
+      if(g_crfReleaseBar<=0) { g_p4Ready=false; g_crfStatus="M15 release: REVIEW"; return; }
+   }
+   if(changed && !P4Persist()) g_crfStatus="Execution journal unavailable: REVIEW";
 }
 
 // Compute net and a conservative exit reserve from position-linked broker
@@ -311,6 +350,8 @@ bool CRFPlaceMarket(const MqlTick &q)
    g_crfEntryReason="";
    g_crfEntryReasonSignal=g_crfObserver.forecast.signal_bar;
    if(!g_p4Ready) return CRFEntryBlocked("Execution coordinator unavailable: REVIEW");
+   CRFUpdatePlan();
+   if(!g_p4Ready) return CRFEntryBlocked("Execution coordinator unavailable: REVIEW");
    if(!g_p5Ready) return CRFEntryBlocked("Trade diary unavailable: REVIEW");
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return CRFEntryBlocked("Forecast unavailable");
    if(InpMode==MT_CRF_MODE_MT) return CRFEntryBlocked("CRF disabled in MT-only mode");
@@ -345,10 +386,18 @@ bool CRFPlaceMarket(const MqlTick &q)
       return CRFEntryBlocked("M15 execution state awaiting reconciliation");
    if(!P4CooldownReady(1)) return CRFEntryBlocked(g_p4Ready?"Waiting for next closed M15 bar after previous trade":"Execution coordinator unavailable: REVIEW");
    if(!g_p4Ready) return CRFEntryBlocked("Execution coordinator unavailable: REVIEW");
-   P3Plan plan;
-   string reason=CRFLiveEntryReason(f,q,plan);
+   if(g_crfInvalidPlanSignal==(datetime)f.signal_bar) return CRFEntryBlocked("Forecast target already passed");
+   P3Plan liveSized;
+   string reason=CRFLiveEntryReason(f,q,liveSized);
    if(reason!="") return CRFEntryBlocked(reason);
-   if(!CRFMakeRequestPlan(f,q,plan)) return CRFEntryBlocked("CRF lot sizing unavailable");
+   if(!g_crfPlan.valid || g_crfPlan.bar!=(datetime)f.signal_bar || g_crfPlan.signal!=f.active_direction)
+      return CRFEntryBlocked("Confirmed CRF plan unavailable");
+   P3Plan plan=g_crfPlan; plan.priced=true; plan.barProxy=!P3HasBidBars();
+   if(!plan.market || plan.entry!=liveSized.entry || plan.stop!=liveSized.stop || plan.target!=liveSized.target)
+      return CRFEntryBlocked("Confirmed CRF plan changed: REVIEW");
+   // Keep the frozen plan lot, but never exceed a newly reduced risk-sized lot.
+   if(!CRFMakeRequestPlan(f,q,liveSized)) return CRFEntryBlocked("CRF lot sizing unavailable");
+   if(plan.lot>liveSized.lot+1e-8) return CRFEntryBlocked("Frozen lot exceeds current risk limit");
    ENUM_ORDER_TYPE_FILLING fill;
    if(!P4FillMode(true,fill)) return CRFEntryBlocked("Broker filling mode unavailable");
    ulong now=GetTickCount64();
@@ -381,6 +430,8 @@ bool CRFPlaceMarket(const MqlTick &q)
    P3Plan livePlan;
    reason=CRFLiveEntryReason(f,latest,livePlan);
    if(reason!="") return CRFEntryBlocked(reason);
+   if(!CRFMakeRequestPlan(f,latest,livePlan) || plan.lot>livePlan.lot+1e-8)
+      return CRFEntryBlocked("Frozen lot exceeds current risk limit or sizing unavailable");
    // Reserve the shared native M15 lane before saving CRF intent. P4Save
    // writes the native journal first, so a crash between the two saves can
    // only leave a conservative REVIEW reservation, never an unguarded send.
@@ -530,6 +581,8 @@ string CRFQualityBlockedStatus(const CRFForecastState &f)
 void CRFProcessExecution(bool allowEntry)
 {
    if(!g_p4Ready) return;
+   CRFUpdatePlan();
+   if(!g_p4Ready) return;
    CRFExposure v;
    if(!P4Connected()) { g_crfStatus="Broker disconnected: REVIEW"; return; }
    if(!CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),v) || v.kind==CRF_EXPOSURE_REVIEW)
@@ -579,7 +632,8 @@ void CRFProcessExecution(bool allowEntry)
    if(InpMode==MT_CRF_MODE_MT) { g_crfStatus="MT only"; return; }
    if(!g_crfObserverAvailable || !g_crfForecastCurrent) return;
    CRFForecastState f=g_crfObserver.forecast;
-   bool fresh=f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar;
+   bool fresh=f.active_direction!=0 && CRFAutoFilterReady(f) && f.signal_bar!=g_crfAttemptedSignalBar &&
+              g_crfInvalidPlanSignal!=(datetime)f.signal_bar;
    if(!fresh && g_crfTakeover!=0 && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY)
    {
       g_crfTakeover=0; g_crfReleaseBar=iTime(_Symbol,PERIOD_M15,1);
@@ -587,7 +641,9 @@ void CRFProcessExecution(bool allowEntry)
    }
    if(!fresh)
    {
-      if(f.active_direction!=0 && !CRFAutoFilterReady(f))
+      if(f.active_direction!=0 && g_crfInvalidPlanSignal==(datetime)f.signal_bar)
+         g_crfStatus="Forecast target passed; waiting for new plan";
+      else if(f.active_direction!=0 && !CRFAutoFilterReady(f))
       {
          g_crfStatus=CRFQualityBlockedStatus(f);
          if(f.pending.direction!=0) g_crfStatus+="; candidate waiting confirmation";
@@ -635,7 +691,9 @@ void CRFProcessExecution(bool allowEntry)
          else if(!CRFPlaceMarket(q)) g_crfStatus="CRF entry: "+g_crfEntryReason;
       }
       else if(g_crfEntryReasonSignal==f.signal_bar && g_crfEntryReason!="")
-         g_crfStatus="Last entry attempt: "+g_crfEntryReason;
+         // Keep the latest entry-check reason stable across ticks and timer
+         // refreshes. The timer does not perform or submit an entry request.
+         g_crfStatus="CRF entry: "+g_crfEntryReason;
       else g_crfStatus="Waiting for market tick to check entry";
    }
 }

@@ -151,6 +151,7 @@ void OnTick()
       UpdateState(ServerNow());
       CRFUpdateForecast();
       CRFRefreshBroker();
+      CRFUpdatePlan();
       P4Process(true);
       CRFProcessExecution(true);
       CRFChartHistoryStep();
@@ -165,7 +166,7 @@ void OnTimer()
 {
    P3DiaryMonitor();
    if(ChartSupported()) UpdateState(ServerNow());
-   if(ChartSupported()) { CRFUpdateForecast(); CRFRefreshBroker(); }
+   if(ChartSupported()) { CRFUpdateForecast(); CRFRefreshBroker(); CRFUpdatePlan(); }
    P4Process(false);
    if(ChartSupported()) { CRFProcessExecution(false); CRFChartHistoryStep(); }
    UpdatePanel();

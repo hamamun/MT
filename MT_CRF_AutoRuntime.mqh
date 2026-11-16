@@ -129,11 +129,14 @@ struct P4View
    int direction;
    ulong order, position;
    double entry, sl, tp, lot, floatingProfit;
-   bool floatingValid, pendingNoSL;
+   bool floatingValid, floatingCached, pendingNoSL;
    string note;
 };
 P4Journal g_p4[4];
 P4View g_p4View[4];
+// Presentation-only last broker value; never used for closing decisions.
+ulong g_crfLastProfitPosition=0;
+double g_crfLastProfit=0;
 ulong g_p4Attempt[4];
 ulong g_p4HistoryAttempt[4], g_p4HistoryOrder[4];
 string g_p4CheckNote[4];
@@ -197,6 +200,10 @@ datetime g_crfOrderSignalBar=0, g_crfAttemptedSignalBar=0, g_crfReleaseBar=0;
 int g_crfOrderDuration=0, g_crfCloseKind=0, g_crfTakeover=0; // 1=MT position, 2=CRF position
 ulong g_crfClosePosition=0, g_crfCloseTicket=0;
 double g_crfCloseVolume=0;
+// A confirmed CRF plan is frozen once built, independently of native MT.
+P3Plan g_crfPlan;
+datetime g_crfInvalidPlanSignal=0;
+void CRFResetPlan() { g_crfPlan.valid=false; }
 // The activation bar is durable; session bar bookkeeping is deliberately not
 // durable so a restart never replays an old candle exit as a new close request.
 ulong g_crfTrailPosition=0, g_crfTrailSessionPosition=0;
@@ -208,6 +215,7 @@ void CRFResetExecution()
    P4ResetLane(3); g_crfOrderSignalBar=0; g_crfAttemptedSignalBar=0; g_crfReleaseBar=0;
    g_crfOrderDuration=0; g_crfCloseKind=0; g_crfTakeover=0; g_crfClosePosition=0; g_crfCloseTicket=0; g_crfCloseVolume=0;
    g_crfTrailPosition=0; g_crfTrailActivationBar=0; CRFTrailResetSession();
+   CRFResetPlan(); g_crfInvalidPlanSignal=0;
 }
 bool CRFExecutionValid()
 {
@@ -222,7 +230,11 @@ bool CRFExecutionValid()
       g_crfOrderSignalBar<0 || g_crfAttemptedSignalBar<0 || g_crfReleaseBar<0 ||
       (g_crfTakeover!=0 && g_crfTakeover!=1) || g_crfOrderDuration<0 || g_crfOrderDuration>100 || g_crfCloseKind<0 || g_crfCloseKind>2 ||
       !MathIsValidNumber(g_crfCloseVolume) || g_crfCloseVolume<0 || g_crfTrailActivationBar<0 ||
-      ((g_crfTrailPosition==0)!=(g_crfTrailActivationBar==0))) return false;
+      ((g_crfTrailPosition==0)!=(g_crfTrailActivationBar==0)) || g_crfInvalidPlanSignal<0) return false;
+   if(g_crfPlan.valid && (!g_crfPlan.market || g_crfPlan.bar<=0 || (g_crfPlan.signal!=1 && g_crfPlan.signal!=-1) ||
+      !P3Positive(g_crfPlan.entry) || !P3Positive(g_crfPlan.stop) || !P3Positive(g_crfPlan.target) || !P3Positive(g_crfPlan.lot) ||
+      g_crfPlan.signal*(g_crfPlan.entry-g_crfPlan.stop)<=0 || g_crfPlan.signal*(g_crfPlan.target-g_crfPlan.entry)<=0 ||
+      g_crfPlan.bar==g_crfInvalidPlanSignal)) return false;
    if(x.active!=0 && (g_crfOrderSignalBar<=0 || g_crfOrderDuration<1 || x.planBar!=g_crfOrderSignalBar ||
       g_crfAttemptedSignalBar!=g_crfOrderSignalBar)) return false;
    if(g_crfCloseKind==0)
@@ -236,7 +248,7 @@ bool CRFSaveExecution()
    int h=FileOpen(tmp,FILE_WRITE|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return false;
    ResetLastError(); P4Journal x=g_p4[3];
-   FileWriteInteger(h,1296253765,INT_VALUE); FileWriteInteger(h,2,INT_VALUE);
+   FileWriteInteger(h,1296253765,INT_VALUE); FileWriteInteger(h,3,INT_VALUE);
    FileWriteInteger(h,x.active,INT_VALUE); FileWriteInteger(h,x.direction,INT_VALUE); FileWriteInteger(h,x.cancel,INT_VALUE);
    FileWriteLong(h,(long)x.order); FileWriteLong(h,(long)x.position);
    FileWriteLong(h,(long)x.birthBar); FileWriteLong(h,(long)x.planBar); FileWriteLong(h,(long)x.waitBar);
@@ -248,7 +260,13 @@ bool CRFSaveExecution()
    FileWriteLong(h,(long)g_crfAttemptedSignalBar); FileWriteLong(h,(long)g_crfReleaseBar);
    FileWriteInteger(h,g_crfTakeover,INT_VALUE);
    FileWriteLong(h,(long)g_crfTrailPosition); FileWriteLong(h,(long)g_crfTrailActivationBar);
-   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==172); FileClose(h);
+   FileWriteLong(h,g_crfPlan.valid?(long)g_crfPlan.bar:0);
+   FileWriteInteger(h,g_crfPlan.valid?g_crfPlan.signal:0,INT_VALUE);
+   FileWriteInteger(h,g_crfPlan.valid?(g_crfPlan.market?1:0):0,INT_VALUE);
+   FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.entry:0); FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.stop:0);
+   FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.target:0); FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.lot:0);
+   FileWriteLong(h,(long)g_crfInvalidPlanSignal);
+   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==228); FileClose(h);
    return ok && FileMove(tmp,g_p4Flags,dest,g_p4Flags|FILE_REWRITE);
 }
 bool CRFLoadExecution()
@@ -258,7 +276,7 @@ bool CRFLoadExecution()
    int h=FileOpen(dest,FILE_READ|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return false;
    ulong size=FileSize(h);
-   if(size!=156 && size!=172) { FileClose(h); return false; }
+   if(size!=156 && size!=172 && size!=228) { FileClose(h); return false; }
    ResetLastError(); int magic=FileReadInteger(h,INT_VALUE), version=FileReadInteger(h,INT_VALUE);
    P4Journal x;
    x.active=FileReadInteger(h,INT_VALUE); x.direction=FileReadInteger(h,INT_VALUE); x.cancel=FileReadInteger(h,INT_VALUE);
@@ -271,10 +289,27 @@ bool CRFLoadExecution()
    g_crfCloseVolume=FileReadDouble(h); g_crfAttemptedSignalBar=(datetime)FileReadLong(h);
    g_crfReleaseBar=(datetime)FileReadLong(h); g_crfTakeover=FileReadInteger(h,INT_VALUE);
    long trailPosition=0, trailBar=0;
-   if(version==2 && size==172) { trailPosition=FileReadLong(h); trailBar=FileReadLong(h); }
+   if((version==2 && size==172) || (version==3 && size==228)) { trailPosition=FileReadLong(h); trailBar=FileReadLong(h); }
+   long planBar=0, invalidSignal=0; int planDirection=0, planMarket=0;
+   double planEntry=0,planStop=0,planTarget=0,planLot=0;
+   if(version==3 && size==228)
+   {
+      planBar=FileReadLong(h); planDirection=FileReadInteger(h,INT_VALUE); planMarket=FileReadInteger(h,INT_VALUE);
+      planEntry=FileReadDouble(h); planStop=FileReadDouble(h); planTarget=FileReadDouble(h); planLot=FileReadDouble(h);
+      invalidSignal=FileReadLong(h);
+   }
    bool ok=(GetLastError()==0 && FileTell(h)==FileSize(h)); FileClose(h);
-   if(!ok || magic!=1296253765 || !((version==1 && size==156) || (version==2 && size==172)) ||
-      order<0 || position<0 || closePosition<0 || closeTicket<0 || trailPosition<0 || trailBar<0) return false;
+   if(!ok || magic!=1296253765 || !((version==1 && size==156) || (version==2 && size==172) || (version==3 && size==228)) ||
+      order<0 || position<0 || closePosition<0 || closeTicket<0 || trailPosition<0 || trailBar<0 ||
+      planBar<0 || invalidSignal<0 || (planMarket!=0 && planMarket!=1) ||
+      (planBar==0 && (planDirection!=0 || planMarket!=0 || planEntry!=0 || planStop!=0 || planTarget!=0 || planLot!=0))) return false;
+   g_crfInvalidPlanSignal=(datetime)invalidSignal;
+   if(planBar>0)
+   {
+      g_crfPlan.valid=true; g_crfPlan.bar=(datetime)planBar; g_crfPlan.signal=planDirection;
+      g_crfPlan.market=(planMarket==1); g_crfPlan.entry=planEntry; g_crfPlan.stop=planStop;
+      g_crfPlan.target=planTarget; g_crfPlan.lot=planLot;
+   }
    g_crfTrailPosition=(ulong)trailPosition; g_crfTrailActivationBar=(datetime)trailBar;
    x.order=(ulong)order; x.position=(ulong)position; g_p4[3]=x;
    g_crfClosePosition=(ulong)closePosition; g_crfCloseTicket=(ulong)closeTicket;
@@ -366,7 +401,7 @@ void P4Close()
 void P4Init()
 {
    P4Close();
-   P4ScheduleInit();
+   P4ScheduleInit(); g_crfLastProfitPosition=0; g_crfLastProfit=0;
    for(int i=0;i<4;i++) { P4ResetLane(i); g_p4Attempt[i]=0; g_p4HistoryAttempt[i]=0; g_p4HistoryOrder[i]=0; g_p4CheckNote[i]=""; g_p4CancelNote[i]=""; g_p4CheckBar[i]=0; g_p4CheckScore[i]=0; g_p4View[i].state=P4_UNCERTAIN; g_p4View[i].note="Starting"; }
    g_p4Flags=MQLInfoInteger(MQL_TESTER)!=0?0:FILE_COMMON;
    g_p4File=P3DiaryKey()+"_autotrade.bin";
@@ -563,7 +598,7 @@ bool P4Linked(ulong order, ulong position)
 void P4Refresh(int lane)
 {
    P4View v; v.state=P4_EMPTY; v.direction=0; v.order=0; v.position=0;
-   v.entry=0; v.sl=0; v.tp=0; v.lot=0; v.floatingProfit=0; v.floatingValid=false; v.pendingNoSL=false; v.note="";
+   v.entry=0; v.sl=0; v.tp=0; v.lot=0; v.floatingProfit=0; v.floatingValid=false; v.floatingCached=false; v.pendingNoSL=false; v.note="";
    if(!P4Connected())
    { v.state=P4_UNCERTAIN; v.note="Disconnected"; g_p4View[lane]=v; return; }
    int positions=0,orders=0; ulong positionId=0,orderTicket=0; int posDir=0,orderDir=0;
@@ -669,6 +704,12 @@ void P4Refresh(int lane)
       v.state=orders>0?P4_PARTIAL:P4_OPEN; v.direction=posDir; v.position=positionId; v.order=orderTicket;
       v.entry=posEntry; v.sl=posSL; v.tp=posTP; v.lot=posLot;
       v.floatingProfit=posProfit; v.floatingValid=posProfitValid; v.pendingNoSL=orders>0 && ordSL<=0.0;
+      if(lane==3)
+      {
+         if(posProfitValid) { g_crfLastProfitPosition=positionId; g_crfLastProfit=posProfit; }
+         else if(g_crfLastProfitPosition==positionId)
+         { v.floatingProfit=g_crfLastProfit; v.floatingValid=true; v.floatingCached=true; }
+      }
       if(((lane==3 || InpPlaceStopLoss) && posSL<=0.0) || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
       if(orders>0 && (((lane==3 || InpPlaceStopLoss) && ordSL<=0.0) || ordTP<=0.0))
       { if(v.note!="") v.note+="; "; v.note+="Pending SL/TP missing: REVIEW"; }
@@ -1305,7 +1346,8 @@ string P4Tooltip(int lane)
       mode+="No broker-side stop loss is present. ";
    if(v.pendingNoSL) mode+="The pending remainder has no broker-side stop loss. ";
    if(v.state==P4_OPEN || v.state==P4_PARTIAL)
-      mode+="P/L is the broker's current floating position profit in account currency, excluding swap and commissions; -- means unavailable or stale. ";
+      mode+=(lane==3?"P/L is broker floating position profit in account currency, excluding swap and commissions. Last known means a stale quote or cached broker value; -- means unavailable. ":
+                     "P/L is the broker's current floating position profit in account currency, excluding swap and commissions; -- means unavailable or stale. ");
    if(v.note!="") return(mode+P4Explain(v.note));
    if(v.state==P4_PENDING) return(mode+"A broker-confirmed limit is waiting. Distance is from BUY Ask or SELL Bid.");
    if(v.state==P4_OPEN || v.state==P4_PARTIAL) return(mode+"A broker-confirmed position is open. Displayed SL and TP are broker values.");
@@ -1344,8 +1386,9 @@ string P4Line(int lane)
    {
       MqlTick q; string currency=AccountInfoString(ACCOUNT_CURRENCY);
       bool fresh=SymbolInfoTick(_Symbol,q) && P4FreshQuote(q);
-      string floating=(v.floatingValid && fresh && currency!="")?
+      string floating=(v.floatingValid && (lane==3 || fresh) && currency!="")?
          (v.floatingProfit>0?"+":"")+DoubleToString(v.floatingProfit,2)+" "+currency:"--";
+      if(lane==3 && floating!="--" && (v.floatingCached || !fresh)) floating+=" (last known)";
       s+=" | P/L "+floating;
       if(v.pendingNoSL && v.sl>0.0) s+=" | Pending SL --";
    }
