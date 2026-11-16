@@ -66,6 +66,9 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  forecast.last_estimate.ready=false;forecast.last_estimate.reason=3;forecast.last_estimate.samples=6;forecast.last_estimate.confidence=19;
  CRFProcessExecution(true);
  check(sends==0 && !CRFPlaceMarket(q) && g_crfStatus=="Blocked: below follow-through filter (min 55%)","confirmed weak follow-through is explicitly blocked, never sent");
+ check(g_crfPlan.valid && g_crfPlan.lot>0 && g_crfPlan.entry==forecast.last_entry,"confirmed auto-blocked forecast still has a manual lot preview");
+ double manualLot=g_crfPlan.lot;current.time=terminalTime-30;CRFUpdatePlan();
+ check(g_crfPlan.valid && g_crfPlan.lot==manualLot,"auto-blocked manual lot remains frozen on stale quote");current=q;
  forecast.last_estimate.reason=2;forecast.last_estimate.samples=3;CRFProcessExecution(true);
  check(sends==0 && g_crfStatus=="Blocked: low sample count (3 / min 4)","low-sample reason visible");
  forecast.last_estimate.samples=6;forecast.last_estimate.confidence=60;forecast.last_estimate.reason=4;forecast.last_estimate.move_atr=1;CRFProcessExecution(true);
@@ -104,6 +107,21 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(CRFAutoFilterReason(filtered)==4,"threshold cannot bypass original forecast reward/risk");
  filtered.last_estimate.move_atr=2;filtered.last_estimate.available=false;
  check(!CRFAutoFilterReady(filtered),"threshold cannot bypass missing forecast estimate");
+ P3Plan manual{};check(CRFManualPlanReason(filtered,q,manual)=="confirmed forecast unavailable","no preview without an available confirmed estimate");
+ filtered=forecast;filtered.last_estimate.samples=2;filtered.last_estimate.confidence=1;filtered.last_estimate.move_atr=.5;
+ check(CRFManualPlanReason(filtered,q,manual)=="" && manual.valid && manual.lot>0 && !CRFAutoFilterReady(filtered),"manual sizing ignores auto sample, follow-through and forecast R/R gates");
+ filtered.active_direction=-1;filtered.active_stop=101;filtered.active_target=98;
+ check(CRFManualPlanReason(filtered,q,manual)=="" && manual.signal==-1 && manual.lot>0,"auto-blocked SELL forecast has a manual lot");
+ filtered.active_direction=1;filtered.active_stop=99;filtered.active_target=102;
+ InpCrfRiskBypass=true;check(CRFManualPlanReason(filtered,q,manual)=="" && MathAbs(manual.lot-0.10)<1e-8,"manual preview respects CRF balance-ladder sizing");
+ InpMinimumLot=true;check(CRFManualPlanReason(filtered,q,manual)=="" && MathAbs(manual.lot-volMin)<1e-8,"manual preview respects minimum-lot setting");InpMinimumLot=false;InpCrfRiskBypass=false;
+ MqlTick manualStale=q;manualStale.time=terminalTime-30;
+ check(CRFManualPlanReason(filtered,manualStale,manual)=="fresh quote unavailable","new manual lot requires a fresh quote");
+ calcOk=false;check(CRFManualPlanReason(filtered,q,manual)=="stop loss sizing unavailable","missing broker profit calculation does not invent a lot");calcOk=true;
+ MqlTick beyondStop=q;beyondStop.bid=98.9;beyondStop.ask=98.92;
+ check(CRFManualPlanReason(filtered,beyondStop,manual)=="current price beyond forecast stop","manual preview does not size against an already passed stop");
+ MqlTick manualWide=q;manualWide.bid=100;manualWide.ask=100.8;
+ check(CRFManualPlanReason(filtered,manualWide,manual)=="" && !CRFMakeRequestPlan(filtered,manualWide,manual),"manual preview does not authorize a blocked auto request");
  // The actual request path must use the auto input, not reference quality.
  forecast.last_estimate.ready=false;forecast.last_estimate.reason=2;forecast.last_estimate.confidence=19;
  forecast.last_estimate.samples=3;
@@ -131,6 +149,10 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(CRFSaveExecution(),"target invalidation saved");g_crfInvalidPlanSignal=0;
  check(CRFLoadExecution() && g_crfInvalidPlanSignal==1000,"target invalidation survives restart");
  forecast.active_direction=0;CRFUpdatePlan();check(!g_crfPlan.valid && g_crfInvalidPlanSignal==0,"forecast end clears plan and invalidation");
+ forecast.active_direction=1;forecast.signal_bar=1002;forecast.active_target=102.004;
+ current.bid=102;current.ask=102.02;CRFUpdatePlan();
+ check(g_crfInvalidPlanSignal==1002 && !g_crfPlan.valid,"tick-rounded target touch invalidates even before manual lot is sized");
+ forecast.active_direction=0;CRFUpdatePlan();
  forecast.active_direction=-1;forecast.active_stop=101;forecast.active_target=98;forecast.signal_bar=1001;
  current.bid=98;current.ask=98.01;CRFUpdatePlan();check(g_crfInvalidPlanSignal==0,"SELL target requires exit-side Ask");
  current.ask=98;current.bid=97.99;CRFUpdatePlan();check(g_crfInvalidPlanSignal==1001,"SELL target touch uses Ask");

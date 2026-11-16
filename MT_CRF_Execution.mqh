@@ -160,34 +160,67 @@ string CRFLiveEntryReason(const CRFForecastState &f, const MqlTick &q, P3Plan &p
    return "";
 }
 
-bool CRFMakeRequestPlan(const CRFForecastState &f, const MqlTick &q, P3Plan &plan)
+// Sizing is shared by the manual forecast preview and the auto request. The
+// preview does not authorize a trade or bypass any auto-entry gate.
+string CRFSizePlan(const MqlTick &q, P3Plan &plan)
 {
-   if(CRFLiveEntryReason(f,q,plan)!="") return false;
    double minimum=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
    double maximum=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
-   if(!P3Positive(minimum) || !P3Positive(maximum) || !P3Positive(step)) return false;
+   if(!P3Positive(minimum) || !P3Positive(maximum) || !P3Positive(step) || maximum<minimum)
+      return "broker volume information unavailable";
    double price=plan.signal>0?q.ask:q.bid;
    double requested=0;
    if(InpMinimumLot) requested=minimum;
    else if(InpBypassRisk || InpCrfRiskBypass)
    {
       double balance=AccountInfoDouble(ACCOUNT_BALANCE);
-      if(!P3Positive(balance)) return false;
+      if(!P3Positive(balance)) return "account balance unavailable";
       // CRF has no score, so no score-based 1.5 multiplier is invented.
       requested=balance/1000.0*0.01;
    }
    else
    {
       double equity=AccountInfoDouble(ACCOUNT_EQUITY), loss=0;
-      if(!P3Positive(equity) || !OrderCalcProfit(plan.signal>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL,
-           _Symbol,minimum,price,plan.stop,loss) || !MathIsValidNumber(loss) || loss>=0) return false;
+      if(!P3Positive(equity)) return "account equity unavailable";
+      if(!OrderCalcProfit(plan.signal>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL,
+           _Symbol,minimum,price,plan.stop,loss) || !MathIsValidNumber(loss) || loss>=0)
+         return "stop loss sizing unavailable";
       requested=equity*0.005/(-loss/minimum);
    }
    plan.lot=InpMinimumLot?minimum:P3Volume(requested,minimum,maximum,step);
-   if(!P3Positive(plan.lot)) return false;
+   if(!P3Positive(plan.lot)) return "broker lot sizing unavailable";
    plan.priced=true; plan.valid=true;
-   return true;
+   return "";
+}
+
+// This is a manual-use forecast preview, not a broker-validated request. Auto
+// filters, live R/R, spread and broker restrictions remain in the order path.
+string CRFManualPlanReason(const CRFForecastState &f, const MqlTick &q, P3Plan &plan)
+{
+   ZeroMemory(plan);
+   if((f.active_direction!=1 && f.active_direction!=-1) || f.signal_bar<=0 ||
+      !f.last_estimate.available || !P3Positive(f.last_entry) ||
+      !P3Positive(f.active_stop) || !P3Positive(f.active_target)) return "confirmed forecast unavailable";
+   if(!P4FreshQuote(q)) return "fresh quote unavailable";
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(!P3Positive(tick)) return "broker tick size unavailable";
+   plan.signal=f.active_direction; plan.market=true; plan.bar=(datetime)f.signal_bar;
+   plan.barProxy=!P3HasBidBars(); plan.entry=f.last_entry;
+   plan.stop=plan.signal>0?P3Down(f.active_stop,tick):P3Up(f.active_stop,tick);
+   plan.target=plan.signal>0?P3Down(f.active_target,tick):P3Up(f.active_target,tick);
+   if(!P3Positive(plan.stop) || !P3Positive(plan.target) ||
+      plan.signal*(plan.entry-plan.stop)<=0 || plan.signal*(plan.target-plan.entry)<=0)
+      return "forecast SL/TP invalid";
+   double price=plan.signal>0?q.ask:q.bid;
+   if(plan.signal*(price-plan.stop)<=0) return "current price beyond forecast stop";
+   return CRFSizePlan(q,plan);
+}
+
+bool CRFMakeRequestPlan(const CRFForecastState &f, const MqlTick &q, P3Plan &plan)
+{
+   if(CRFLiveEntryReason(f,q,plan)!="") return false;
+   return CRFSizePlan(q,plan)=="";
 }
 
 // Freeze a confirmed CRF plan once sizing succeeds. Subsequent quote checks
@@ -205,6 +238,10 @@ void CRFUpdatePlan()
    MqlTick q;
    bool haveQuote=SymbolInfoTick(_Symbol,q) && P4FreshQuote(q);
    double target=g_crfPlan.valid?g_crfPlan.target:f.active_target;
+   // Use the same broker-tick rounded target before and after sizing.
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(!g_crfPlan.valid && P3Positive(target) && P3Positive(tick))
+      target=f.active_direction>0?P3Down(target,tick):P3Up(target,tick);
    if(f.active_direction!=0 && f.signal_bar>0 && haveQuote && P3Positive(target) &&
       f.active_direction*((f.active_direction>0?q.bid:q.ask)-target)>=0)
    {
@@ -216,7 +253,7 @@ void CRFUpdatePlan()
       !g_crfPlan.valid && haveQuote)
    {
       P3Plan plan;
-      if(CRFMakeRequestPlan(f,q,plan)) { g_crfPlan=plan; changed=true; }
+      if(CRFManualPlanReason(f,q,plan)=="") { g_crfPlan=plan; changed=true; }
    }
    if(g_crfInvalidPlanSignal==(datetime)f.signal_bar && g_crfInvalidPlanSignal!=0 &&
       g_crfTakeover!=0 && g_p4[3].active==0 && g_p4View[3].state==P4_EMPTY && g_crfCloseKind==0)
