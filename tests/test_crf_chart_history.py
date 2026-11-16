@@ -41,6 +41,7 @@ long terminalMaxBars=200000; long TerminalInfoInteger(int){return terminalMaxBar
 #define OBJPROP_SELECTABLE 5
 #define OBJPROP_HIDDEN 6
 #define OBJPROP_ARROWCODE 7
+#define OBJPROP_BACK 8
 #define STYLE_SOLID 0
 #define clrAqua 1
 #define clrRed 2
@@ -66,11 +67,11 @@ ulong GetTickCount64(){return uptime;}
 void ResetLastError(){} int GetLastError(){return 0;}
 string StringFormat(const char *fmt,...){char b[512];va_list a;va_start(a,fmt);if(string(fmt)=="%I64d"){long n=va_arg(a,long);va_end(a);return std::to_string(n);}vsnprintf(b,sizeof(b),fmt,a);va_end(a);return b;}
 bool P3Positive(double v){return std::isfinite(v)&&v!=EMPTY_VALUE&&v>0;}
-struct Obj{int type=0,ink=0;long start=0,end=0;double price=0;};map<string,Obj> objects;bool objectFailure=false;
+struct Obj{int type=0,ink=0;long start=0,end=0;double price=0;bool back=false;};map<string,Obj> objects;bool objectFailure=false;
 int ObjectFind(int,string n){return objects.count(n)?0:-1;}
 bool ObjectCreate(int,string n,int type,int,datetime t,double price,datetime end=0,double=0){if(objectFailure){objectFailure=false;return false;}objects[n]={type,0,t,end,price};return true;}
 bool ObjectMove(int,string n,int point,datetime t,double price){if(!objects.count(n))return false;auto &o=objects[n];if(point==0)o.start=t;else o.end=t;o.price=price;return true;}
-bool ObjectSetInteger(int,string n,int prop,long v){if(!objects.count(n))return false;if(prop==OBJPROP_COLOR)objects[n].ink=int(v);return true;}
+bool ObjectSetInteger(int,string n,int prop,long v){if(!objects.count(n))return false;if(prop==OBJPROP_COLOR)objects[n].ink=int(v);if(prop==OBJPROP_BACK)objects[n].back=bool(v);return true;}
 void ObjectsDeleteAll(int,string prefix){for(auto i=objects.begin();i!=objects.end();)if(i->first.find(prefix)==0)i=objects.erase(i);else ++i;}
 vector<string> logLines;
 void Print(const char *prefix,string text){logLines.push_back(string(prefix)+text);}
@@ -115,6 +116,7 @@ int main(){int failures=0;auto check=[&](bool ok,const char*m){if(!ok){cerr<<"FA
    if(f.signal_bar==source[i].time && !f.last_estimate.available){noEstimate++;check(objects.count("MTCRF_marker_"+to_string(source[i].time)+"_confirmed")!=0,"confirmation without analog estimate has its marker");}}
   check(noEstimate>0,"fixture includes confirmation without historical estimate");}
  check(equalChart(objects,expected),"all markers and finite forecast segments match independent full replay");
+ for(const auto &kv:objects)check(kv.second.back,"replayed historical lines and markers stay on background layer");
  check(CRFChartForecastMatches(original,g_crfObserver.forecast),"visual replay does not mutate trading forecast");
  // Remove EA/chart objects and restart on exactly the same data.
  CRFRemoveObjects();CRFChartHistoryReset();for(int i=0;i<50 && !g_crfChartReady;i++){uptime+=100;CRFChartHistoryStep();}
