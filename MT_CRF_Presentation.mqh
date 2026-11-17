@@ -42,7 +42,7 @@ string CRFResultText(int result)
 {
    if(result==1) return "TP estimate reached";
    if(result==2) return "Stop loss touched";
-   if(result==3) return "Opposite confirmed reversal";
+   if(result==3) return InpCrfReverseConfirmation?"Opposite confirmed reversal":"Opposite reversal";
    if(result==4) return "Duration limit reached; no extension";
    if(result==5) return "Replaced by newer signal";
    if(result==6) return "No historical estimate";
@@ -51,10 +51,10 @@ string CRFResultText(int result)
 string CRFEventText(int event)
 {
    if(event==1) return "Candidate appeared";
-   if(event==2) return "Forecast confirmed";
+   if(event==2) return InpCrfReverseConfirmation?"Forecast confirmed":"Reversal forecast";
    if(event==3) return "Candidate expired; no confirmation";
    if(event==4) return "Forecast closed";
-   if(event==5) return "Confirmed reversal; no estimate";
+   if(event==5) return InpCrfReverseConfirmation?"Confirmed reversal; no estimate":"Reversal; no estimate";
    if(event==6) return "Nearby pattern ignored";
    return "--";
 }
@@ -122,7 +122,7 @@ string CRFHeaderStatus()
       return "Target passed / waiting for new CRF plan / "+g_crfStatus+threshold;
    if(f.active_direction!=0)
    {
-      string text=CRFSide(f.active_direction)+" confirmed / expires in "+IntegerToString(f.remaining)+" bars / Auto "+(InpAutoTrading?"ON":"OFF");
+      string text=CRFSide(f.active_direction)+(InpCrfReverseConfirmation?" confirmed / expires in ":" reversal / expires in ")+IntegerToString(f.remaining)+" bars / Auto "+(InpAutoTrading?"ON":"OFF");
       if(g_p4[3].order>0) text+=" / order #"+StringFormat("%I64u",g_p4[3].order);
       return text+" / "+g_crfStatus+threshold;
    }
@@ -163,7 +163,7 @@ void CRFDashboardRows(string &rows[])
    bool active=f.active_direction!=0 && !targetPassed, pending=f.pending.direction!=0, hasLast=f.last_signal.direction!=0;
    string side=active?CRFSide(f.active_direction):(pending?CRFSide(f.pending.direction)+"?":(hasLast?CRFSide(f.last_signal.direction)+" (last)":"--"));
    rows[0]="CONFIRMED REVERSAL FORECAST | "+side;
-   rows[1]=(string)"Status | "+(!g_crfForecastCurrent?"M15 history unavailable":(active?"Confirmed reversal active":(targetPassed?"Target passed; waiting for new confirmed reversal":"Waiting for new confirmed reversal")));
+   rows[1]=(string)"Status | "+(!g_crfForecastCurrent?"M15 history unavailable":(active?(InpCrfReverseConfirmation?"Confirmed reversal active":"Reversal active"):(targetPassed?"Target passed; waiting for new reversal":"Waiting for new reversal")));
    rows[2]=(active?"Pattern | ":"Last pattern | ")+CRFPatternText(f.last_signal.variant);
    rows[3]="Pending candidate | "+(pending?CRFSide(f.pending.direction)+" "+CRFPatternText(f.pending.variant)+" ("+IntegerToString(2-f.pending_elapsed)+" bars left)":"--");
    rows[4]="Data through | "+(f.last_bar>0?TimeToString((datetime)f.last_bar,TIME_DATE|TIME_MINUTES):"--")+" | M15 bar count "+IntegerToString(Bars(_Symbol,PERIOD_M15));
@@ -176,7 +176,7 @@ void CRFDashboardRows(string &rows[])
    if(active) rows[10]+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED");
    rows[11]="Historical follow-through / samples | "+(hasLast?DoubleToString(f.last_estimate.confidence,0)+"% | "+IntegerToString(f.last_estimate.samples)+" samples":"--");
    rows[12]="Forecast expires in | "+(active?IntegerToString(f.remaining)+" bars":"--");
-   rows[13]=(string)"No-signal reason | "+(!g_crfForecastCurrent?"M15 history unavailable":(pending?"Candidate awaiting confirmation":(active?"--":"Waiting for new confirmed reversal")));
+   rows[13]=(string)"No-signal reason | "+(!g_crfForecastCurrent?"M15 history unavailable":(pending?"Candidate awaiting confirmation":(active?"--":"Waiting for new reversal")));
    string update=f.last_event==4?CRFResultText(f.last_result):CRFEventText(f.last_event);
    int age=f.last_event_bar>0?iBarShift(_Symbol,PERIOD_M15,(datetime)f.last_event_bar,true):-1;
    if(age==1) update+=" | this bar"; else if(age>1) update+=" | "+IntegerToString(age-1)+" bars ago";

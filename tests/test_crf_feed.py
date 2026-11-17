@@ -29,7 +29,7 @@ template<class T> int ArrayCopy(std::vector<T>& a,const std::vector<T>& b,int ds
 #include "MT_CRF_Feed.mqh"
 int main(){
  int failures=0;auto check=[&](bool ok,const char *s){if(!ok){std::cerr<<"FAIL "<<s<<"\n";failures++;}};
- CRFParameters p{300,4,2,5,2,3,2,55,1.2};
+ CRFParameters p{300,4,2,5,2,3,2,55,1.2,0};
  std::vector<MqlRates> bars;
  for(int cycle=0;cycle<20;cycle++){
   for(int j=0;j<5;j++){double c=130-j;bars.push_back({long(bars.size()+1),c+0.6,c+0.8,c-0.2,c,100});}

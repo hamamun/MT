@@ -24,7 +24,7 @@ template<class T> int ArraySize(const std::vector<T>& x){return int(x.size());}
 #include "MT_CRF_Forecast.mqh"
 int main(){
  int fails=0;auto check=[&](bool x,const char*s){if(!x){std::cerr<<"FAIL "<<s<<"\n";fails++;}};
- CRFParameters p{300,4,2,5,2,3,2,55,1.2};
+ CRFParameters p{300,4,2,5,2,3,2,55,1.2,0};
  std::vector<MqlRates> bars;
  for(int cycle=0;cycle<40;cycle++){
    for(int j=0;j<5;j++){double c=130-j;bars.push_back({c+0.6,c+0.8,c-0.2,c,100});}
@@ -36,6 +36,9 @@ int main(){
  }
  CRFForecastState state{};CRFResetForecast(state);
  bars.resize(396);
+ CRFParameters raw=p;raw.raw_signals=1;CRFForecastState immediate{};CRFResetForecast(immediate);
+ check(CRFForecastOnBar(bars,1,raw,immediate) && immediate.pending.direction==0 && immediate.last_signal.direction==1 && immediate.signal_bar==1 && immediate.last_entry==bars.back().close && immediate.last_estimate.available,"raw mode signals on closed pattern candle with its own historical estimates");
+ check(CRFForecastOnBar(bars,1,raw,immediate) && immediate.signal_bar==1,"raw mode ignores duplicate bar");
  check(CRFForecastOnBar(bars,1,p,state) && state.pending.direction==1 && state.last_event==1,"candidate starts without immediate confirmation");
  check(CRFForecastOnBar(bars,1,p,state) && state.pending_elapsed==0,"duplicate bar ignored");
  bars.push_back({127,128,126.5,127.5,100});

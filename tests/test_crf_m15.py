@@ -48,7 +48,7 @@ int CopyRates(const string&,int period,int start,int count,std::vector<MqlRates>
 int main(){
  int fails=0;auto check=[&](bool x,const char*s){if(!x){std::cerr<<"FAIL "<<s<<"\n";fails++;}};
  for(int i=0;i<500;i++)source.push_back({long(1000+i*900),100,101,99,100,100});
- CRFParameters p{100,4,2,5,2,3,2,55,1.2};std::vector<MqlRates> out;bool first=false;long latest=0;
+ CRFParameters p{100,4,2,5,2,3,2,55,1.2,0};std::vector<MqlRates> out;bool first=false;long latest=0;
  check(CRFReadClosedM15("EURUSD",p,0,out,first,latest)==CRF_M15_OK && first && out.size()==499 && latest==source[498].time,"full closed M15 bootstrap");
  bars_calls=0;long anchor=source[480].time;
  check(CRFReadClosedM15("EURUSD",p,anchor,out,first,latest)==CRF_M15_OK && !first && out.size()<499 && out.back().time==source[498].time,"incremental bounded lookback");

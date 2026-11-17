@@ -55,7 +55,7 @@ bool CRFCacheUpdate(const std::vector<MqlRates>&){return true;}
 int main(){
  int failures=0;auto check=[&](bool x,const char *s){if(!x){std::cerr<<"FAIL "<<s<<"\n";failures++;}};
  for(int i=0;i<20;i++)source.push_back({i+1,100,101,99,100,100});
- CRFParameters p{100,4,2,5,2,3,2,55,1.2};CRFObserver observer{};std::vector<CRFFeedUpdate> u;
+ CRFParameters p{100,4,2,5,2,3,2,55,1.2,0};CRFObserver observer{};std::vector<CRFFeedUpdate> u;
  check(CRFObserverInit(observer,"X","x",0,p,false)==CRF_OBSERVER_INVALID && !observer.ready,"lock required");
  check(CRFObserverInit(observer,"X","x",0,p,true)==CRF_OBSERVER_OK && observer.ready,"init empty");
  fail_history=true;check(CRFObserverPoll(observer,u)==CRF_OBSERVER_HISTORY_UNAVAILABLE && observer.forecast.last_bar==0 && u.empty() && observer.history_detail.find("synchronizing")!=string::npos,"history failure reason retained without mutation");fail_history=false;

@@ -197,7 +197,8 @@ bool CRFNativeReserved()
           g_p4[1].modifying==0 && g_p4[1].modEntry==CRF_NATIVE_RESERVATION_MARKER;
 }
 datetime g_crfOrderSignalBar=0, g_crfAttemptedSignalBar=0, g_crfReleaseBar=0;
-int g_crfOrderDuration=0, g_crfCloseKind=0, g_crfTakeover=0; // 1=MT position, 2=CRF position
+int g_crfOrderDuration=0, g_crfCloseKind=0, g_crfTakeover=0; // close kind: 1=MT, 2=CRF
+int g_crfOrderMode=0, g_crfPlanMode=0; // 0=confirmed, 1=raw pattern
 ulong g_crfClosePosition=0, g_crfCloseTicket=0;
 double g_crfCloseVolume=0;
 // A confirmed CRF plan is frozen once built, independently of native MT.
@@ -215,7 +216,7 @@ void CRFResetExecution()
    P4ResetLane(3); g_crfOrderSignalBar=0; g_crfAttemptedSignalBar=0; g_crfReleaseBar=0;
    g_crfOrderDuration=0; g_crfCloseKind=0; g_crfTakeover=0; g_crfClosePosition=0; g_crfCloseTicket=0; g_crfCloseVolume=0;
    g_crfTrailPosition=0; g_crfTrailActivationBar=0; CRFTrailResetSession();
-   CRFResetPlan(); g_crfInvalidPlanSignal=0;
+   CRFResetPlan(); g_crfInvalidPlanSignal=0; g_crfOrderMode=0; g_crfPlanMode=0;
 }
 bool CRFExecutionValid()
 {
@@ -230,7 +231,8 @@ bool CRFExecutionValid()
       g_crfOrderSignalBar<0 || g_crfAttemptedSignalBar<0 || g_crfReleaseBar<0 ||
       (g_crfTakeover!=0 && g_crfTakeover!=1) || g_crfOrderDuration<0 || g_crfOrderDuration>100 || g_crfCloseKind<0 || g_crfCloseKind>2 ||
       !MathIsValidNumber(g_crfCloseVolume) || g_crfCloseVolume<0 || g_crfTrailActivationBar<0 ||
-      ((g_crfTrailPosition==0)!=(g_crfTrailActivationBar==0)) || g_crfInvalidPlanSignal<0) return false;
+      ((g_crfTrailPosition==0)!=(g_crfTrailActivationBar==0)) || g_crfInvalidPlanSignal<0 ||
+      (g_crfOrderMode!=0 && g_crfOrderMode!=1) || (g_crfPlanMode!=0 && g_crfPlanMode!=1)) return false;
    if(g_crfPlan.valid && (!g_crfPlan.market || g_crfPlan.bar<=0 || (g_crfPlan.signal!=1 && g_crfPlan.signal!=-1) ||
       !P3Positive(g_crfPlan.entry) || !P3Positive(g_crfPlan.stop) || !P3Positive(g_crfPlan.target) || !P3Positive(g_crfPlan.lot) ||
       g_crfPlan.signal*(g_crfPlan.entry-g_crfPlan.stop)<=0 || g_crfPlan.signal*(g_crfPlan.target-g_crfPlan.entry)<=0 ||
@@ -248,7 +250,7 @@ bool CRFSaveExecution()
    int h=FileOpen(tmp,FILE_WRITE|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return false;
    ResetLastError(); P4Journal x=g_p4[3];
-   FileWriteInteger(h,1296253765,INT_VALUE); FileWriteInteger(h,3,INT_VALUE);
+   FileWriteInteger(h,1296253765,INT_VALUE); FileWriteInteger(h,4,INT_VALUE);
    FileWriteInteger(h,x.active,INT_VALUE); FileWriteInteger(h,x.direction,INT_VALUE); FileWriteInteger(h,x.cancel,INT_VALUE);
    FileWriteLong(h,(long)x.order); FileWriteLong(h,(long)x.position);
    FileWriteLong(h,(long)x.birthBar); FileWriteLong(h,(long)x.planBar); FileWriteLong(h,(long)x.waitBar);
@@ -266,7 +268,8 @@ bool CRFSaveExecution()
    FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.entry:0); FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.stop:0);
    FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.target:0); FileWriteDouble(h,g_crfPlan.valid?g_crfPlan.lot:0);
    FileWriteLong(h,(long)g_crfInvalidPlanSignal);
-   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==228); FileClose(h);
+   FileWriteInteger(h,g_crfOrderMode,INT_VALUE); FileWriteInteger(h,g_crfPlanMode,INT_VALUE);
+   FileFlush(h); bool ok=(GetLastError()==0 && FileSize(h)==236); FileClose(h);
    return ok && FileMove(tmp,g_p4Flags,dest,g_p4Flags|FILE_REWRITE);
 }
 bool CRFLoadExecution()
@@ -276,7 +279,7 @@ bool CRFLoadExecution()
    int h=FileOpen(dest,FILE_READ|FILE_BIN|g_p4Flags);
    if(h==INVALID_HANDLE) return false;
    ulong size=FileSize(h);
-   if(size!=156 && size!=172 && size!=228) { FileClose(h); return false; }
+   if(size!=156 && size!=172 && size!=228 && size!=236) { FileClose(h); return false; }
    ResetLastError(); int magic=FileReadInteger(h,INT_VALUE), version=FileReadInteger(h,INT_VALUE);
    P4Journal x;
    x.active=FileReadInteger(h,INT_VALUE); x.direction=FileReadInteger(h,INT_VALUE); x.cancel=FileReadInteger(h,INT_VALUE);
@@ -289,17 +292,18 @@ bool CRFLoadExecution()
    g_crfCloseVolume=FileReadDouble(h); g_crfAttemptedSignalBar=(datetime)FileReadLong(h);
    g_crfReleaseBar=(datetime)FileReadLong(h); g_crfTakeover=FileReadInteger(h,INT_VALUE);
    long trailPosition=0, trailBar=0;
-   if((version==2 && size==172) || (version==3 && size==228)) { trailPosition=FileReadLong(h); trailBar=FileReadLong(h); }
+   if((version==2 && size==172) || (version==3 && size==228) || (version==4 && size==236)) { trailPosition=FileReadLong(h); trailBar=FileReadLong(h); }
    long planBar=0, invalidSignal=0; int planDirection=0, planMarket=0;
    double planEntry=0,planStop=0,planTarget=0,planLot=0;
-   if(version==3 && size==228)
+   if((version==3 && size==228) || (version==4 && size==236))
    {
       planBar=FileReadLong(h); planDirection=FileReadInteger(h,INT_VALUE); planMarket=FileReadInteger(h,INT_VALUE);
       planEntry=FileReadDouble(h); planStop=FileReadDouble(h); planTarget=FileReadDouble(h); planLot=FileReadDouble(h);
       invalidSignal=FileReadLong(h);
    }
+   if(version==4 && size==236) { g_crfOrderMode=FileReadInteger(h,INT_VALUE); g_crfPlanMode=FileReadInteger(h,INT_VALUE); }
    bool ok=(GetLastError()==0 && FileTell(h)==FileSize(h)); FileClose(h);
-   if(!ok || magic!=1296253765 || !((version==1 && size==156) || (version==2 && size==172) || (version==3 && size==228)) ||
+   if(!ok || magic!=1296253765 || !((version==1 && size==156) || (version==2 && size==172) || (version==3 && size==228) || (version==4 && size==236)) ||
       order<0 || position<0 || closePosition<0 || closeTicket<0 || trailPosition<0 || trailBar<0 ||
       planBar<0 || invalidSignal<0 || (planMarket!=0 && planMarket!=1) ||
       (planBar==0 && (planDirection!=0 || planMarket!=0 || planEntry!=0 || planStop!=0 || planTarget!=0 || planLot!=0))) return false;
@@ -694,7 +698,7 @@ void P4Refresh(int lane)
    if(orders>0 && orderPending && ordLot<ordInitial-1e-8 && g_p4[lane].cancel==0)
    { g_p4[lane].cancel=1; changed=true; }
    // TP is always required. Missing SL is allowed only while explicitly disabled.
-   if(orders>0 && orderPending && (((lane==3 || InpPlaceStopLoss) && ordSL<=0.0) || ordTP<=0.0) && g_p4[lane].cancel==0)
+   if(orders>0 && orderPending && ((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0) && g_p4[lane].cancel==0)
    { g_p4[lane].cancel=1; changed=true; }
    if(changed && !P4Persist()) { v.state=P4_UNCERTAIN; v.note="Journal unavailable"; g_p4View[lane]=v; return; }
    if(orders>0 && !orderPending)
@@ -710,8 +714,8 @@ void P4Refresh(int lane)
          else if(g_crfLastProfitPosition==positionId)
          { v.floatingProfit=g_crfLastProfit; v.floatingValid=true; v.floatingCached=true; }
       }
-      if(((lane==3 || InpPlaceStopLoss) && posSL<=0.0) || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
-      if(orders>0 && (((lane==3 || InpPlaceStopLoss) && ordSL<=0.0) || ordTP<=0.0))
+      if((InpPlaceStopLoss && posSL<=0.0) || posTP<=0.0) v.note="Position SL/TP missing: REVIEW";
+      if(orders>0 && ((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0))
       { if(v.note!="") v.note+="; "; v.note+="Pending SL/TP missing: REVIEW"; }
       if(orders>0) { if(v.note!="") v.note+="; "; v.note+="Entry remainder pending"; }
    }
@@ -719,7 +723,7 @@ void P4Refresh(int lane)
    {
       v.state=P4_PENDING; v.direction=orderDir; v.order=orderTicket;
       v.entry=ordEntry; v.sl=ordSL; v.tp=ordTP; v.lot=ordLot;
-      if(((lane==3 || InpPlaceStopLoss) && ordSL<=0.0) || ordTP<=0.0) v.note="SL/TP missing: REVIEW";
+      if((InpPlaceStopLoss && ordSL<=0.0) || ordTP<=0.0) v.note="SL/TP missing: REVIEW";
    }
    else if(g_p4[lane].active!=0)
    {

@@ -79,7 +79,7 @@ void Print(const char *prefix,string text){logLines.push_back(string(prefix)+tex
 struct CRFObserver{bool ready=true;CRFForecastState forecast;};
 CRFObserver g_crfObserver;bool g_crfObserverAvailable=true,g_crfForecastCurrent=true;
 int InpMode=0;const int MT_CRF_MODE_MT=1;bool chartSupported=true;bool ChartSupported(){return chartSupported;}
-CRFParameters params{300,4,2,5,2,3,2,55,1.2};CRFParameters CRFInputParameters(){return params;}
+CRFParameters params{300,4,2,5,2,3,2,55,1.2,0};CRFParameters CRFInputParameters(){return params;}
 PRESENTATION
 #include "MT_CRF_ChartHistory.mqh"
 vector<MqlRates> fixture={ROWS};

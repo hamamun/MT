@@ -29,9 +29,9 @@ bool P3HasBidBars(){return true;}
 double P3Down(double v,double t){return floor(v/t+1e-9)*t;}
 double P3Up(double v,double t){return ceil(v/t-1e-9)*t;}
 enum ENUM_MT_CRF_MODE{MT_CRF_MODE_BOTH=0,MT_CRF_MODE_MT=1,MT_CRF_MODE_CRF=2};
-ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseProfitableM15=true,InpCrfRiskBypass=false,InpCrfTrailStop=true;
+ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseProfitableM15=true,InpCrfRiskBypass=false,InpCrfTrailStop=true,InpCrfReverseConfirmation=true;
 int InpCrfHistoryBars=600,InpCrfMaxHorizon=24,InpCrfAtrLength=14,InpCrfTrendLength=12,InpCrfVolumeLength=20,InpCrfSwingLength=20,InpCrfMinimumAnalogs=6,InpCrfMinFollowthroughPct=55,InpCrfAutoMinimumSamples=4,InpCrfAutoFollowthroughPct=15;double InpCrfMinRewardRisk=1.2;
-struct CRFParameters{int history,horizon,atr,trend,volume,swing,minimum_analogs,followthrough;double reward_risk;};
+struct CRFParameters{int history,horizon,atr,trend,volume,swing,minimum_analogs,followthrough;double reward_risk;int raw_signals;};
 struct CRFCandidate{int direction=0;double stop=99,atr=1;};struct CRFEstimate{bool ready=false,available=true;int duration_high=0,reason=1,samples=6;double confidence=60,move_atr=2;};
 struct CRFForecastState{int active_direction=0;long signal_bar=0,last_bar=0;double last_entry=0,active_stop=0,active_target=0;CRFEstimate last_estimate;CRFCandidate pending,last_signal;};
 struct CRFObserver{bool ready=false;string history_detail;CRFForecastState forecast;};
@@ -52,7 +52,7 @@ execution=execution.replace('CRFFeedUpdate updates[];','vector<CRFFeedUpdate> up
 exposure=(root/'MT_CRF_Exposure.mqh').read_text()
 main=r'''
 int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<'\n';f++;}};
- InpUseAutoSchedule=false;InpPlaceStopLoss=false;P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);
+ InpUseAutoSchedule=false;InpPlaceStopLoss=true;P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);
  g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;g_crfTakeover=1;
  auto &forecast=g_crfObserver.forecast;forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_entry=100;
  pollResult=CRF_OBSERVER_HISTORY_UNAVAILABLE;g_crfForecastCurrent=false;CRFUpdateForecast();
@@ -196,11 +196,14 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  // Inputs are immutable during an MT5 run; this test changes them in-process.
  CRFResetPlan();
  long oldMode=orderMode;orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;
- check(!CRFPlaceMarket(q) && sends==0,"CRF requires broker SL even with bypass on and MT SL disabled");orderMode=oldMode;
+ InpPlaceStopLoss=false;check(CRFProtectionAllowed(),"no-SL mode does not require broker SL capability");
+ orderMode=SYMBOL_ORDER_MARKET;check(!CRFProtectionAllowed(),"no-SL mode still requires broker TP capability");
+ orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;InpPlaceStopLoss=true;
+ check(!CRFPlaceMarket(q) && sends==0,"CRF requires broker SL when SL placement is enabled");orderMode=oldMode;
  checkOk=false;check(!CRFPlaceMarket(q) && sends==0,"bypass does not bypass OrderCheck");checkOk=true;uptime+=6000;
  moveOnCheck=true;check(!CRFPlaceMarket(q) && sends==0,"price change between OrderCheck and final scan blocks entry");
  moveOnCheck=false;current=q;uptime+=6000;
- check(CRFPlaceMarket(q) && sends==1 && lastRequest.magic==(ulong)P4Magic(3) && lastRequest.sl>0 && lastRequest.tp>0 && lastRequest.comment=="MT4-CRF","four-sample reference-blocked forecast can send under default auto minimum with mandatory protection");
+ check(CRFPlaceMarket(q) && sends==1 && lastRequest.magic==(ulong)P4Magic(3) && lastRequest.sl>0 && lastRequest.tp>0 && lastRequest.comment=="MT4-CRF","four-sample forecast sends with enabled SL and TP");
  check(lastRequest.type==ORDER_TYPE_BUY && lastRequest.action==TRADE_ACTION_DEAL && lastRequest.price==q.ask && lastRequest.volume==g_crfPlan.lot && g_crfPlan.entry==forecast.last_entry,"CRF market request uses frozen lot and live Ask, not forecast reference entry");
  check(CRFNativeReserved(),"shared native M15 journal reserved while CRF is open");
  P4Refresh(1);check(g_p4View[1].state==P4_UNCERTAIN && g_p4View[1].note.find("no order ticket")!=string::npos,"original-compatible reservation is REVIEW, never free");
@@ -354,7 +357,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  InpCrfRiskBypass=false;check(!CRFMakeRequestPlan(sell,sellQuote,relaxed),"late SELL forecast risk remains blocked with bypass off");InpCrfRiskBypass=true;
  MqlTick badQuote=current;badQuote.ask=101.2;check(!CRFMakeRequestPlan(forecast,badQuote,relaxed),"CRF bypass retains live-level and spread checks");
  long savedOrderMode=orderMode;orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;
- check(!CRFPlaceMarket(current) && sends==0,"CRF bypass cannot omit broker SL");orderMode=savedOrderMode;
+ check(!CRFPlaceMarket(current) && sends==0,"CRF bypass cannot omit enabled broker SL");orderMode=savedOrderMode;
  InpAutoTrading=false;check(!CRFPlaceMarket(current),"CRF bypass cannot override master off");InpAutoTrading=true;
  checkOk=false;check(!CRFPlaceMarket(current) && sends==0,"CRF bypass cannot override OrderCheck");checkOk=true;
  uptime+=6000;check(CRFPlaceMarket(current) && sends==1 && MathAbs(lastRequest.volume-0.10)<1e-8 && lastRequest.sl>0 && lastRequest.tp>0,"CRF-only can send with MT M15 off once retained safety checks pass");
@@ -362,12 +365,25 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  P5Close();P5Init();check(g_p5Ready && g_p5.size()==1 && g_p5[0].bypass==2,"CRF bypass diary flag survives restart");
  P5Export();bool exported=false;for(auto &line:csvLines)if(line.size()>18 && line[17]=="30007" && line[15]=="0" && line[line.size()-2]=="1")exported=true;
  check(exported,"CSV separately exports shared bypass off and CRF risk bypass on");
- InpBypassRisk=true;check(CRFMakeRequestPlan(forecast,current,relaxed),"restore valid plan for diary flag test");int bothBypasses=P5BeginCrf(relaxed,current);
+ InpBypassRisk=true;check(CRFMakeRequestPlan(forecast,current,relaxed),"restore valid plan for diary flag test");int bothBypasses=P5BeginCrf(relaxed,current,InpPlaceStopLoss);
  check(bothBypasses==1 && g_p5[bothBypasses].bypass==3,"diary preserves both bypass flags");
  int nativeRow=P5Begin(1,relaxed,current,true,83);
  check(nativeRow==2 && g_p5[nativeRow].bypass==1,"native diary keeps shared bypass only");
  P5Close();P5Init();check(g_p5Ready && g_p5.size()==3 && g_p5[1].bypass==3 && g_p5[2].bypass==1,"both bypass flags and native record survive restart");
  InpCrfRiskBypass=false;InpBypassRisk=false;calcOk=true;
+
+ // End-to-end no-SL entry still requires a sizing stop and a broker TP.
+ P4Close();P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
+ laneBars[1]={700,800,900,1000,1001};sends=0;closeSends=0;uptime=300000;sendMode=0;calcOk=true;
+ InpMode=MT_CRF_MODE_CRF;InpAutoTrading=true;InpPlaceStopLoss=false;orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;
+ current=q;P5Init();P4Init();CRFRefreshBroker();P4Refresh(1);g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;
+ forecast=CRFForecastState{};forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_bar=1000;forecast.last_entry=100;
+ forecast.active_stop=99;forecast.active_target=102;forecast.last_estimate.duration_high=4;g_crfTakeover=1;g_crfAttemptedSignalBar=0;
+ check(CRFPlaceMarket(current) && sends==1 && lastRequest.sl==0 && lastRequest.tp>0 && g_crfPlan.stop>0,"no-SL CRF request retains TP and sizing reference");
+ check(g_p5.size()==1 && g_p5[0].stopInput==0,"CRF diary records no-SL setting");
+ CRFRefreshBroker();CRFProcessExecution(false);
+ check(g_p4View[3].state==P4_OPEN && g_crfStatus.find("SL/TP missing")==string::npos,"no-SL CRF position remains manageable");
+ InpPlaceStopLoss=true;orderMode=51;
 
  // Confirm the panel receives the actual failed entry gate and timer refresh
  // cannot replace an order-check failure with a fictional occupied slot.
@@ -403,7 +419,7 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  g_marketState=1;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Market not open","market blocker reported");g_marketState=MARKET_OPEN;
  current.time=0;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Fresh quote unavailable","stale quote reported");current=q;
  orderMode=SYMBOL_ORDER_MARKET|SYMBOL_ORDER_TP;CRFProcessExecution(true);
- check(g_crfStatus.find("Broker market order / SL / TP")!=string::npos,"required broker protection blocker reported");orderMode=51;
+ check(g_crfStatus.find("Broker market order / required SL or TP")!=string::npos,"required broker protection blocker reported");orderMode=51;
  g_crfReleaseBar=1000;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Waiting for next closed M15 bar after release","release cooldown reported accurately");g_crfReleaseBar=0;
  g_p4[1].cooldown=1;g_p4[1].waitBar=1000;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: Waiting for next closed M15 bar after previous trade","execution cooldown reported accurately");g_p4[1].cooldown=0;
  calcOk=false;CRFProcessExecution(true);check(g_crfStatus=="CRF entry: CRF lot sizing unavailable","lot sizing failure reported");calcOk=true;
@@ -447,13 +463,13 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  check(g_crfTrailActivationBar==1000,"SELL ask equal halfway activates");
  bar(1000,99,100);bar(1001,101,102);bar(1002,103,104);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);CRFTrailStep(tv);
  check(closeSends==1 && lastRequest.type==ORDER_TYPE_BUY && lastRequest.volume==.07,"profitable SELL inverse pattern requests full close");
- // Equality in any required comparison is not a pattern, in both directions.
+ // Equal open/previous-close is allowed; equal candle bodies are not.
  for(int dir: {1,-1}) for(int field=0;field<4;field++){
    trailSetup(dir);tv=exposureNow();current=dir>0?MqlTick{105,105.02,terminalTime,terminalTime*1000}:MqlTick{94.98,95,terminalTime,terminalTime*1000};CRFTrailStep(tv);
    double a=100,b=100-dir,c=100-2*dir,d=100-3*dir,e=100-4*dir;
    if(field==0)b=a;if(field==1)c=b;if(field==2)d=c;if(field==3)e=d;
    bar(1000,a,a);bar(1001,b,c);bar(1002,d,e);laneBars[1].push_back(1001);CRFTrailStep(tv);laneBars[1].push_back(1002);CRFTrailStep(tv);laneBars[1].push_back(1003);CRFTrailStep(tv);
-   check(closeSends==0,"equal gap or equal candle body is rejected");
+   check(closeSends==((field==0 || field==2)?1:0),"equal boundary allowed only with adverse body");
  }
  // Loss skips the pattern even if it becomes profitable later on that bar.
  trailSetup(1);tv=exposureNow();current={105,105.02,terminalTime,terminalTime*1000};CRFTrailStep(tv);

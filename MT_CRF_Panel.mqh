@@ -1201,7 +1201,7 @@ void UpdatePanel()
    UIWrapped("crfStatus",x,crfY,crfLine,inner,step,clrSilver,"CRF uses closed M15 bars and broker-confirmed execution.",g_uiCrfNotes);
    UIWrapped("marketDetail",x,marketY,g_marketDetail,inner,step,clrSilver,"",g_uiMarketNotes);
    UIText("settingsTitle",x+10,settingsY+3,"SETTINGS",UI_MUTED,UI_SIZE);
-   string settingsTip="Input settings only. The M15 allow-autotrading input controls MT M15, not CRF. SL Placement OFF sends new MT orders without a broker stop loss; CRF still requires SL/TP. CRF Risk Bypass affects CRF risk sizing and reward/risk checks, not follow-through, samples or broker protections. Other trading and broker rules still apply.";
+   string settingsTip="Input settings only. The M15 allow-autotrading input controls MT M15, not CRF. SL Placement OFF sends new MT and CRF orders without a broker stop loss; TP is still required. CRF Risk Bypass affects CRF risk sizing and reward/risk checks, not follow-through, samples or broker protections. Other trading and broker rules still apply.";
    string trendTip="Trend to Follow selects the reference; Allow Against Trend controls alignment, not whether a timeframe is enabled. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane.";
    for(int g=0;g<9;g++)
    {
@@ -1235,7 +1235,7 @@ void UpdatePanel()
       if(InpMode==MT_CRF_MODE_CRF && i!=1) continue;
       string n=IntegerToString(i);
       string rowPlanTip=planTip;
-      if(i==1 && CRFDisplayM15()) rowPlanTip="CRF MARKET is a manual-use forecast preview, even when auto filters are blocked. Reference entry is the confirmation candle close, not the request or fill. The lot uses the quote at calculation and may not suit a later manual fill. Auto Execution applies its own filters and broker checks; broker SL/TP are mandatory for CRF auto orders.";
+      if(i==1 && CRFDisplayM15()) rowPlanTip="CRF MARKET is a manual-use forecast preview, even when auto filters are blocked. Reference entry is the selected reversal signal candle close, not the request or fill. The lot uses the quote at calculation and may not suit a later manual fill. Auto Execution applies its own filters and broker checks; broker TP is required; broker SL follows SL Placement.";
       UIWrapped("readFallback"+n+"_",x+10,yy,readingOK[i]?"":readings[i],leftW-20,step,clrSilver,"",g_uiReadingNotes[i]); yy+=readRows[i]*step;
       int rowY=cardY[i];
       UIText("planTFText"+n,cardX[i]+10,rowY+6,plan[i].recognized?tf[i]:"",clrWhite,UI_SIZE,rowPlanTip);

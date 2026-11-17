@@ -51,7 +51,7 @@ int main(int argc,char **argv){
  if(argc!=2)return 2;
  string filename=argv[1];int fails=0;
  auto check=[&](bool ok,const char *s){if(!ok){std::cerr<<"FAIL "<<s<<"\n";fails++;}};
- CRFParameters p{300,4,2,5,2,3,2,55,1.2};CRFForecastState a{},b{};CRFResetForecast(a);CRFResetForecast(b);
+ CRFParameters p{300,4,2,5,2,3,2,55,1.2,0};CRFForecastState a{},b{};CRFResetForecast(a);CRFResetForecast(b);
  // Every naturally generated state must pass the same validation used on load.
  std::vector<MqlRates> rates;CRFForecastState replay{};CRFResetForecast(replay);
  for(int cycle=0;cycle<20;cycle++){
@@ -75,6 +75,14 @@ int main(int argc,char **argv){
  check(CRFProcessClosedBars(second,160,p,true,recovered,events)==CRF_FEED_OK && events.size()==10,"recovered catch-up");
  CRFForecastState fresh{};CRFResetForecast(fresh);
  check(CRFProcessClosedBars(second,160,p,true,fresh,events)==CRF_FEED_OK && recovered.last_event==fresh.last_event && recovered.remaining==fresh.remaining && recovered.last_estimate.target==fresh.last_estimate.target,"recovered matches fresh replay");
+ CRFParameters raw=p;raw.raw_signals=1;CRFForecastState rawReplay{};CRFResetForecast(rawReplay);
+ for(size_t n=10;n<=rates.size();n++){
+   std::vector<MqlRates> prefix(rates.begin(),rates.begin()+n);
+   check(CRFForecastOnBar(prefix,(long)n,raw,rawReplay) && CRFForecastValid(raw,rawReplay),"raw replay passes journal validation");
+ }
+ check(CRFSaveForecast(filename,0,raw,rawReplay),"save raw forecast");
+ check(CRFLoadForecast(filename,0,raw,b)==CRF_JOURNAL_OK && b.signal_bar==rawReplay.signal_bar,"raw forecast round trip");
+ check(CRFLoadForecast(filename,0,p,b)==CRF_JOURNAL_CONFIG_CHANGED,"raw forecast is not interpreted as confirmed mode");
  std::remove(filename.c_str());
  check(CRFLoadForecast(filename,0,p,b)==CRF_JOURNAL_MISSING,"missing journal");
  check(CRFForecastValid(p,a) && CRFSaveForecast(filename,0,p,a),"save initial state");

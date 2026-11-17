@@ -14,7 +14,7 @@ extra=r'''
  // against their own strategy/magic, including on the same timer tick.
  P5Close();handles.clear();files.clear();orders.clear();positions.clear();history.clear();deals.clear();
  uptime=10000;P5Init();P3Plan crfPlan{1,true,true,100,99,102,.05,1000};
- int nativeRow=P5Begin(1,crfPlan,current,true,83);int crfRow=P5BeginCrf(crfPlan,current);
+ int nativeRow=P5Begin(1,crfPlan,current,true,83);int crfRow=P5BeginCrf(crfPlan,current,true);
  ck(nativeRow==0 && crfRow==1 && g_p5[crfRow].strategy==30007 && g_p5[crfRow].score==0 && g_p5[crfRow].stopInput==1,"CRF request has own strategy without fake score");
  P5Bind(1,1,1,111,0,1000,true);P5Bind(1,1,1,222,0,1000,false);
  ck(g_p5[crfRow].order==111 && g_p5[nativeRow].order==222,"same-bar identities bind by strategy");
@@ -30,7 +30,7 @@ extra=r'''
  files["MT-test_trades.bin"]=files["MT-test_crf_trades.bin"];files.erase("MT-test_crf_trades.bin");
  auto original=files["MT-test_trades.bin"];P5Init();
  ck(g_p5Ready && g_p5.size()==2 && files["MT-test_trades.bin"]==original,"locked native diary imported once without modifying original");
- P5BeginCrf(crfPlan,current);ck(files["MT-test_trades.bin"]==original && g_p5.size()==3,"CRF records never contaminate original diary");
+ P5BeginCrf(crfPlan,current,true);ck(files["MT-test_trades.bin"]==original && g_p5.size()==3,"CRF records never contaminate original diary");
  P5Close();
 '''
 marker=' if(!fails)cout<<"Broker-trade diary runtime stub checks passed\\n";'

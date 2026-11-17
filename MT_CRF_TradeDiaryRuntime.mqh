@@ -256,7 +256,7 @@ int P5Begin(int lane, const P3Plan &plan, const MqlTick &quote, bool stopInput, 
 }
 // CRF has no MT score or trend context. Zero is an internal neutral sentinel;
 // CRF CSV and details display those fields as unavailable, never as a signal.
-int P5BeginCrf(const P3Plan &plan, const MqlTick &quote)
+int P5BeginCrf(const P3Plan &plan, const MqlTick &quote, const bool stopInput)
 {
    if(!g_p5Ready || quote.time_msc<=0 || !plan.valid ||
       (plan.signal!=1 && plan.signal!=-1) || !P3Positive(plan.lot)) return -1;
@@ -269,7 +269,7 @@ int P5BeginCrf(const P3Plan &plan, const MqlTick &quote)
    // Bit 0 retains the shared bypass input; bit 1 records the CRF-only
    // bypass. Existing v1/v2 rows used only bit 0, so no migration is needed.
    r.bypass=(InpBypassRisk?1:0)+(InpCrfRiskBypass?2:0); r.minimum=InpMinimumLot?1:0;
-   r.strategy=30007; r.barProxy=plan.barProxy?1:0; r.stopInput=1; r.tpPercentInput=0;
+   r.strategy=30007; r.barProxy=plan.barProxy?1:0; r.stopInput=stopInput?1:0; r.tpPercentInput=0;
    r.state=0; r.accepted=0; r.exitReason=-1; r.bar=(long)plan.bar; r.requestMs=quote.time_msc;
    r.planEntry=plan.entry; r.planStop=plan.stop; r.planTarget=plan.target; r.lot=plan.lot;
    r.bid=quote.bid; r.ask=quote.ask; r.equity=AccountInfoDouble(ACCOUNT_EQUITY); r.balance=AccountInfoDouble(ACCOUNT_BALANCE);
@@ -602,7 +602,7 @@ void P5BuildInsights(int lane, P5Insights &out)
       string percent=latest.stopInput<0?"--":IntegerToString(latest.tpPercentInput)+"%";
       if(latest.strategy==30007)
       {
-         out.context=StringFormat("Last request: %s CRF MARKET | Score -- | SL ON | Spread ",latest.direction>0?"BUY":"SELL")+
+         out.context=StringFormat("Last request: %s CRF MARKET | Score -- | SL %s | Spread ",latest.direction>0?"BUY":"SELL",stop)+
                      DoubleToString(latest.ask-latest.bid,(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS));
          return;
       }
