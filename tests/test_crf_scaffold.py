@@ -6,11 +6,11 @@ root = Path(__file__).resolve().parents[1]
 ea = (root / 'MT_CRF.mq5').read_text()
 inputs = (root / 'MT_CRF_Inputs.mqh').read_text()
 assert 'InpMode = MT_CRF_MODE_BOTH' in inputs
-assert 'InpCrfCloseProfitableM15 = true' in inputs
-assert 'InpCrfAutoMinimumSamples = 4' in inputs
+assert 'InpCrfCloseMTInLoss = true' in inputs
+assert 'InpCrfAutoMinimumSamples = 2' in inputs
 assert 'InpCrfAutoMinimumSamples>=2 && InpCrfAutoMinimumSamples<=50' in inputs
-assert 'InpCrfAutoFollowthroughPct = 15' in inputs
-assert 'InpCrfRiskBypass = false' in inputs
+assert 'InpCrfAutoFollowthroughPct = 5' in inputs
+assert 'InpCrfRiskBypass = true' in inputs
 assert 'InpCrfTrailStop = true' in inputs
 assert re.search(r'input\s+bool\s+InpCrfDetails\s*=\s*false\s*;', ea)
 assert ea.index('#define MT_CRF_INPUT_LABELS') < ea.index('#include "MT_PlanRuntime.mqh"') < ea.index('input bool InpCrfDetails')
@@ -23,7 +23,7 @@ for f in ('MT_DiaryRuntime.mqh', 'MT_CRF_AutoRuntime.mqh', 'MT_CRF_Execution.mqh
 assert 'InpCrfAutoFollowthroughPct>=1 && InpCrfAutoFollowthroughPct<=100' in inputs
 assert 'bool CRFBuildReady()' in inputs and 'return false;' not in inputs
 assert re.search(r'input\s+ENUM_MT_CRF_MODE\s+InpMode', inputs)
-assert len(re.findall(r'^input\s', inputs, re.M))==6
+assert len(re.findall(r'^input(?:\([^\n]*\))?\s+\w+\s+Inp\w+\s*=', inputs, re.M))==13
 for name in ('MT_CRF_AutoRuntime.mqh','MT_CRF_Execution.mqh','MT_CRF_Presentation.mqh','MT_CRF_ChartHistory.mqh','MT_CRF_Panel.mqh'):
     assert '#include "'+name+'"' in ea
 assert '#include "MT_AutoRuntime.mqh"' not in ea

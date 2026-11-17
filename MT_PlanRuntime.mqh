@@ -3,10 +3,21 @@
 #include "MT_Plan.mqh"
 
 // Keep the MT5 Inputs tab in the order used by traders; retain input names.
+#ifndef MT_CRF_INPUT_LABELS
 input bool InpAutoTrading = false;                    // Auto trading
+#endif
+#ifndef MT_CRF_INPUT_LABELS
 input bool InpPlaceStopLoss = false;                  // Stop Loss Placement
+#endif
+#ifndef MT_CRF_INPUT_LABELS
 input bool InpBypassRisk = false;                     // Bypass Risk
+#endif
+#ifndef MT_CRF_INPUT_LABELS
 input bool InpMinimumLot = false;                     // Minimum Lot use
+#endif
+#ifdef MT_CRF_INPUT_LABELS
+input group "MT strategy"
+#endif
 input int InpTPPercentM5 = 81;                        // TP% for M5 (lower = closer)
 input int InpTPPercentM15 = 83;                       // TP% for M15 (lower = closer)
 input int InpTPPercentM30 = 85;                       // TP% for M30 (lower = closer)
@@ -23,9 +34,15 @@ input(name="Allow autotrading M15 (CRF Excluded)") bool InpAllowAutoM15 = true;
 input bool InpAllowAutoM15 = true;                    // Allow autotrading M15
 #endif
 input bool InpAllowAutoM30 = true;                    // Allow autotrading M30
+#ifdef MT_CRF_INPUT_LABELS
+input group "Daily trading timer"
+#endif
 input bool InpUseAutoSchedule = true;                 // Use Daily trading timer (PC/VPS local time)
 input string InpAutoStartTime = "09:15";               // Timer Start (Local HH:MM)
 input string InpAutoEndTime = "17:00";                 // Timer Stop (Local HH:MM)
+#ifdef MT_CRF_INPUT_LABELS
+input group "Details"
+#endif
 input bool InpShowDetails = false;                    // Show diary Details
 
 struct P3LaneData

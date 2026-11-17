@@ -1,3 +1,9 @@
+> **Current behavior supersedes conflicting historical instructions below.** MT_CRF now defaults Auto Trading, shared Bypass Risk, CRF Risk Bypass, CRF trailstop and MT trailstop to on; broker SL placement remains off by default. CRF auto gates default to 2 samples and 5% follow-through. Reverse confirmation defaults off (closed pattern candle); on retains two-bar confirmation.
+>
+> Both CRF and MT positions use profit-only two-adverse-candle and live pullback exits, whichever qualifies first. The candle rule allows equal open/previous close while requiring adverse bodies and uses the position lane timeframe. Pullback activates at 50% entry-to-TP progress and defaults to 25% of best observed gain; a durable peak cannot recover unobserved offline quotes. Master auto, fresh quotes, broker checks, ownership and reconciliation remain required.
+>
+> In combined mode, an eligible opposite CRF forecast can close a native M15 position at a loss when `InpCrfCloseMTInLoss` is true (default); false retains the verified net-profit/cost-buffer gate. An eligible same-direction forecast requests an MT position TP modification preserving its broker SL. Ambiguous broker actions remain held for reconciliation. CRF expiry/replacement exits retain their prior rules.
+
 # MT_CRF.md — Build specification
 
 > **Status: implemented for MT5 testing; native verification pending.** `MT_CRF.mq5` is separate from the unchanged original MT EA. MetaEditor compilation, the MT5 Strategy Tester, broker behavior, chart rendering and comparison with the actual Indie runtime have not been verified in this environment.

@@ -8,7 +8,9 @@ stubs=base['stubs'].replace('string P5Detail(int i){return details[i];}', 'int d
 #include <vector>
 enum CRFMode {MT_CRF_MODE_BOTH,MT_CRF_MODE_MT,MT_CRF_MODE_CRF};
 CRFMode InpMode=MT_CRF_MODE_BOTH;
-bool InpCrfDetails=false,InpCrfRiskBypass=false;
+bool InpCrfDetails=false,InpCrfRiskBypass=false,InpCrfTrailStop=true,InpMtTrailStop=true;
+int InpCrfAutoFollowthroughPct=5,InpCrfAutoMinimumSamples=2; string g_trailNote[4];
+const int P4_OPEN=1,P4_PARTIAL=2; struct StubP4View{int state=0;}; StubP4View g_p4View[4];
 string g_crfStatus="Waiting for M15 slot";
 bool displayCRF=true;
 string CRFHeaderStatus(){return g_crfStatus;}
@@ -31,6 +33,12 @@ int main(){int fails=0;auto check=[&](bool v,const char*m){if(!v){cerr<<"FAIL "<
  auto hasForecast=[](const string &s){return s.find("CONFIRMED REVERSAL FORECAST")!=string::npos;};
  InpMode=MT_CRF_MODE_BOTH;InpAutoTrading=false;InpShowDetails=false;InpCrfDetails=false;BuildPanel();
  check(!objects.count("MTD_bg"),"combined mode defaults to no details");
+ g_trailNote[0]="Trailstop active";UpdatePanel();bool beside=false;
+ for(int j=0;j<g_uiAutoParts[0];j++){
+   Obj t=objects["MT_autoText0_"+to_string(j)+"_0"],q=objects["MT_autoQuote0_0"];
+   if(t.text.find("TP distance (price):")==0 && t.text.find("Trailstop active")!=string::npos && t.y==q.y && q.x>=t.x+UIWidth(t.text)) beside=true;
+ }
+ check(beside,"MT trail state sits beside TP distance without overlapping quote");g_trailNote[0]="";UpdatePanel();
  check(Label("settingKey5")=="Input mode" && Label("settingValue13")=="MT + CRF","mode input shown");
  check(Label("settingKey0")=="Auto Trading" && Label("settingValue0")=="OFF" && Label("settingKey1")=="CRF Risk Bypass" && Label("settingValue14")=="OFF","master auto and CRF bypass shown in settings");
  check(objects["MT_settingKey0_0"].y==objects["MT_settingKey1_0"].y && objects["MT_settingKey1_0"].x>objects["MT_settingBadge0"].x+objects["MT_settingBadge0"].w,"auto and CRF bypass are separated on first row");
@@ -38,16 +46,19 @@ int main(){int fails=0;auto check=[&](bool v,const char*m){if(!v){cerr<<"FAIL "<
  InpAutoTrading=false;InpCrfRiskBypass=false;UpdatePanel();
  int widthBeforeSettings=chartWidth;chartWidth=500;UpdatePanel();
  check(objects["MT_settingKey0_0"].y==objects["MT_settingKey1_0"].y && objects["MT_settingBadge14"].x+objects["MT_settingBadge14"].w<=objects["MT_settings"].x+objects["MT_settings"].w-10,"first-row settings fit on a narrow chart");
- for(int g=0;g<8;g++){
+ for(int g=0;g<12;g++){
     Obj key=objects["MT_settingKey"+to_string(g)+"_0"],next=objects["MT_settingKey"+to_string(g+1)+"_0"];
     if(key.y==next.y) check(next.x>key.x+UIWidth(key.text,key.size),"same-row settings stay separated");
     else check(next.y>key.y && next.x==objects["MT_settings"].x+10,"settings wrap by whole groups");
  }
  chartWidth=120;UpdatePanel();
  check(objects["MT_settingKey0_0"].y==objects["MT_settingKey1_0"].y && objects["MT_settingBadge14"].x+objects["MT_settingBadge14"].w<=objects["MT_settings"].x+objects["MT_settings"].w-10,"first row stays intact even when the panel must expand");
+ chartWidth=1800;UpdatePanel();
+ check(Label("settingKey6")=="CRF Trailstop" && Label("settingValue15")=="ON" && Label("settingKey7")=="MT Trailstop" && Label("settingValue16")=="ON" && Label("settingKey8")=="Auto filter" && Label("settingValue17")=="5%" && Label("settingKey9")=="Min Sampl" && Label("settingValue18")=="2","new settings show live inputs");
+ check(objects["MT_settingKey0_0"].y < objects["MT_settingKey6_0"].y && objects["MT_settingKey6_0"].y < objects["MT_settingKey10_0"].y && objects["MT_settingKey10_0"].y==objects["MT_settingKey12_0"].y,"wide settings use three organized rows");
  chartWidth=widthBeforeSettings;UpdatePanel();
  check(Label("reading1_1")=="--" && Label("reading1_7")=="BUY (CRF)" && Label("planSignalText1")=="BUY (CRF)","CRF main readings and plan remain visible");
- check(Wrapped("crfStatus").find("Waiting for M15 slot")!=string::npos && AutoText(1).find("30007")!=string::npos,"status and CRF broker row remain visible");
+ check(Wrapped("crfStatus").empty() && AutoText(1).find("30007")!=string::npos,"status and CRF broker row remain visible");
  InpShowDetails=true;UpdatePanel();string text=allDetails();
  check(objects.count("MTD_bg") && text.find("Pending 1")!=string::npos && !hasForecast(text),"diary alone displays without CRF details");
  InpCrfDetails=true;UpdatePanel();text=allDetails();

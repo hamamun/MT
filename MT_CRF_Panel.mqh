@@ -827,6 +827,13 @@ void UpdatePanel()
       readingOK[i]=UIReadingsValid(readings[i],tf[i]);
       planText[i]=(i==1 && CRFDisplayM15())?CRFPlanLine():P3PlanLine(i);
       UIReadPlan(planText[i],tf[i],plan[i]); autos[i]=(i==1 && CRFDisplayM15())?CRFAutoLine():P4Line(i);
+      if(i==1 && InpMode!=MT_CRF_MODE_MT)
+      {
+         if(!CRFDisplayM15() && (StringFind(g_crfStatus,"REVIEW")>=0 || StringFind(g_crfStatus,"unavailable")>=0 ||
+            StringFind(g_crfStatus,"Preparing")>=0 || StringFind(g_crfStatus,"Waiting for coordinator")>=0))
+            autos[i]+=" | CRF: "+g_crfStatus;
+         autos[i]+=CRFChartHistoryStatus();
+      }
       diaries[i]=P5Summary(i,now);
    }
    // TRADE STATISTICS are now one symbol-wide line in the header: today and
@@ -870,15 +877,17 @@ void UpdatePanel()
       if(UIPart(autos[i],0)==tf[i] && (mode=="Auto: ON" || mode=="Auto: OFF") && UIAutoTrade(autos[i],direction,style))
       {
          autos[i]+=" | TP distance (price): "+UITPDistance(direction,UIAutoTarget(autos[i]),freshQuote,q,digits);
+         if(style=="OPEN" && !(i==1 && CRFDisplayM15() && (g_p4View[3].state==P4_OPEN || g_p4View[3].state==P4_PARTIAL)) && g_trailNote[i]!="") autos[i]+="  "+g_trailNote[i];
          autoQuote[i]=(direction=="BUY"?"Ask: ":"Bid: ")+(freshQuote?(direction=="BUY"?ask:bid):"--");
       }
    }
-   string groups[9]={"Auto Trading","CRF Risk Bypass","SL Placement","Bypass Risk","Minimum Lot","Input mode","TP %","Trend to Follow","Allow Against Trend"};
-   int start[9]={0,14,1,2,3,13,4,7,10}, count[9]={1,1,1,1,1,1,3,3,3};
-   string values[15];
+   string groups[13]={"Auto Trading","CRF Risk Bypass","SL Placement","Bypass Risk","Minimum Lot","Input mode","CRF Trailstop","MT Trailstop","Auto filter","Min Sampl","TP %","Trend to Follow","Allow Against Trend"};
+   int start[13]={0,14,1,2,3,13,15,16,17,18,4,7,10}, count[13]={1,1,1,1,1,1,1,1,1,1,3,3,3};
+   string values[19];
    values[0]=UIOnOff(InpAutoTrading); values[1]=UIOnOff(InpPlaceStopLoss);
    values[2]=UIOnOff(InpBypassRisk); values[3]=UIOnOff(InpMinimumLot); values[13]=CRFModeText();
-   values[14]=UIOnOff(InpCrfRiskBypass);
+   values[14]=UIOnOff(InpCrfRiskBypass); values[15]=UIOnOff(InpCrfTrailStop); values[16]=UIOnOff(InpMtTrailStop);
+   values[17]=IntegerToString(InpCrfAutoFollowthroughPct)+"%"; values[18]=IntegerToString(InpCrfAutoMinimumSamples);
    for(int i=0;i<3;i++) { values[4+i]=tf[i]+" "+UITP(i); values[7+i]=tf[i]+" "+UITrend(P3Choice(i)); values[10+i]=tf[i]+" "+UIOnOff(P3Against(i)); }
    // Height must cover the actual displayed glyphs, not just an example string.
    UIGrowStep(g_symbol,UI_SIZE+2,step); UIGrowStep(g_type,UI_SIZE,step);
@@ -898,15 +907,15 @@ void UpdatePanel()
    int panelMax=chartW;
    if(UIDetailsEnabled() && chartW>0)
       panelMax=(int)MathMax(DETAILS_PANEL_FLOOR+2*pad,chartW-gap-detailsW-UI_X);
-   int settingSize=11,groupW[9],badgeW[15],settingsRow[9],rowOf[9],rowGroups[9],settingRows=2;
+   int settingSize=11,groupW[13],badgeW[19],settingsRow[13],rowOf[13],rowGroups[13],settingRows=3;
    int settingGap=18,settingLabelPad=8,settingBadgePad=12,settingChipGap=4;
    for(int pass=0;pass<4;pass++)
    {
       settingSize=pass<3?11-pass:9;
       settingGap=pass==3?12:18; settingLabelPad=pass==3?4:8;
       settingBadgePad=pass==3?8:12; settingChipGap=pass==3?2:4;
-      settingsRow[0]=5*settingGap; settingsRow[1]=2*settingGap;
-      for(int g=0;g<9;g++)
+      settingsRow[0]=5*settingGap; settingsRow[1]=3*settingGap; settingsRow[2]=2*settingGap;
+      for(int g=0;g<13;g++)
       {
          groupW[g]=UIWidth(groups[g],settingSize)+settingLabelPad;
          for(int j=0;j<count[g];j++)
@@ -914,19 +923,19 @@ void UpdatePanel()
             int k=start[g]+j; badgeW[k]=UIWidth(values[k],settingSize)+settingBadgePad;
             groupW[g]+=badgeW[k]+(j>0?settingChipGap:0);
          }
-         settingsRow[g<6?0:1]+=groupW[g];
+         settingsRow[g<6?0:(g<10?1:2)]+=groupW[g];
       }
-      if((int)MathMax(settingsRow[0],settingsRow[1])+20<=panelMax-2*UI_X-2*pad || pass==3) break;
+      if((int)MathMax(MathMax(settingsRow[0],settingsRow[1]),settingsRow[2])+20<=panelMax-2*UI_X-2*pad || pass==3) break;
    }
-   // Preserve the requested two-row grouping where it fits. On tighter charts,
+   // Preserve the requested three-row grouping where it fits. On tighter charts,
    // wrap whole setting groups rather than overlapping or hiding their values.
    // Auto Trading and CRF Risk Bypass stay together in the first row.
    int settingBudget=(int)MathMax(1,panelMax-2*UI_X-2*pad-20);
-   for(int r=0;r<9;r++) { settingsRow[r]=0; rowGroups[r]=0; }
+   for(int r=0;r<13;r++) { settingsRow[r]=0; rowGroups[r]=0; }
    int row=0;
-   for(int g=0;g<9;g++)
+   for(int g=0;g<13;g++)
    {
-      if((g==6 || (g>1 && rowGroups[row]>0 && settingsRow[row]+settingGap+groupW[g]>settingBudget)) && rowGroups[row]>0) row++;
+      if((g==6 || g==10 || (g>1 && rowGroups[row]>0 && settingsRow[row]+settingGap+groupW[g]>settingBudget)) && rowGroups[row]>0) row++;
       rowOf[g]=row;
       if(rowGroups[row]>0) settingsRow[row]+=settingGap;
       settingsRow[row]+=groupW[g]; rowGroups[row]++;
@@ -934,8 +943,8 @@ void UpdatePanel()
    settingRows=row+1;
    int settingsWidth=0;
    for(int r=0;r<settingRows;r++) settingsWidth=(int)MathMax(settingsWidth,settingsRow[r]);
-   for(int g=0;g<9;g++) UIGrowStep(groups[g],settingSize,step);
-   for(int i=0;i<15;i++) UIGrowStep(values[i],settingSize,step);
+   for(int g=0;g<13;g++) UIGrowStep(groups[g],settingSize,step);
+   for(int i=0;i<19;i++) UIGrowStep(values[i],settingSize,step);
    // The three plan rows are stacked in one column, so they share one set of
    // column widths: the widest Entry/Lot/SL/TP across the lanes. SL and TP
    // amounts stay beside their price; if that does not fit the stacked row,
@@ -1069,8 +1078,8 @@ void UpdatePanel()
       distanceRows[i]=compactPlan[i]?0:UIWrappedRows(planDistance[i],leftW-20);
       autoRows[i]=UIAutoFlow(autos[i],i,0,0,autoW,autoLead,step,false,"",autoQuote[i]); autoTotal+=autoRows[i]*step+4;
    }
-   string crfLine=InpMode==MT_CRF_MODE_MT?"":"CRF: "+CRFHeaderStatus()+CRFChartHistoryStatus();
-   int crfRows=UIWrappedRows(crfLine,inner);
+   string crfLine="";
+   int crfRows=0;
    int headerH=step+6,timerY=y+headerH,crfY=timerY+timerRows*step,marketY=crfY+crfRows*step,settingsY=marketY+marketRows*step+gap;
    int settingsH=(1+settingRows)*step+10,readTitleY=settingsY+settingsH+gap,readHeaderY=readTitleY+step;
    int readY=readHeaderY+step;
@@ -1110,8 +1119,8 @@ void UpdatePanel()
    int quoteX=autoX+UIWidth("AUTO EXECUTION")+12;
    UIBox("bidBox",quoteX,autoTitleY-2,UIWidth("Bid: "+bid)+10,step,UI_SURFACE,UI_BORDER);
    UIBox("askBox",quoteX+UIWidth("Bid: "+bid)+16,autoTitleY-2,UIWidth("Ask: "+ask)+10,step,UI_SURFACE,UI_BORDER);
-   int settingX[9],badgeX[15],sx=x+10,positionInRow=0;
-   for(int g=0;g<9;g++)
+   int settingX[13],badgeX[19],sx=x+10,positionInRow=0;
+   for(int g=0;g<13;g++)
    {
       int r=rowOf[g];
       if(g==0 || r!=rowOf[g-1]) { sx=x+10; positionInRow=0; }
@@ -1136,8 +1145,8 @@ void UpdatePanel()
       positionInRow++;
    }
    // Remove any obsolete settings objects left by earlier panel layouts.
-   for(int g=9;g<10;g++) { UIText("settingKey"+IntegerToString(g),0,0,"",clrSilver,settingSize); ObjectDelete(0,(string)UI_PREFIX+"settingDivider"+IntegerToString(g)); }
-   for(int k=15;k<16;k++) { UIText("settingValue"+IntegerToString(k),0,0,"",clrWhite,settingSize); ObjectDelete(0,(string)UI_PREFIX+"settingBadge"+IntegerToString(k)); }
+   for(int g=13;g<14;g++) { UIText("settingKey"+IntegerToString(g),0,0,"",clrSilver,settingSize); ObjectDelete(0,(string)UI_PREFIX+"settingDivider"+IntegerToString(g)); }
+   for(int k=19;k<20;k++) { UIText("settingValue"+IntegerToString(k),0,0,"",clrWhite,settingSize); ObjectDelete(0,(string)UI_PREFIX+"settingBadge"+IntegerToString(k)); }
    int rx=x+10;
    for(int c=0;c<8;c++)
    {
@@ -1203,9 +1212,9 @@ void UpdatePanel()
    UIText("settingsTitle",x+10,settingsY+3,"SETTINGS",UI_MUTED,UI_SIZE);
    string settingsTip="Input settings only. The M15 allow-autotrading input controls MT M15, not CRF. SL Placement OFF sends new MT and CRF orders without a broker stop loss; TP is still required. CRF Risk Bypass affects CRF risk sizing and reward/risk checks, not follow-through, samples or broker protections. Other trading and broker rules still apply.";
    string trendTip="Trend to Follow selects the reference; Allow Against Trend controls alignment, not whether a timeframe is enabled. TP % is each lane's historical percentile (1-100); INVALID uses original TP logic for that lane.";
-   for(int g=0;g<9;g++)
+   for(int g=0;g<13;g++)
    {
-      int cy=settingsY+step+4+rowOf[g]*step; string tip=g<6?settingsTip:trendTip;
+      int cy=settingsY+step+4+rowOf[g]*step; string tip=g<10?settingsTip:trendTip;
       UIText("settingKey"+IntegerToString(g),settingX[g],cy,groups[g],clrSilver,settingSize,tip);
       for(int j=0;j<count[g];j++) { int k=start[g]+j; UIText("settingValue"+IntegerToString(k),badgeX[k]+settingBadgePad/2,cy,values[k],clrWhite,settingSize,tip); }
    }
