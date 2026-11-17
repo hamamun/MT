@@ -5,7 +5,7 @@ import os, re, runpy, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
 base=runpy.run_path(str(root/'tests/test_trade_diary_runtime.py'))
 stubs=base['stubs']
-stubs=stubs.replace('#define POSITION_PROFIT 48','#define POSITION_PROFIT 48\n#define POSITION_SWAP 80\n#define POSITION_TIME 81')
+stubs=stubs.replace('#define POSITION_PROFIT 48','#define POSITION_PROFIT 48\n#define POSITION_SWAP 80\n#define POSITION_TIME 81\n#define SYMBOL_TRADE_FREEZE_LEVEL 82\n#define TRADE_ACTION_SLTP 83')
 stubs=stubs.replace('double entry=0,sl=0,tp=0,lot=0,profit=0;string symbol,comment;', 'double entry=0,sl=0,tp=0,lot=0,profit=0,swap=0;string symbol,comment;')
 stubs=stubs.replace('double entry=0,sl=0,tp=0,lot=0,profit=0,swap=0;string symbol,comment;', 'double entry=0,sl=0,tp=0,lot=0,profit=0,swap=0;long opened=1000;string symbol,comment;')
 stubs=stubs.replace('p==POSITION_IDENTIFIER?o.id:o.type;', 'p==POSITION_IDENTIFIER?o.id:p==POSITION_TIME?o.opened:o.type;')
@@ -25,11 +25,11 @@ template<class T> bool ArraySetAsSeries(vector<T>&,bool flag){return !flag;}
 int CopyRates(string,int tf,int start,int count,vector<MqlRates>&out){out.clear();for(int i=start+count-1;i>=start;i--){auto t=iTime(_Symbol,tf,i);if(!trailRates.count(t))return -1;out.push_back(trailRates[t]);}if(trailPartial){out.pop_back();return count-1;}return count;}
 bool PositionSelectByTicket(ulong tk){for(size_t i=0;i<positions.size();i++)if(positions[i].ticket==tk){selectedPosition=int(i);return true;}return false;}
 template<class T> void ZeroMemory(T &x){x=T{};}
-bool P3HasBidBars(){return true;}
+bool P3HasBidBars(){return true;} bool TRNativeBusy(int){return false;}
 double P3Down(double v,double t){return floor(v/t+1e-9)*t;}
 double P3Up(double v,double t){return ceil(v/t-1e-9)*t;}
 enum ENUM_MT_CRF_MODE{MT_CRF_MODE_BOTH=0,MT_CRF_MODE_MT=1,MT_CRF_MODE_CRF=2};
-ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseProfitableM15=true,InpCrfRiskBypass=false,InpCrfTrailStop=true,InpCrfReverseConfirmation=true;
+ENUM_MT_CRF_MODE InpMode=MT_CRF_MODE_BOTH;bool InpCrfCloseMTInLoss=true,InpCrfRiskBypass=false,InpCrfTrailStop=true,InpCrfReverseConfirmation=true;
 int InpCrfHistoryBars=600,InpCrfMaxHorizon=24,InpCrfAtrLength=14,InpCrfTrendLength=12,InpCrfVolumeLength=20,InpCrfSwingLength=20,InpCrfMinimumAnalogs=6,InpCrfMinFollowthroughPct=55,InpCrfAutoMinimumSamples=4,InpCrfAutoFollowthroughPct=15;double InpCrfMinRewardRisk=1.2;
 struct CRFParameters{int history,horizon,atr,trend,volume,swing,minimum_analogs,followthrough;double reward_risk;int raw_signals;};
 struct CRFCandidate{int direction=0;double stop=99,atr=1;};struct CRFEstimate{bool ready=false,available=true;int duration_high=0,reason=1,samples=6;double confidence=60,move_atr=2;};
@@ -258,13 +258,13 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  laneBars[1]={700,800,900,1000,1001};sends=0;closeSends=0;uptime=80000;sendMode=0;
  InpMode=MT_CRF_MODE_BOTH;InpAutoTrading=true;g_crfObserverAvailable=true;g_crfForecastCurrent=true;g_crfObserver.ready=true;
  forecast=CRFForecastState{};P5Init();P4Init();CRFRefreshBroker();
- plans[1]={1,true,true,100,99,102,0.05,1000};g_p3[1].score=3;
+ plans[1]={-1,true,true,100,101,98,0.05,1000};g_p3[1].score=-3;
  P4Process(true);P4Process(false);check(positions.size()==1 && g_p4View[1].state==P4_OPEN,"native M15 open established");
  forecast.active_direction=1;forecast.signal_bar=1000;forecast.last_entry=100;forecast.active_stop=99;forecast.active_target=102;
  forecast.last_estimate.ready=true;forecast.last_estimate.duration_high=4;g_crfTakeover=1;
  CRFExposure ex;double net=0,buffer=0;
  check(CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),true,ex) && ex.kind==CRF_EXPOSURE_MT_OPEN,"native exposure observed");
- positions[0].profit=20;deals[0].commission=0;deals[0].fee=0;
+ positions[0].profit=20;deals[0].commission=0;deals[0].fee=0;InpCrfCloseMTInLoss=false;
  CRFTrailStep(ex);check(closeSends==0 && g_crfTrailActivationBar==0,"trail ignores native MT M15 position");
  check(!CRFRequestPositionClose(1,ex,q,true) && !CRFRequestPositionClose(2,ex,q,true) && closeSends==0,"trail close cannot target native MT magic");
  check(!CRFNetAndCloseBuffer(ex,q,net,buffer),"unknown future commission fails safe");
@@ -273,9 +273,9 @@ int main(){int f=0;auto check=[&](bool b,const char*s){if(!b){cerr<<"FAIL "<<s<<
  uptime+=6000;CRFProcessExecution(false);check(closeSends==0,"below-cost position not closed");
  // A disabled MT lane does not prevent CRF takeover, but all safeguards
  // (including the separate permission to close an existing MT trade) remain.
- positions[0].profit=20;InpAllowAutoM15=false;InpCrfCloseProfitableM15=false;uptime+=6000;CRFProcessExecution(false);
- check(closeSends==0,"takeover close input off prevents close");
- InpCrfCloseProfitableM15=true;InpAutoTrading=false;CRFProcessExecution(false);check(closeSends==0,"master off prevents native close");
+ positions[0].profit=0.1;InpAllowAutoM15=false;InpCrfCloseMTInLoss=false;uptime+=6000;CRFProcessExecution(false);
+ check(closeSends==0,"loss-close input off prevents a below-cost close");
+ InpCrfCloseMTInLoss=false;InpAutoTrading=false;CRFProcessExecution(false);check(closeSends==0,"master off prevents native close");
  InpAutoTrading=true;uptime+=6000;
  current.bid=101.10;current.ask=101.12;
  check(!CRFRequestPositionClose(1,ex,current) && closeSends==0,"direct takeover close blocked by deteriorated live R/R");

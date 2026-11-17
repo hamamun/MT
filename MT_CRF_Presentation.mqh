@@ -103,10 +103,7 @@ string CRFPlanLine()
    }
    s+=" | Lot: "+lot+" | SL: "+CRFPriceText(planned?g_crfPlan.stop:f.active_stop)+" | TP: "+CRFPriceText(planned?g_crfPlan.target:f.active_target);
    s+=" | Pattern: "+CRFPatternText(f.last_signal.variant)+
-      " | "+IntegerToString(f.last_estimate.samples)+" samples | Move "+DoubleToString(f.last_estimate.move_atr,2)+" ATR | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars";
-   s+=" | Forecast / manual preview; auto checks apply";
-   s+=" | Auto filter "+IntegerToString(InpCrfAutoFollowthroughPct)+"%: "+(CRFAutoFilterReady(f)?"PASS":"BLOCKED")+
-      " | Auto min samples "+IntegerToString(InpCrfAutoMinimumSamples);
+      " | "+IntegerToString(f.last_estimate.samples)+" samples | Duration "+DoubleToString(f.last_estimate.duration,1)+" bars | Expires in "+IntegerToString(f.remaining)+" bars";
    if(lotReason!="") s+=" | Lot unavailable: "+lotReason;
    if(!P3HasBidBars()) s+=" | Bars: Last/unknown proxy";
    return s;
@@ -141,9 +138,15 @@ string CRFAutoLine()
       if(StringFind(line,prefix)==0) line=head+StringSubstr(line,StringLen(prefix));
       else line=head+" | CRF broker state: REVIEW";
       int shift=iBarShift(_Symbol,PERIOD_M15,g_crfOrderSignalBar,true);
-      string expiry=shift>=1?IntegerToString((int)MathMax(0,g_crfOrderDuration-(shift-1)))+" bars":"--";
-      return line+" | CRF strategy 30007 | order #"+StringFormat("%I64u",g_p4[3].order)+" | Expires in "+expiry+" | "+g_crfStatus;
+      string expiry=shift>=1?IntegerToString((int)MathMax(0,g_crfOrderDuration-(shift-1))):"--";
+      string status=g_crfStatus;
+      string prefixOpen="CRF position open | ";
+      if(StringFind(status,prefixOpen)==0) status=StringSubstr(status,StringLen(prefixOpen));
+      else if(status=="CRF position open") status="";
+      return line+" | CRF strategy 30007 | order #"+StringFormat("%I64u",g_p4[3].order)+" | Bar remains: "+expiry+(status==""?"":" | "+status);
    }
+   if(g_p4View[1].state==P4_OPEN || g_p4View[1].state==P4_PARTIAL)
+      return P4Line(1)+" | "+g_crfStatus;
    return head+" | "+g_crfStatus;
 }
 

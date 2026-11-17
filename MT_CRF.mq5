@@ -12,7 +12,7 @@
 //| Panel rendering is separated from trading and diary runtimes.    |
 //| Unsupported charts show an incompatible-chart notice.            |
 //|                                                                  |
-//| Auto Trading defaults off. Main diary uses broker trade results.    |
+//| Auto Trading defaults on. Main diary uses broker trade results.    |
 //+------------------------------------------------------------------+
 #property copyright "MT"
 #property version   "1.00"
@@ -94,6 +94,7 @@ input bool InpCrfDetails = false;                       // CRF Details
 #include "MT_DiaryRuntime.mqh"
 #include "MT_CRF_AutoRuntime.mqh"
 #include "MT_CRF_Execution.mqh"
+#include "MT_CRF_Trail.mqh"
 #include "MT_CRF_Presentation.mqh"
 #include "MT_CRF_ChartHistory.mqh"
 #include "MT_CRF_Panel.mqh"
@@ -106,7 +107,7 @@ int OnInit()
    // An unrecognized mode must never fall through to the trading engine.
    if(!CRFBuildReady())
    {
-      Print("MT_CRF: invalid mode or CRF auto inputs (samples 2-50, follow-through 1-100%).");
+      Print("MT_CRF: invalid mode or inputs (samples 2-50, follow-through and trail pullback 1-100%).");
       return(INIT_FAILED);
    }
    Rebuild();
@@ -154,6 +155,7 @@ void OnTick()
       CRFUpdatePlan();
       P4Process(true);
       CRFProcessExecution(true);
+      TRProcess();
       CRFChartHistoryStep();
    }
    UpdatePanel();
@@ -168,7 +170,7 @@ void OnTimer()
    if(ChartSupported()) UpdateState(ServerNow());
    if(ChartSupported()) { CRFUpdateForecast(); CRFRefreshBroker(); CRFUpdatePlan(); }
    P4Process(false);
-   if(ChartSupported()) { CRFProcessExecution(false); CRFChartHistoryStep(); }
+   if(ChartSupported()) { CRFProcessExecution(false); TRProcess(); CRFChartHistoryStep(); }
    UpdatePanel();
 }
 
@@ -204,7 +206,7 @@ void Rebuild()
    P2Reset();
    P3Reset();
    P3ResetSnapshots();
-   if(ChartSupported()) { P3DiaryInit(); P5Init(); P4Init(); CRFInitRuntime(); CRFUpdateForecast(); CRFRefreshBroker(); }
+   if(ChartSupported()) { P3DiaryInit(); P5Init(); P4Init(); TRInit(); CRFInitRuntime(); CRFUpdateForecast(); CRFRefreshBroker(); }
    else { P3DiaryClose(); P5Close(); P4Close(); }
 
    ScanSessions();

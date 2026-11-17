@@ -55,10 +55,10 @@ inputs = set(re.findall(r'^input(?:\([^\n]*\))?\s+\w+\s+(Inp\w+)\s*=', source, r
 covered = [name for card in parser.cards for name in re.findall(r'\bInp\w+\b', card)]
 assert set(covered) == inputs, f'missing={inputs-set(covered)}, extra={set(covered)-inputs}'
 assert len(covered) == len(inputs), 'each input should have exactly one card'
-assert len(inputs) == 28
+assert len(inputs) == 30
 for asset in ('styles.css', 'script.js'):
     assert (root / 'docs' / asset).is_file() and asset in html
-assert 'Auto trading is off by default' in html
+assert 'Auto trading is on by default' in html
 assert 'M15 (CRF Excluded)' in html
 
 # Execute the actual search script against a minimal DOM and check the states.

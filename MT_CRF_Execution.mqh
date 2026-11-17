@@ -7,6 +7,7 @@
 CRFObserver g_crfObserver;
 bool g_crfObserverAvailable=false, g_crfForecastCurrent=false;
 string g_crfStatus="Starting";
+bool TRNativeBusy(int lane);
 // Last actual entry check, scoped to the signal so timer refreshes cannot
 // replace a broker rejection with a misleading generic slot message.
 string g_crfEntryReason="", g_crfOrderCheckReason="";
@@ -58,7 +59,7 @@ bool CRFNativeLaneBlocked(int lane)
 {
    if(InpMode==MT_CRF_MODE_CRF) return true;
    if(lane!=1) return false;
-   if(!g_p4Ready || g_crfCloseKind!=0 || g_p4[3].active!=0 ||
+   if(!g_p4Ready || g_crfCloseKind!=0 || g_crfTpPosition!=0 || g_p4[3].active!=0 ||
       g_p4View[3].state!=P4_EMPTY || !CRFLaterM15Bar()) return true;
    if(InpMode==MT_CRF_MODE_MT) return false;
    if(!g_crfObserverAvailable || !g_crfForecastCurrent || !g_crfObserver.ready || g_crfTakeover!=0) return true;
@@ -333,11 +334,14 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
    if(trailProfitOnly && (kind!=2 || !InpCrfTrailStop)) return false;
    double trailProfit=0;
    if(trailProfitOnly && (!PositionGetDouble(POSITION_PROFIT,trailProfit) ||
-      !MathIsValidNumber(trailProfit) || trailProfit<=0)) return false;
-   if(kind==1 && (!InpCrfCloseProfitableM15 || InpMode!=MT_CRF_MODE_BOTH ||
+      !MathIsValidNumber(trailProfit) || trailProfit==EMPTY_VALUE || trailProfit<=0)) return false;
+   if(kind==1 && (InpMode!=MT_CRF_MODE_BOTH ||
       AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)) return false;
    P3Plan crfPlan;
    if(kind==1 && (!g_crfObserverAvailable || !g_crfForecastCurrent ||
+      g_crfObserver.forecast.active_direction!=-v.direction || !CRFAutoFilterReady(g_crfObserver.forecast) ||
+      g_crfTpPosition!=0 || TRNativeBusy(1) || g_p4[1].active==0 || g_p4[1].order==0 ||
+      g_p4[1].position!=v.position_id || g_p4View[1].state!=P4_OPEN ||
       g_crfObserver.forecast.signal_bar==g_crfAttemptedSignalBar ||
       CRFLiveEntryReason(g_crfObserver.forecast,q,crfPlan)!="")) return false;
    long id=0,magic=0,type=0; string symbol=""; double volume=0;
@@ -369,14 +373,15 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
       !PositionGetInteger(POSITION_MAGIC,magic) || magic!=expected ||
       !PositionGetString(POSITION_SYMBOL,symbol) || symbol!=_Symbol ||
       !PositionGetDouble(POSITION_VOLUME,volume) || volume!=v.volume ||
-      !PositionGetDouble(POSITION_PROFIT,trailProfit) || !MathIsValidNumber(trailProfit) || trailProfit<=0)) return false;
+      !PositionGetDouble(POSITION_PROFIT,trailProfit) || !MathIsValidNumber(trailProfit) || trailProfit==EMPTY_VALUE || trailProfit<=0)) return false;
    if(kind==1)
    {
       double net=0, buffer=0;
       if(!g_crfObserverAvailable || !g_crfForecastCurrent ||
          g_crfObserver.forecast.signal_bar==g_crfAttemptedSignalBar ||
          CRFLiveEntryReason(g_crfObserver.forecast,latest,crfPlan)!="" ||
-         !CRFNetAndCloseBuffer(again,latest,net,buffer) || net<=buffer) return false;
+         g_crfObserver.forecast.active_direction!=-again.direction || !CRFAutoFilterReady(g_crfObserver.forecast) ||
+         (!InpCrfCloseMTInLoss && (!CRFNetAndCloseBuffer(again,latest,net,buffer) || net<=buffer))) return false;
    }
    g_crfCloseKind=kind; g_crfClosePosition=v.position_id; g_crfCloseTicket=v.position_ticket; g_crfCloseVolume=volume;
    if(!P4Persist()) return false;
@@ -387,6 +392,68 @@ bool CRFRequestPositionClose(const int kind, const CRFExposure &v, const MqlTick
       if(!P4Persist()) return false;
    }
    if(!sent) PrintFormat("MT CRF close request result %u error %d; awaiting reconciliation",result.retcode,GetLastError());
+   return true;
+}
+
+// Same-direction takeover updates only the MT position TP. A persisted
+// intent prevents retries after an ambiguous response or terminal restart.
+bool CRFRequestNativeTarget(const CRFExposure &v, const MqlTick &q)
+{
+   if(!g_p4Ready || !InpAutoTrading || !P4CanTrade() || g_marketState!=MARKET_OPEN ||
+      InpMode!=MT_CRF_MODE_BOTH || AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING ||
+      g_crfTpPosition!=0 || g_crfCloseKind!=0 || TRNativeBusy(1) || v.kind!=CRF_EXPOSURE_MT_OPEN ||
+      g_p4[1].active==0 || g_p4[1].order==0 || g_p4[1].position!=v.position_id ||
+      g_p4View[1].state!=P4_OPEN || !g_crfObserverAvailable || !g_crfForecastCurrent ||
+      g_crfObserver.forecast.active_direction!=v.direction || !CRFAutoFilterReady(g_crfObserver.forecast) ||
+      g_crfObserver.forecast.signal_bar==g_crfAttemptedSignalBar || !P4FreshQuote(q)) return false;
+   P3Plan plan; if(CRFLiveEntryReason(g_crfObserver.forecast,q,plan)!="") return false;
+   double point=SymbolInfoDouble(_Symbol,SYMBOL_POINT), tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   long stopLevel=0, freeze=0, modes=0;
+   if(!P3Positive(point) || !P3Positive(tick) ||
+      !SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL,stopLevel) || stopLevel<0 ||
+      !SymbolInfoInteger(_Symbol,SYMBOL_TRADE_FREEZE_LEVEL,freeze) || freeze<0 ||
+      !SymbolInfoInteger(_Symbol,SYMBOL_ORDER_MODE,modes) || (modes & SYMBOL_ORDER_TP)==0) return false;
+   double target=plan.target, exitPrice=v.direction>0?q.bid:q.ask;
+   double minDistance=MathMax((double)stopLevel,(double)freeze)*point;
+   if(!P3Positive(target) || v.direction*(target-exitPrice)<minDistance ||
+      v.direction*(target-exitPrice)<=0) return false;
+   if(!PositionSelectByTicket(v.position_ticket)) return false;
+   long id=0, magic=0, type=0; string symbol=""; double sl=0,tp=0,volume=0;
+   if(!PositionGetInteger(POSITION_IDENTIFIER,id) || (ulong)id!=v.position_id ||
+      !PositionGetInteger(POSITION_MAGIC,magic) || magic!=P4Magic(1) ||
+      !PositionGetInteger(POSITION_TYPE,type) || (type!=POSITION_TYPE_BUY && type!=POSITION_TYPE_SELL) ||
+      (type==POSITION_TYPE_BUY?1:-1)!=v.direction ||
+      !PositionGetString(POSITION_SYMBOL,symbol) || symbol!=_Symbol ||
+      !PositionGetDouble(POSITION_SL,sl) || !MathIsValidNumber(sl) || sl<0 ||
+      !PositionGetDouble(POSITION_TP,tp) || !MathIsValidNumber(tp) || tp<0 ||
+      !PositionGetDouble(POSITION_VOLUME,volume) || volume!=v.volume) return false;
+   if(MathAbs(tp-target)<=tick*1e-6)
+   {
+      g_crfAttemptedSignalBar=(datetime)g_crfObserver.forecast.signal_bar; g_crfTakeover=0;
+      return P4Persist();
+   }
+   ulong now=GetTickCount64(); if(g_p4Attempt[3]!=0 && now-g_p4Attempt[3]<5000) return false;
+   MqlTradeRequest request={}; MqlTradeCheckResult check={}; MqlTradeResult result={};
+   request.action=TRADE_ACTION_SLTP; request.position=v.position_ticket; request.symbol=_Symbol;
+   request.magic=(ulong)P4Magic(1); request.sl=sl; request.tp=target;
+   g_p4Attempt[3]=now;
+   if(!OrderCheck(request,check) || check.retcode!=0) return false;
+   CRFExposure again; MqlTick latest;
+   if(!CRFScanExposure(_Symbol,P4Magic(1),P4Magic(3),P4Connected(),again) ||
+      again.kind!=CRF_EXPOSURE_MT_OPEN || again.position_id!=v.position_id || again.position_ticket!=v.position_ticket ||
+      again.volume!=volume || again.stop!=sl || again.target!=tp || again.direction!=v.direction ||
+      !SymbolInfoTick(_Symbol,latest) || !P4FreshQuote(latest) || latest.bid!=q.bid || latest.ask!=q.ask ||
+      !P4CanTrade() || !InpAutoTrading || !g_crfObserverAvailable || !g_crfForecastCurrent ||
+      !CRFAutoFilterReady(g_crfObserver.forecast) || g_crfObserver.forecast.active_direction!=v.direction ||
+      CRFLiveEntryReason(g_crfObserver.forecast,latest,plan)!="" || plan.target!=target) return false;
+   g_crfTpPosition=v.position_id; g_crfTpTicket=v.position_ticket; g_crfTpOldSL=sl; g_crfTpTarget=target;
+   g_crfTpSignalBar=(datetime)g_crfObserver.forecast.signal_bar;
+   g_crfAttemptedSignalBar=g_crfTpSignalBar; g_crfTakeover=0;
+   if(!P4Persist()) return false;
+   bool sent=OrderSend(request,result);
+   if(result.order==0 && result.deal==0 && P4DefiniteReject(result.retcode))
+   { CRFResetTpIntent(); if(!P4Persist()) return false; }
+   if(!sent) PrintFormat("MT CRF target modification result %u error %d; reconcile broker state",result.retcode,GetLastError());
    return true;
 }
 
@@ -601,7 +668,7 @@ void CRFTrailStep(const CRFExposure &v)
    if(!pattern) { g_crfTrailSessionBar=latestClosed; g_crfStatus="CRF position open | trailstop active"; return; }
    MqlTick q; double profit=0;
    if(!SymbolInfoTick(_Symbol,q) || !P4FreshQuote(q) || !PositionSelectByTicket(v.position_ticket) ||
-      !PositionGetDouble(POSITION_PROFIT,profit) || !MathIsValidNumber(profit))
+      !PositionGetDouble(POSITION_PROFIT,profit) || !MathIsValidNumber(profit) || profit==EMPTY_VALUE)
    { g_crfStatus="CRF trailstop: current quote or profit unavailable"; return; }
    if(profit<=0)
    { g_crfTrailSessionBar=latestClosed; g_crfStatus="CRF trailstop: candle exit skipped; not in profit"; return; }
@@ -640,6 +707,16 @@ void CRFProcessExecution(bool allowEntry)
    {
       P4Clear(1,true); g_crfReleaseBar=iTime(_Symbol,PERIOD_M15,1);
       if(g_crfReleaseBar<=0 || !P4Persist()) { g_p4Ready=false; g_crfStatus="M15 reservation: REVIEW"; return; }
+   }
+   if(g_crfTpPosition!=0)
+   {
+      double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+      bool matched=v.kind==CRF_EXPOSURE_MT_OPEN && v.position_id==g_crfTpPosition &&
+                   v.position_ticket==g_crfTpTicket && P3Positive(tick) &&
+                   MathAbs(v.target-g_crfTpTarget)<=tick*1e-6 && MathAbs(v.stop-g_crfTpOldSL)<=tick*1e-6;
+      if(matched || P4PositionClosed(g_crfTpPosition))
+      { CRFResetTpIntent(); if(!P4Persist()) { g_crfStatus="TP reconciliation: REVIEW"; return; } }
+      else { g_crfStatus="MT M15 TP update awaiting broker: REVIEW"; return; }
    }
    if(g_crfCloseKind!=0)
    {
@@ -716,14 +793,24 @@ void CRFProcessExecution(bool allowEntry)
    if(v.kind==CRF_EXPOSURE_MT_OPEN)
    {
       if(InpMode!=MT_CRF_MODE_BOTH) { g_crfStatus="Existing MT M15 position open (CRF-only mode)"; return; }
-      if(!InpCrfCloseProfitableM15) { g_crfStatus="Existing MT M15 position open; takeover close disabled"; return; }
+      if(TRNativeBusy(1)) { g_crfStatus="MT M15 trail close awaiting broker"; return; }
       if(!InpAutoTrading) { g_crfStatus="Auto trading OFF; existing MT M15 position open"; return; }
-      MqlTick q; double net=0,buffer=0;
-      if(!SymbolInfoTick(_Symbol,q) || !CRFNetAndCloseBuffer(v,q,net,buffer))
-      { g_crfStatus="M15 close blocked: position, quote or costs unavailable"; return; }
-      if(net<=buffer) { g_crfStatus="Waiting for closing | net "+DoubleToString(net,2); return; }
+      MqlTick q;
+      if(!SymbolInfoTick(_Symbol,q) || !P4FreshQuote(q)) { g_crfStatus="M15 action: fresh quote unavailable"; return; }
       P3Plan livePlan; string reason=CRFLiveEntryReason(f,q,livePlan);
       if(reason!="") { g_crfStatus="CRF entry: "+reason; return; }
+      if(f.active_direction==v.direction)
+      {
+         if(CRFRequestNativeTarget(v,q)) g_crfStatus="MT M15 TP update requested";
+         else g_crfStatus="MT M15 TP update blocked or awaiting broker";
+         return;
+      }
+      if(!InpCrfCloseMTInLoss)
+      {
+         double net=0,buffer=0;
+         if(!CRFNetAndCloseBuffer(v,q,net,buffer)) { g_crfStatus="M15 close blocked: position, quote or costs unavailable"; return; }
+         if(net<=buffer) { g_crfStatus="Waiting for closing | net "+DoubleToString(net,2); return; }
+      }
       if(CRFRequestPositionClose(1,v,q)) g_crfStatus="M15 close requested";
       else g_crfStatus="M15 close waiting for broker";
       return;
