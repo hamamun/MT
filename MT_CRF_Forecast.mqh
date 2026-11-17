@@ -26,6 +26,35 @@ void CRFResetForecast(CRFForecastState &s)
    s.last_estimate.reason=1;
 }
 
+// A signal is anchored at the bar that triggered the selected mode. Neither
+// mode predicts from an unfinished candle or from a later historical bar.
+bool CRFStartSignal(const MqlRates &bars[], const long bar_id, const CRFParameters &p,
+                    const CRFCandidate &signal, CRFForecastState &next)
+{
+   int n=ArraySize(bars);
+   if(n<=0) return false;
+   next.last_event=2; next.last_event_bar=bar_id;
+   if(next.active_direction!=0)
+   {
+      next.last_result=next.active_direction==signal.direction?5:3;
+      next.active_direction=0; next.remaining=0;
+      next.active_stop=EMPTY_VALUE; next.active_target=EMPTY_VALUE;
+   }
+   next.last_signal=signal; next.last_entry=bars[n-1].close; next.signal_bar=bar_id;
+   CRFEstimate estimate;
+   if(!CRFEstimateAt(bars,signal,next.last_entry,p,estimate)) return false;
+   next.last_estimate=estimate;
+   if(estimate.available)
+   {
+      if(next.last_result==6) next.last_result=0;
+      next.active_direction=signal.direction; next.remaining=estimate.duration_high;
+      next.active_stop=signal.stop; next.active_target=estimate.target;
+   }
+   else { next.last_result=6; next.last_event=5; }
+   next.pending.direction=0; next.pending_elapsed=0;
+   return true;
+}
+
 // Called once per chronological closed M15 bar with history ending on that bar.
 // The caller must replay every missed close in order before accepting new
 // signals; a repeated or older bar is ignored. Failure is atomic.
@@ -65,25 +94,8 @@ bool CRFForecastOnBar(const MqlRates &bars[], const long bar_id,
       if(confirmation==CRF_CONFIRM_BUY || confirmation==CRF_CONFIRM_SELL)
       {
          CRFCandidate confirmed=next.pending;
-         next.last_event=2; next.last_event_bar=bar_id;
-         if(next.active_direction!=0)
-         {
-            next.last_result=next.active_direction==confirmed.direction?5:3;
-            next.active_direction=0; next.remaining=0;
-            next.active_stop=EMPTY_VALUE; next.active_target=EMPTY_VALUE;
-         }
-         next.last_signal=confirmed; next.last_entry=bars[n-1].close; next.signal_bar=bar_id;
-         CRFEstimate estimate;
-         if(!CRFEstimateAt(bars,confirmed,next.last_entry,p,estimate)) return false;
-         next.last_estimate=estimate;
-         if(estimate.available)
-         {
-            if(next.last_result==6) next.last_result=0;
-            next.active_direction=confirmed.direction; next.remaining=estimate.duration_high;
-            next.active_stop=confirmed.stop; next.active_target=estimate.target;
-         }
-         else { next.last_result=6; next.last_event=5; }
-         next.pending.direction=0; next.pending_elapsed=0; skip_candidate=true;
+         if(!CRFStartSignal(bars,bar_id,p,confirmed,next)) return false;
+         skip_candidate=true;
       }
       else if(confirmation==CRF_CONFIRM_EXPIRED)
       {
@@ -99,10 +111,15 @@ bool CRFForecastOnBar(const MqlRates &bars[], const long bar_id,
       bool allowed=raw.direction>0?next.bull_cooldown<=0:next.bear_cooldown<=0;
       if(allowed)
       {
-         next.pending=raw; next.pending_elapsed=0;
          if(raw.direction>0) next.bull_cooldown=p.swing+2;
          else next.bear_cooldown=p.swing+2;
-         next.last_event=1;
+         if(p.raw_signals==1 && raw.direction*(bars[n-1].close-raw.stop)>0)
+         {
+            if(!CRFStartSignal(bars,bar_id,p,raw,next)) return false;
+         }
+         else if(p.raw_signals==0)
+         { next.pending=raw; next.pending_elapsed=0; next.last_event=1; }
+         else next.last_event=6;
       }
       else next.last_event=6;
       next.last_event_bar=bar_id;

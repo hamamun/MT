@@ -6,6 +6,7 @@ struct CRFParameters
 {
    int history, horizon, atr, trend, volume, swing, minimum_analogs, followthrough;
    double reward_risk;
+   int raw_signals; // 0=two-bar confirmation, 1=pattern-candle close
 };
 struct CRFEstimate
 {
@@ -21,7 +22,7 @@ struct CRFEpisode
 
 bool CRFParametersValid(const CRFParameters &p)
 {
-   return p.history>=100 && p.history<=2000 && p.horizon>=4 && p.horizon<=100 &&
+   return (p.raw_signals==0 || p.raw_signals==1) && p.history>=100 && p.history<=2000 && p.horizon>=4 && p.horizon<=100 &&
           p.atr>=2 && p.atr<=100 && p.trend>=2 && p.trend<=100 &&
           p.volume>=2 && p.volume<=200 && p.swing>=3 && p.swing<=200 &&
           p.minimum_analogs>=2 && p.minimum_analogs<=50 &&
@@ -76,7 +77,7 @@ bool CRFReplayEpisode(const MqlRates &bars[], const int confirmation_index,
          if(stop) { decided=true; out.success=false; }
          else if(hit) { decided=true; out.success=true; }
       }
-      if(opp_direction!=0)
+      if(p.raw_signals==0 && opp_direction!=0)
       {
          opp_age++;
          bool confirmed=opp_direction>0?close>opp_break:close<opp_break;
@@ -88,7 +89,10 @@ bool CRFReplayEpisode(const MqlRates &bars[], const int confirmation_index,
          CRFCandidate opposite;
          if(!CRFDetectAt(bars,k,p.atr,p.trend,p.volume,p.swing,opposite)) return false;
          if(opposite.direction==-historical.direction && opposite.pattern>0 && CRFValidPrice(opposite.break_level))
-         { opp_direction=opposite.direction; opp_break=opposite.break_level; opp_age=0; }
+         {
+            if(p.raw_signals==1) { out.duration=j; break; }
+            opp_direction=opposite.direction; opp_break=opposite.break_level; opp_age=0;
+         }
       }
    }
    return MathIsValidNumber(out.move) && MathIsValidNumber(out.duration);
@@ -118,19 +122,20 @@ bool CRFEstimateAt(const MqlRates &bars[], const CRFCandidate &signal,
       CRFCandidate hist;
       if(!CRFDetectAt(bars,i,p.atr,p.trend,p.volume,p.swing,hist)) return false;
       if(hist.direction!=signal.direction || hist.pattern<=0) continue;
-      int confirm=-1;
-      if(hist.direction>0)
+      int confirm=p.raw_signals==1?i:-1;
+      if(p.raw_signals==0 && hist.direction>0)
       {
          if(bars[i+1].close>hist.break_level) confirm=i+1;
          else if(bars[i+2].close>hist.break_level) confirm=i+2;
       }
-      else
+      else if(p.raw_signals==0)
       {
          if(bars[i+1].close<hist.break_level) confirm=i+1;
          else if(bars[i+2].close<hist.break_level) confirm=i+2;
       }
       if(confirm<0 || !CRFValidPrice(bars[confirm].close) ||
-         MathAbs(bars[confirm].close-hist.stop)<=0) continue;
+         (p.raw_signals==1 ? hist.direction*(bars[confirm].close-hist.stop)<=0 :
+          MathAbs(bars[confirm].close-hist.stop)<=0)) continue;
       double similarity=CRFSimilarity(hist,signal);
       if(similarity<2.0 || offset-last_offset<p.horizon) continue;
       CRFEpisode episode;

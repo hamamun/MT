@@ -22,7 +22,7 @@ template<class T> int ArraySize(const std::vector<T>& x){return int(x.size());}
 #include "MT_CRF_Analogs.mqh"
 int main(){
  int fails=0; auto check=[&](bool x,const char *s){if(!x){std::cerr<<"FAIL "<<s<<"\n";fails++;}};
- CRFParameters p{100,4,2,5,2,3,2,55,1.2};
+ CRFParameters p{100,4,2,5,2,3,2,55,1.2,0};
  check(CRFParametersValid(p),"valid inputs");
  CRFParameters bad=p; bad.horizon=3; check(!CRFParametersValid(bad),"invalid horizon");
  CRFCandidate s{}; s.direction=1; s.pattern=1; s.atr=1; s.stop=99; s.volume=1; s.trend=1; s.location=0;

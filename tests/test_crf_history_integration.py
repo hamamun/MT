@@ -26,7 +26,7 @@ int CopyRates(const string&,int,int start,int count,std::vector<MqlRates>&v){max
 main=r'''
 int main(int argc,char **argv){
  if(argc!=2)return 2;int fails=0;auto ck=[&](bool b,const char*m){if(!b){std::cerr<<"FAIL "<<m<<"\n";fails++;}};
- string file=argv[1];CRFParameters p{100,4,2,5,2,3,2,55,1.2};
+ string file=argv[1];CRFParameters p{100,4,2,5,2,3,2,55,1.2,0};
  for(int i=0;i<2000;i++)source.push_back({long(i+1),100,101,99,100,100});
  CRFObserver observer{};std::vector<CRFFeedUpdate> updates;
  ck(CRFObserverInit(observer,"X",file,0,p,true)==CRF_OBSERVER_OK,"fresh observer initialized");

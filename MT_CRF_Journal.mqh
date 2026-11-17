@@ -49,7 +49,8 @@ bool CRFForecastValid(const CRFParameters &p, const CRFForecastState &s)
       if(s.signal_bar!=0 || s.last_estimate.available || s.last_estimate.ready || s.active_direction!=0) return false;
    }
    else if(s.signal_bar<=0 || !CRFValidPrice(s.last_entry) ||
-           (s.last_signal.direction>0 ? s.last_entry<=s.last_signal.break_level : s.last_entry>=s.last_signal.break_level)) return false;
+           (p.raw_signals==1 && s.last_signal.direction*(s.last_entry-s.last_signal.stop)<=0) ||
+           (p.raw_signals==0 && (s.last_signal.direction>0 ? s.last_entry<=s.last_signal.break_level : s.last_entry>=s.last_signal.break_level))) return false;
    if(s.last_estimate.available)
    {
       if(s.last_signal.direction==0 || s.last_estimate.samples<2 || s.last_estimate.reason<2 ||
@@ -96,7 +97,7 @@ void CRFWriteParameters(int h, const CRFParameters &p)
    FileWriteInteger(h,p.history,INT_VALUE); FileWriteInteger(h,p.horizon,INT_VALUE);
    FileWriteInteger(h,p.atr,INT_VALUE); FileWriteInteger(h,p.trend,INT_VALUE);
    FileWriteInteger(h,p.volume,INT_VALUE); FileWriteInteger(h,p.swing,INT_VALUE);
-   FileWriteInteger(h,p.minimum_analogs,INT_VALUE); FileWriteInteger(h,p.followthrough,INT_VALUE);
+   FileWriteInteger(h,p.minimum_analogs,INT_VALUE); FileWriteInteger(h,p.followthrough+(p.raw_signals==1?1000:0),INT_VALUE);
    FileWriteDouble(h,p.reward_risk);
 }
 void CRFReadParameters(int h, CRFParameters &p)
@@ -105,6 +106,7 @@ void CRFReadParameters(int h, CRFParameters &p)
    p.atr=FileReadInteger(h,INT_VALUE); p.trend=FileReadInteger(h,INT_VALUE);
    p.volume=FileReadInteger(h,INT_VALUE); p.swing=FileReadInteger(h,INT_VALUE);
    p.minimum_analogs=FileReadInteger(h,INT_VALUE); p.followthrough=FileReadInteger(h,INT_VALUE);
+   p.raw_signals=p.followthrough>=1000?1:0; if(p.raw_signals==1) p.followthrough-=1000;
    p.reward_risk=FileReadDouble(h);
 }
 bool CRFParametersEqual(const CRFParameters &a, const CRFParameters &b)
@@ -112,7 +114,7 @@ bool CRFParametersEqual(const CRFParameters &a, const CRFParameters &b)
    return a.history==b.history && a.horizon==b.horizon && a.atr==b.atr &&
           a.trend==b.trend && a.volume==b.volume && a.swing==b.swing &&
           a.minimum_analogs==b.minimum_analogs && a.followthrough==b.followthrough &&
-          a.reward_risk==b.reward_risk;
+          a.reward_risk==b.reward_risk && a.raw_signals==b.raw_signals;
 }
 
 bool CRFSaveForecast(const string filename, const int flags, const CRFParameters &p,

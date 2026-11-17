@@ -30,7 +30,7 @@ template<class T> int ArraySize(const std::vector<T>& x){return int(x.size());}
 #include "MT_CRF_Forecast.mqh"
 int main(){
  std::vector<MqlRates> all={ROWS},bars;
- CRFParameters p{300,4,2,5,2,3,2,55,1.2};CRFForecastState s{};CRFResetForecast(s);
+ CRFParameters p{300,4,2,5,2,3,2,55,1.2,0};CRFForecastState s{};CRFResetForecast(s);
  std::cout<<std::setprecision(17);
  for(size_t i=0;i<all.size();i++){
    bars.push_back(all[i]);bool ok=CRFForecastOnBar(bars,(long)i+1,p,s);

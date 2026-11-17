@@ -8,7 +8,7 @@ base+='\nusing datetime=long;using ulong=unsigned long;\ntemplate<class T> void 
 main=r'''
 int main(int argc,char **argv){
  if(argc!=2)return 2;string path=argv[1];int f=0;auto ck=[&](bool b,const char*m){if(!b){std::cerr<<"FAIL "<<m<<"\n";f++;}};
- CRFParameters p{100,4,2,5,2,3,2,55,1.2};std::vector<MqlRates> bars;
+ CRFParameters p{100,4,2,5,2,3,2,55,1.2,0};std::vector<MqlRates> bars;
  for(int i=0;i<180;i++)bars.push_back({i+1,100.0+i,101.0+i,99.0+i,100.0+i,100+i});
  CRFCacheInit(path,0,p);ck(g_crfCacheRates.empty(),"missing cache ignored");
  ck(CRFCacheUpdate(bars) && int(g_crfCacheRates.size())==110 && g_crfCacheRates.front().time==71 && g_crfCacheRates.back().time==180,"bounded rolling suffix saved");
